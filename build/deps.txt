@@ -1,0 +1,47 @@
+# AHKDeck third-party dependency list (ASCII ONLY - see the note below).
+# Read by 2_download.bat: each active line is downloaded and extracted to
+# .3rd/<name>/.
+#
+# ASCII-only note: cmd's "for /f" parses this file in the OEM code page;
+# non-ASCII bytes (e.g. CJK comments) get mangled and can swallow the
+# following "name=url" lines, silently skipping dependencies. Chinese notes
+# live in build_readme.md / README.md.
+#
+# Format: name=url
+#         name=url|marker-file
+# The extracted top-level dir is renamed to "name" automatically. The optional
+# "marker-file" (a path RELATIVE to .3rd/<name>/) is the integrity probe: the
+# library counts as "already present" only if that file exists. This guards
+# against a half-extracted directory left behind by an interrupted download.
+#
+# GitHub-hosted libraries use
+#   https://codeload.github.com/<owner>/<repo>/tar.gz/<ref>
+# instead of https://github.com/<owner>/<repo>/archive/<ref>.tar.gz - both
+# serve the same archive, but codeload works through restrictive proxies where
+# the archive/ path returns HTTP 502 (lesson inherited from pecia).
+#
+# Bump policy (m005): pin a commit or a tag, never a floating branch.
+# Set AHKDECK_FORCE_DOWNLOAD=1 to ignore the presence checks and re-fetch
+# everything from scratch.
+
+# AutoHotkey_H v2.0.25 - in-process AHK v2 engine.
+# Pinned to commit fb9e48c3d326adebcfe080d1a4f9226045b51c4f (2026-04-30),
+# the v2.0 stable line (NOT alpha-h / v2.1). See .plan/m005.
+AutoHotkey_H-v2.0.25=https://codeload.github.com/thqby/AutoHotkey_H/tar.gz/fb9e48c3d326adebcfe080d1a4f9226045b51c4f|AutoHotkeyx.sln
+
+# Official AutoHotkey v2.0.25 - the reference engine for the m004 parity gate.
+# Deliberately the SAME version as the pinned AHK_H kernel: capability parity
+# ("the same script succeeds/fails the same way, with the same error") only
+# means anything version-to-version. Comparing against a newer official build
+# would just flag upstream features we intentionally do not have.
+#   AutoHotkey-v2.0.25-src : source tree, used to harvest the API name list.
+#   sha256 083d1f3b084969064528dfa59c66a0d73b0a99a0b80d85c9d267b1df7b058526
+#   AutoHotkey_2.0.25      : portable release zip (flat, no top-level dir).
+#   sha256 44035e19cb8b1b642e0af294b1e53556bf51453bb3aed0a8700c2ef509d0d340
+AutoHotkey-v2.0.25-src=https://codeload.github.com/AutoHotkey/AutoHotkey/tar.gz/refs/tags/v2.0.25|source/script.cpp
+AutoHotkey_2.0.25=https://github.com/AutoHotkey/AutoHotkey/releases/download/v2.0.25/AutoHotkey_2.0.25.zip|AutoHotkey64.exe
+
+# FLTK 1.4.5 - GUI framework (same release pecia ships; our patches/fltk-1.4.5
+# applies on top). UI final pick is re-confirmed by m009; FLTK stays pinned
+# until then.
+fltk-1.4.5=https://codeload.github.com/fltk/fltk/tar.gz/refs/tags/release-1.4.5|CMakeLists.txt

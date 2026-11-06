@@ -1,0 +1,9 @@
+# Pristine upstream hashes for the files AHKDeck replaces wholesale.
+# Baseline: AutoHotkey_H commit fb9e48c3 (pinned in .main/build/deps.txt).
+# guard_patch.ps1 aborts the patch step when a destination is neither pristine
+# nor already carrying our patch - that is the only way a kernel upgrade can
+# silently fall back to upstream behaviour with a 600 KB source file.
+e5a75aeec01888b2afd2ebf5f10dc20d035226a1f7890c9f99f498c4838d0a4f  source/ahklib.cpp
+9339498bf99e62509ff923226b98fa00163bc85efb98049e41adde963f06ea47  source/AutoHotkey.cpp
+c0951232312495d543af5a0745b24e7e313c03c21de3617f1a2b89d9a8f88c0e  source/error.cpp
+76d0e4992de6eee5d27d6d9a14b2db3d14ca5c5d917af04aee7ac129384c2126  source/script.cpp

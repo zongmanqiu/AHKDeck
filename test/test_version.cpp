@@ -1,0 +1,46 @@
+// test/test_version.cpp - pins the version contract.
+// If you bump the version, do it in BOTH core/Version.h and CMakeLists.txt;
+// this test fails until the string side matches, which is exactly the point.
+//
+// Style note: asserts go through Expect(), not through a do/while(0) macro -
+// a macro's `if (constant-condition)` trips C4127 under our /W4 /WX gate
+// (caught by 4_build on day one), and a helper function is cleaner anyway.
+
+#include "core/Version.h"
+
+#include <cstdio>
+#include <cstring>
+
+namespace {
+
+int g_failures = 0;
+
+// Records one expectation. Returns the failure count it added (0 or 1).
+int Expect(bool ok, const char* what, const char* file, int line)
+{
+    if (!ok) {
+        std::printf("FAIL %s:%d: %s\n", file, line, what);
+        ++g_failures;
+    }
+    return ok ? 0 : 1;
+}
+
+} // namespace
+
+int main()
+{
+    const char* file = __FILE__;
+
+    Expect(ahkdeck::kVersionMajor == 0, "kVersionMajor == 0", file, __LINE__);
+    Expect(ahkdeck::kVersionMinor == 1, "kVersionMinor == 1", file, __LINE__);
+    Expect(ahkdeck::kVersionPatch == 0, "kVersionPatch == 0", file, __LINE__);
+    Expect(std::strcmp(ahkdeck::VersionString(), "0.1.0") == 0,
+           "VersionString() == \"0.1.0\"", file, __LINE__);
+
+    if (g_failures == 0) {
+        std::printf("test_version: all checks passed\n");
+        return 0;
+    }
+    std::printf("test_version: %d check(s) failed\n", g_failures);
+    return 1;
+}

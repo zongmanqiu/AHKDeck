@@ -1,0 +1,53 @@
+# AHK_H-only built-in names (m004 phase A reading).
+#
+# These 38 names exist in AutoHotkey_H v2.0.25 but DO NOT exist in official
+# AutoHotkey v2.0.25 (the probe reports "Variable not found"). A script that
+# calls any of them works only on our kernel and cannot claim "behaves exactly
+# like official AutoHotkey at the same version".
+#
+# Source of truth: .temp/m004/api/api_diff.csv (verdict = AHKH_ONLY).
+# Regenerate after any kernel bump:
+#   .main\test\kernel_gate\gate_api.ps1
+#
+# check_kernel_names.ps1 fails the build if any of these appear in AHK code we
+# ship (.main\scripts, .build\Scripts, and any *.ahk under .main except legacy).
+#
+# One name per line, case-insensitive (AHK identifiers are case-insensitive).
+A_ZipCompressionLevel
+Alias
+ATan2
+Cast
+ComObjDll
+CryptAES
+DynaCall
+Getvar
+MemoryCallEntryPoint
+MemoryFindResource
+MemoryFreeLibrary
+MemoryGetProcAddress
+MemoryLoadLibrary
+MemoryLoadResource
+MemoryLoadString
+MemorySizeOfResource
+ObjDump
+ObjLoad
+ResourceLoadLibrary
+sizeof
+Struct
+Swap
+UArray
+UMap
+UnZip
+UnZipBuffer
+UnZipRawMemory
+UObject
+ZipAddBuffer
+ZipAddFile
+ZipAddFolder
+ZipCloseBuffer
+ZipCloseFile
+ZipCreateBuffer
+ZipCreateFile
+ZipInfo
+ZipOptions
+ZipRawMemory
