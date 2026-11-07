@@ -13,6 +13,12 @@
 #include "DeckIcon.h"
 IDI_AHKDECK ICON "autohotkey.ico"
 
+// About-dialog donation QR codes (m079), embedded so the shipped exe needs no
+// loose image files. Same author's codes as the pecia project; CMake copies
+// both SVGs next to this generated .rc.
+ID_QR_WECHAT RCDATA "WeChatPay.svg"
+ID_QR_ALIPAY RCDATA "ALiPay.svg"
+
 // NOTE: resource ID must be the literal 1 (RT_VERSION id 1). Do NOT write
 // "VS_VERSION_INFO" here without including winver.h - unresolved, rc.exe
 // compiles it as a STRING-NAMED resource and GetFileVersionInfo finds nothing
@@ -34,7 +40,7 @@ BEGIN
             VALUE "FileDescription", "AHKDeck"
             VALUE "FileVersion", "@PROJECT_VERSION@.0"
             VALUE "InternalName", "AHKDeck"
-            VALUE "LegalCopyright", "GPL-2.0-or-later"
+            VALUE "LegalCopyright", "GPL-2.0"
             VALUE "OriginalFilename", "AHKDeck.exe"
             VALUE "ProductName", "AHKDeck"
             VALUE "ProductVersion", "@PROJECT_VERSION@.0"

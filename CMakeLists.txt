@@ -73,8 +73,12 @@ add_library(core STATIC
     core/Hotkeys.cpp
     core/Json.cpp
     core/AiPolicy.cpp
+    core/Updater.cpp
 )
 target_include_directories(core PUBLIC "${CMAKE_SOURCE_DIR}")
+# m092: the updater speaks WinHTTP. That is networking, not GUI - core still
+# has no window toolkit dependency, so the unit tests link it unchanged.
+target_link_libraries(core PUBLIC winhttp)
 if(MSVC)
     target_compile_options(core PRIVATE /W4 /WX)
 endif()
@@ -133,9 +137,12 @@ add_library(deckui STATIC
     ui/DeckTitleBar.cpp
     ui/DeckFrame.cpp
     ui/DeckDialog.cpp
+    ui/AboutDialog.cpp
+    ui/UpdateDialog.cpp
     ui/WindowFrame.cpp
     ui/WindowShadow.cpp
     ui/ImeInPlace.cpp
+    ui/FltkErrorChannel.cpp
 )
 # Theme.cpp defines g_popupCheckColor / g_borderColour, the two globals the
 # patched FLTK sources read but never define (patches/fltk-1.4.5).
@@ -173,6 +180,10 @@ configure_file("${CMAKE_SOURCE_DIR}/ui/DeckIcon.h"
                "${CMAKE_BINARY_DIR}/DeckIcon.h" COPYONLY)
 configure_file("${CMAKE_SOURCE_DIR}/image/autohotkey.ico"
                "${CMAKE_BINARY_DIR}/autohotkey.ico" COPYONLY)
+configure_file("${CMAKE_SOURCE_DIR}/image/WeChatPay.svg"
+               "${CMAKE_BINARY_DIR}/WeChatPay.svg" COPYONLY)
+configure_file("${CMAKE_SOURCE_DIR}/image/ALiPay.svg"
+               "${CMAKE_BINARY_DIR}/ALiPay.svg" COPYONLY)
 target_sources(AHKDeck PRIVATE "${CMAKE_BINARY_DIR}/version_info.rc")
 
 # ----------------------------------------------------------------------------

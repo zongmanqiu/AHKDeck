@@ -97,8 +97,13 @@ void DeckDialog::ShowCentered()
 		windowShadow::attach(this);
 		SyncFrame();
 	}
+	// m089: Pecia's double self-heal (DialogBase::show): the 0s tick catches
+	// the first frame, the 0.25s tick catches DWM's first composition. One
+	// shot can still lose that race - with two, the decoration is right
+	// within 0.25s and no click is needed.
 	Fl::remove_timeout(FirstFrameFix, this);
-	Fl::add_timeout(150, FirstFrameFix, this);
+	Fl::add_timeout(0.0, FirstFrameFix, this);
+	Fl::add_timeout(0.25, FirstFrameFix, this);
 }
 
 void DeckDialog::InstallFrame()
@@ -121,6 +126,15 @@ void DeckDialog::FirstFrameFix(void *aSelf)
 		return;
 	self->SyncFrame();
 	self->redraw();
+#if defined(_WIN32)
+	// m089: Pecia's DialogBase::firstFrameFixCb also nudges the modal window
+	// into the foreground. SW_SHOWNOACTIVATE leaves a modal unactivated, and
+	// the first activation is what brings the first WM_PAINT / WM_WINDOWPOSCHANGED
+	// storm - the wave that heals the frame. Without it the corner arc can stay
+	// stale until the user clicks the title bar.
+	if (HWND hwnd = fl_xid(self))
+		SetForegroundWindow(hwnd);
+#endif
 }
 
 void DeckDialog::hide()

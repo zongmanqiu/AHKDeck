@@ -148,6 +148,43 @@ int main()
 		Check(ahkdeck::OwnerOfHotkey(loaded, "other.ahk", "^m") != "mouse-double.ahk", "^m (no Alt) is not ^!m");
 	}
 
+	// m090: one combo, one action - a duplicate clears the earlier row, and the
+	// comparison is by parsed key + modifiers, in the wider menu scope.
+	{
+		Check(ahkdeck::SameShortcut("^!m", "^!M"), "SameShortcut ignores spelling case");
+		Check(!ahkdeck::SameShortcut("^!m", "^m"), "^m (no Alt) is not ^!m");
+		Check(!ahkdeck::SameShortcut("F3", "^!m"), "a menu key and a script binding can differ");
+		Check(!ahkdeck::SameShortcut("", "^!m"), "an empty row never collides");
+
+		std::vector<std::pair<std::string, std::string>> rows = {
+			{"menu.save", "^!m"},
+			{"one.ahk", "^!A"},
+			{"menu.find", "F3"},
+			{"two.ahk", "^!a"},
+		};
+		ahkdeck::MakeShortcutsUnique(rows);
+		Check(rows[0].second == "^!m", "a unique combo survives");
+		Check(rows[1].second.empty(), "the earlier duplicate is cleared");
+		Check(rows[3].second == "^!a", "the later duplicate keeps the combo");
+		Check(rows[2].second == "F3", "an unrelated row is untouched");
+	}
+
+	// m090: emptying a menu command must survive the round trip ("menu.save="),
+	// while a cleared script row still drops its line (it has no default).
+	{
+		const std::wstring menuPath = dir + L"\\menu.txt";
+		std::vector<ahkdeck::HotkeyEntry> entries;
+		ahkdeck::SetHotkeyEntry(entries, "menu.save", "");
+		ahkdeck::SetHotkeyEntry(entries, "示例-报错.ahk", "");
+		std::string error;
+		Check(ahkdeck::SaveHotkeys(menuPath, entries, error), "save menu overrides");
+		std::vector<ahkdeck::HotkeyEntry> loaded;
+		Check(ahkdeck::LoadHotkeys(menuPath, loaded, error), "load menu overrides");
+		Check(loaded.size() == 1, "only the menu row comes back");
+		Check(loaded[0].name == "menu.save" && loaded[0].hotkey.empty(),
+			"an emptied menu command keeps its empty entry");
+	}
+
 	// A name containing '=' could never be read back: say so, do not write a row
 	// that silently loses a binding.
 	{
@@ -196,6 +233,7 @@ int main()
 
 	DeleteFileW(path.c_str());
 	DeleteFileW((dir + L"\\hand.txt").c_str());
+	DeleteFileW((dir + L"\\menu.txt").c_str());
 
 	if (gFailures)
 	{

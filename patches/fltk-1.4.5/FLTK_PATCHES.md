@@ -1,13 +1,15 @@
 # FLTK 源码修改记录
 
-此文件记录对 `.thirdparty/fltk-*` 源码的所有修改。
-升级 FLTK 时按此文件重放修改。
+本目录归档 AHKDeck 使用的 FLTK 1.4.5 修改文件，由 [3_patch.bat](../../build/3_patch.bat)
+单向同步到工作区的 `.3rd/fltk-1.4.5/`。上游为 `fltk/fltk` 的 `release-1.4.5`，
+下载来源见 [deps.txt](../../build/deps.txt)。补丁继承自 Pecia；来源注释及实际 `pecia*` 符号保留，
+不代表 AHKDeck 存在原项目的构建目标。升级时以归档源码为准重放并核验修改。
 
 ## Fl_Menu_.H — check_color() 属性 (2026-09-07)
 
 在 `Fl_Menu_` 类中新增 `check_color_` 成员和 `check_color()` / `check_color(Fl_Color)` 方法。
 用于分离菜单勾选框填充色与行悬停高亮色：行悬停仍用 `selection_color()`，
-勾选框填充用 `check_color()`（Pecia 设为 highlight2）。
+勾选框填充用 `check_color()`（AHKDeck 在 [ui/DeckUI.cpp](../../ui/DeckUI.cpp) 中为菜单栏设为 `colors.highlight2`）。
 默认值 0 表示回退到 `selection_color()`。
 
 **修改文件：** `FL/Fl_Menu_.H`
@@ -21,12 +23,12 @@
 
 ## Fl_Menu.cxx — g_popupCheckColor 回退 (2026-09-10)
 
-`Fl_Menu_Item::draw()` 中，勾选框填充色新增 `g_popupCheckColor` 作为中间回退：
-`check_color()` > `g_popupCheckColor` > `selection_color()` > `FL_SELECTION_COLOR`。
+`Fl_Menu_Item::draw()` 中，勾选框填充色先取非零的 `check_color()`，再取非零的
+`g_popupCheckColor`；否则使用菜单的 `selection_color()`，无菜单对象时使用 `FL_SELECTION_COLOR`。
 
-原因：右键弹出菜单使用静态 `button` 变量获取 `check_color()`，但当 View 子菜单
-弹出时 `pulldown()` 递归调用会覆盖 `button`，导致后续绘制使用错误的菜单引用。
-`g_popupCheckColor` 由 Editor 在 popup() 前设置为 theme highlight2，popup() 后重置为 0。
+全局回退使弹出菜单不必依赖当前菜单对象的勾选色。AHKDeck 在
+[ui/Theme.cpp](../../ui/Theme.cpp) 定义 `g_popupCheckColor`，由 `ApplyDeckTheme()`
+设置为 `kLight.highlight2`，不是由编辑器在每次 popup 前后设置、清零。
 
 **修改文件：** `src/Fl_Menu.cxx`
 
@@ -39,10 +41,8 @@
 
 ## Fl_Menu.cxx — 禁用内部 fakemenu 冗余窗口 (legacy Patch 2)
 
-为子菜单/多级菜单绘制时，FLTK 会在父菜单之上额外创建一个 `Fl_Menu` 窗口
-（fakemenu）用于承载子项。Pecia 改为**不创建该冗余窗口**（沿用父菜单绘制），
-并清理 `\title` 等内部状态时一并处理。避免多级菜单下的双层覆盖窗口与额外
-重绘开销。
+归档补丁禁用冗余标题窗口及菜单栏按钮的 `fakemenu` 创建路径，
+并处理对应 `title` 状态，避免额外覆盖窗口和重绘；并非取消正常子菜单窗口。
 
 **修改文件：** `src/Fl_Menu.cxx`
 
@@ -57,57 +57,50 @@
 为 `Fl_Text_Buffer` 增加**撤销事务（Undo Transaction）**机制，使一次程序化多步
 编辑（如脚本替换选区、批量插入）在撤销栈中合并为**单个 undo 步骤**：
 
-- 新增 `begin_undo_transaction()` / `end_undo_transaction()` 方法；
-- 内部用 `mUndoGrouping` 嵌套计数跟踪事务深度，仅在最外层事务结束时落盘一条
-  undo 记录；
-- `insert_()` / `remove_()` 在事务进行中时，将本次编辑事件标记为同一 `group`，
-  撤销/重做时整组一起回放，避免历史被海量细碎事件污染；
-- 暴露 `mUndoGrouping` 供 Pecia 的 buffer 锁定逻辑读取事务状态。
+- 实际方法为 `undo_begin()` / `undo_end()`，由 `mUndoGrouping` 计数支持嵌套；
+- `insert_()` / `remove_()` 以 `group` 标记事务状态，限制跨事务状态的事件合并；
+- `undo()` / `redo()` 按分组回放，并非在最外层结束时才生成一条记录。
 
 **修改文件：** `src/Fl_Text_Buffer.cxx`、`FL/Fl_Text_Buffer.H`
 
-## Fl_Text_Display.cxx — 垂直滚动量程封顶 (2026-10-05)
+## Fl_Text_Display.cxx — 垂直滚动共享上限
 
-`update_v_scrollbar()` 把滚动条量程封顶到 `mTopLineNum`，消除三处独立计算的
-滚动上限不一致导致的「拖到底仍差 1~6 像素」与长文档滑块死区。封顶守卫只在
-真边界（文档末行）生效，中途状态不受影响。
+可见行数按完整行计算，`PECIA_BLANK_ROWS_PAST_END = 3` 允许末行后保留空白行。
+`scroll_()` 经 `vscroll_bottom_line()` 计算并保存实际滚动上限，
+`update_v_scrollbar()` 优先复用 `vscroll_applied_limit`，无有效值时才重新计算。
+当前实现不是简单封顶到 `mTopLineNum`，以免在文档中途压缩滚动范围。
 
 **修改文件：** `src/Fl_Text_Display.cxx`
 
 ## Fl_Scrollbar.cxx — 滚动条单一整轨道（去箭头区）(2026-10-13)
 
-上游 `Fl_Scrollbar::handle()` 与 `draw()` 在 `H >= 3*W`（竖向）时把轨道两端各
-抠掉一个 W 像素的箭头区再做命中/绘制。Pecia 的滚动条箭头由自绘主题覆盖
-（不可见、不可用），这 20px 死区导致「可见滑块」与「命中区」错位约 10px
-（滑块在上半部要按下方才抓得住）。现移除两处箭头区裁剪：滚动条 = 一条完整
-轨道，`handle()` 命中、`draw()` 绘制与 Pecia 自绘几何（`scrollbarThumbGeometry`）
-三方对齐；滑块仍可贴到轨道最底。
+`Fl_Scrollbar::handle()` 与 `draw()` 移除两端箭头区裁剪，使用完整轨道。
+AHKDeck 的 [ui/Theme.cpp](../../ui/Theme.cpp) 使用 `ThumbGeometry()` 计算自绘滑块，
+由实际函数 `DrawPeciaScrollbar()` / `DrawPeciaScrollbarCorner()` 绘制，使可见几何与命中区一致。
+这些来源标识仍是实际符号，不应仅为统一文案而改名。
 
 **修改文件：** `src/Fl_Scrollbar.cxx`
 
 ## Fl_Menu.cxx — 弹出菜单分隔线扁平化（2026-10-22）
 
-`Fl_Menu_Item::draw()` 中，`FL_MENU_DIVIDER` 分隔线由上游的
-`FL_DARK3` + `FL_LIGHT3` 双色立体线改为**一条 1px 纯色扁平线**，颜色取
-`extern Fl_Color g_borderColour`（定义在 Pecia 的 `core/Theme.cpp`，
-= 主题 text1：亮色主题≈纯黑，暗色主题自动浅色，与窗口边框同色系）。
-所有弹层（菜单栏下拉、脚本条、编辑器右键菜单、Fl_Choice 下拉）共用
-同一条绘制路径，因此分隔线全项目自动统一，无需各处单独设置。
-新增全局引用与既有 `g_popupCheckColor` 同模式（FLTK 工具 fluid/
-fltk-options 不链接 Theme.cpp，不引用该符号则不受影响）。
+`Fl_Menu_Item::draw()` 中，`FL_MENU_DIVIDER` 分隔线由双色立体线改为
+**一条 1px 纯色扁平线**，颜色取 `extern Fl_Color g_borderColour`。
+该全局由 AHKDeck 的 [ui/Theme.cpp](../../ui/Theme.cpp) 定义，应用主题时赋值为
+`ThemeBorderLine()`，即 `kLight.text1` 与 `kLight.background1` 按 `0.55f` 混合，
+不是直接取 `text1`，也不表示已实现暗色主题切换。使用此菜单绘制路径的弹层共用该颜色。
+`g_borderColour` 和 `g_popupCheckColor` 均需要宿主定义，不能假定所有 FLTK 工具都可独立链接。
 
 **修改文件：** `src/Fl_Menu.cxx`
 
 ## Fl_Menu.cxx — 弹出菜单外发光钩子（2026-10-22）
 
-menuwindow::show() / hide() 调用 Pecia 的 peciaMenuShadowShown/Hidden，
-把 ui/WindowShadow.cpp 的同一套外发光（同一组全局参数：宽度/透明度/
-Gamma 曲线）附着到所有弹出菜单：菜单栏下拉、右键菜单、Fl_Choice 下拉、
-多级子菜单。关闭菜单时先销毁阴影再隐藏原生窗口，避免残留。
+`menuwindow::show()` / `hide()` 调用实际符号 `peciaMenuShadowShown` / `peciaMenuShadowHidden`。
+AHKDeck 的 [ui/WindowShadow.cpp](../../ui/WindowShadow.cpp) 提供实现：启用阴影时注册
+`g_borderColour` 并附着阴影；关闭菜单时先分离阴影，再隐藏菜单窗口。
 
-Pecia / PeciaLua / PeciaAIChat / 两个 UI 冒烟测试链接 ui/WindowShadow.cpp，
-提供真实实现；其他只链接 ltk.lib 的目标由 /alternatename 落到
-Fl_Menu.cxx 内的空桩，第三方库仍可独立链接。
+[CMakeLists.txt](../../CMakeLists.txt) 将 `ui/Theme.cpp` 和 `ui/WindowShadow.cpp` 编入
+`deckui`，由 `AHKDeck` 链接。MSVC 下补丁通过 `/alternatename` 为两个阴影钩子提供空桩，
+但不替代两个颜色全局的宿主定义。当前构建关闭 FLTK 的 fluid、fltk-options、示例及测试目标。
 
 **修改文件：** src/Fl_Menu.cxx
 
@@ -128,15 +121,40 @@ Fl_Menu.cxx 内的空桩，第三方库仍可独立链接。
   slack 收紧为 `textsize()/3`（约 1/3 em），右端与旧版视觉宽度对齐。
 - 修正原有 CJK 断点的 retPos 偏移：之前 `retPos = next(b)` 会让下一行从
   断点字符之后开始（导致收尾标点跑到行首）；现在 `retPos` 与 `newLineStart` 一致，
-  同时 `retLineEnd` 按“是否跳过断行空白”计算。旧算法在 ex4 用例里出现的
-  14 处行首收尾标点违规降为 0。
-- 性能：普通多行文档的 wrap 布局耗时与旧版基本持平（10 MB ≈ 10 ms）；
-  病态“单行 10 MB”文件约 1.6×（0.52 s → 0.82 s），且 >10 MB 默认关闭 wrap。
+  同时 `retLineEnd` 按“是否跳过断行空白”计算。
 
-**最终 A/B（ex4，排除段末最后一行）**：520/640/800/1000 px 的平均行尾空白
-4.34/3.09/3.88/2.54% → 1.61/0.94/1.89/0.81%；行首行尾标点违规 14/7/8/5 → 0/0/0/0。
-普通英文单词内部断开 0 处；仅超长 URL/路径/无空格串在必要时内部断开（26→11 处）。
+**修改文件：** [src/Fl_Text_Display.cxx](src/Fl_Text_Display.cxx)。
+这里描述归档算法，不将仓外 A/B 产物或历史性能数字作为 AHKDeck 的验证结果。
+
+## Fl_Text_Display.cxx — 滚动上限不得把文末推出视口（2026-11-07, m084）
+
+`vscroll_bottom_line()` 原本固定用 `PECIA_BLANK_ROWS_PAST_END = 3` 行空白，
+公式 `nbuf + 2 + blank - nvis` 在**可见行数少于 blank + 1** 时会落到文末之后：
+目标行根本没有文字，其行起点是 -1，`offset_line_starts()` 由此算出负的
+`mFirstChar`，此后每次查询 `position_to_line()` 都命中失败分支，FLTK 每一行
+控制台输出都触发一次 `Fl::error()`（在 m084 之前是一次弹窗）。
+
+现在空白行数随视口收缩：`blank = min(PECIA_BLANK_ROWS_PAST_END, nvis - 1)`，
+保证文档最后一行始终留在视口内。可见行数足够时行为与原来完全一致。
 
 **修改文件：** `src/Fl_Text_Display.cxx`
-**验证：** `temp/ab_wrap/`（旧/新 exe、逐行 CSV、截图与对比图）；
-`ex4.WrapTest/wrap-cases.txt` 的 16 组用例在 520/640/800/1000 px 下对比。
+
+## Fl_Text_Display.cxx — mFirstChar 必须是有效缓冲区位置（2026-11-07, m084）
+
+`offset_line_starts()` 的四个分支都从"最近的已知行起点"出发，而**没有文字的
+可见行**行起点是 -1，`skip_lines()` / `rewind_lines()` 于是也返回 -1。
+负的 `mFirstChar` 会污染之后所有查询：`position_to_line()` 的一致性检查失败，
+`Fl::error()` 每次追加一行就响一次；而错误信息又被写回同一个控制台，
+形成"报错 → 写控制台 → 再报错"的递归（m084 的 MCP 门禁就是这样崩的）。
+
+修正：算出负值时按滚动方向回退到文本末尾（向下）或文本开头（向上），并
+**重建整张行起点表**——旧表是过期的，只做位移会留下 `mFirstChar > mLastChar`
+的矛盾状态。
+
+**修改文件：** `src/Fl_Text_Display.cxx`
+
+## 构建核验
+
+[4_build.bat](../../build/4_build.bat) 调用 [check_fltk_patch.ps1](../../build/check_fltk_patch.ps1)，
+从补丁归档提取 `pecia*` 外部钩子名并检查 `fltk.lib`；缺失时重编，重编后仍缺失则失败。
+此检查只证明钩子名称存在，不替代菜单阴影、滚动及换行的运行时验证。

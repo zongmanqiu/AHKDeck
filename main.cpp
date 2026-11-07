@@ -27,7 +27,7 @@
 // this CLI stays one script per invocation so "--run a.ahk --run b.ahk" never
 // has to guess where the script arguments end.
 //
-// License: GPL-2.0-or-later (our own files), see LICENSE and
+// License: GPL-2.0 (only), see LICENSE and
 // THIRD-PARTY-NOTICES.md for the embedded third-party components.
 
 #include "core/Version.h"

@@ -162,8 +162,18 @@ std::string CanonicalKeyToken(const std::string &aToken, unsigned int aVirtualKe
 
 } // namespace
 
-bool ParseAhkHotkey(const std::string &aText, unsigned int &aMods, unsigned int &aVirtualKey,
-	std::string &aCanonical, std::string &aError)
+// m088: two scopes, one spelling. The system scope (a script's global hotkey)
+// needs a modifier, because RegisterHotKey would eat the key everywhere in the
+// session. The menu scope (a command inside the deck window) may use a bare
+// function key, because there the key only reaches our own window.
+enum class HotkeyScope
+{
+	System,
+	Menu
+};
+
+bool ParseHotkeyText(const std::string &aText, HotkeyScope aScope, unsigned int &aMods,
+	unsigned int &aVirtualKey, std::string &aCanonical, std::string &aError)
 {
 	aMods = 0;
 	aVirtualKey = 0;
@@ -230,7 +240,7 @@ bool ParseAhkHotkey(const std::string &aText, unsigned int &aMods, unsigned int 
 		aError = "缺少主键（例：^!d、F6、#+Enter）";
 		return false;
 	}
-	if (mods == 0)
+	if (mods == 0 && aScope == HotkeyScope::System)
 	{
 		// v1.3 registered the same bindings as a hotkey string; AHK could get away
 		// with a bare letter only through its own keyboard hook. RegisterHotKey with
@@ -269,7 +279,16 @@ bool ParseAhkHotkey(const std::string &aText, unsigned int &aMods, unsigned int 
 		}
 	}
 
-	aMods = mods | kHotkeyNoRepeat;
+	if (aScope == HotkeyScope::Menu && mods == 0 && key.size() == 1)
+	{
+		// A bare letter or digit in the menu scope would still eat the key while
+		// the user types in the editor. Only the named keys (F3, Del, ...) may
+		// stand on their own.
+		aError = "至少要一个修饰键（^ Ctrl、! Alt、+ Shift、# Win），或使用功能键（F1-F24、Del 等）";
+		return false;
+	}
+
+	aMods = mods | (aScope == HotkeyScope::System ? kHotkeyNoRepeat : 0);
 	aVirtualKey = virtualKey;
 	aCanonical = (mods & kHotkeyControl) ? "^" : "";
 	if (mods & kHotkeyAlt)
@@ -280,6 +299,18 @@ bool ParseAhkHotkey(const std::string &aText, unsigned int &aMods, unsigned int 
 		aCanonical += "#";
 	aCanonical += CanonicalKeyToken(key, virtualKey);
 	return true;
+}
+
+bool ParseAhkHotkey(const std::string &aText, unsigned int &aMods, unsigned int &aVirtualKey,
+	std::string &aCanonical, std::string &aError)
+{
+	return ParseHotkeyText(aText, HotkeyScope::System, aMods, aVirtualKey, aCanonical, aError);
+}
+
+bool ParseMenuShortcut(const std::string &aText, unsigned int &aMods, unsigned int &aVirtualKey,
+	std::string &aCanonical, std::string &aError)
+{
+	return ParseHotkeyText(aText, HotkeyScope::Menu, aMods, aVirtualKey, aCanonical, aError);
 }
 
 std::wstring DefaultHotkeyPath()
@@ -348,7 +379,14 @@ bool SaveHotkeys(const std::wstring &aPath, const std::vector<HotkeyEntry> &aEnt
 	std::string content;
 	for (const auto &entry : aEntries)
 	{
-		if (entry.name.empty() || entry.hotkey.empty())
+		if (entry.name.empty())
+			continue;
+		// m090: emptying a menu command has to survive the round trip. Dropping
+		// every empty entry would silently give the command its built-in key
+		// back, because a missing entry means "use the default". A menu.* row
+		// therefore keeps its empty value ("menu.save="); a script row drops its
+		// line, since a script has no default to fall back to.
+		if (entry.hotkey.empty() && entry.name.compare(0, 5, "menu.") != 0)
 			continue;
 		// The file format splits on the first '=', so a name containing one could
 		// never be read back. Fail with the name instead of writing a lost binding.
@@ -419,6 +457,34 @@ std::string OwnerOfHotkey(const std::vector<HotkeyEntry> &aEntries, const std::s
 			return entry.name;
 	}
 	return std::string();
+}
+
+bool SameShortcut(const std::string &aLeft, const std::string &aRight)
+{
+	if (aLeft.empty() || aRight.empty())
+		return false;
+	unsigned int modsA = 0, keyA = 0, modsB = 0, keyB = 0;
+	std::string canonicalA, canonicalB, error;
+	if (!ParseMenuShortcut(aLeft, modsA, keyA, canonicalA, error) ||
+		!ParseMenuShortcut(aRight, modsB, keyB, canonicalB, error))
+		return false;
+	return keyA == keyB && (modsA & 0x00FF) == (modsB & 0x00FF);
+}
+
+void MakeShortcutsUnique(std::vector<std::pair<std::string, std::string>> &aRows)
+{
+	for (size_t i = 0; i + 1 < aRows.size(); ++i)
+	{
+		if (aRows[i].second.empty())
+			continue;
+		for (size_t j = i + 1; j < aRows.size(); ++j)
+		{
+			if (!SameShortcut(aRows[i].second, aRows[j].second))
+				continue;
+			aRows[i].second.clear();
+			break;
+		}
+	}
 }
 
 } // namespace ahkdeck

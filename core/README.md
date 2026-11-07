@@ -9,7 +9,7 @@
 | `TextFile.{h,cpp}` | 文本编码、换行与文件读写 |
 | `Library.{h,cpp}` | 路径清单读写、去重；GUI 当前扫描程序旁的 Scripts |
 | `Settings.{h,cpp}` | 窗口几何与旧 INI 读写；JSON 配置接线在 ui/DeckUI.cpp |
-| `Hotkeys.{h,cpp}` | 快捷键语法解析与绑定存储 |
+| `Hotkeys.{h,cpp}` | 快捷键语法解析与绑定存储。**两个作用域**：`ParseAhkHotkey()` 是系统全局热键（RegisterHotKey，**必须至少一个修饰键**）；`ParseMenuShortcut()` 是菜单/命令快捷键（窗口内，允许裸功能键 F1–F24/Del，裸字母数字仍拒绝） |
 | `Json.{h,cpp}` | JSON 数据结构、解析与输出 |
 | `AiPolicy.{h,cpp}` | 工具文件操作路径校验与备份，不是脚本执行沙箱 |
 

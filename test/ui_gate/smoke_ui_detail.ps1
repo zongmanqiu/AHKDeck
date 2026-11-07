@@ -1,6 +1,6 @@
 param(
     [string]$Exe = ".build\AHKDeck.exe",
-    [string]$Screenshots = ".screenshots"
+    [string]$Screenshots = ".temp\ui_gate_shots"
 )
 
 $ErrorActionPreference = "Stop"
@@ -148,7 +148,7 @@ try {
     Start-Sleep -Milliseconds 80
     [W]::Click($h, 120, 69)          # second press within the double-click time runs it
     Start-Sleep -Milliseconds 1500
-    [void][W]::Capture($h, (Join-Path $root ".screenshots\m017-dbl.png"))
+    [void][W]::Capture($h, (Join-Path $root ".temp\ui_gate_shots\m017-dbl.png"))
 
     $started = Test-Path $heartbeat
     $len1 = if ($started) { (Get-Item $heartbeat).Length } else { 0 }
@@ -164,7 +164,7 @@ try {
 
     [W]::KeyTo($h, 0x7A)  # 日志 (m026 dropped the toolbar menu button again)
     Start-Sleep -Milliseconds 900
-    [void][W]::Capture($h, (Join-Path $root ".screenshots\m017-detail.png"))
+    [void][W]::Capture($h, (Join-Path $root ".temp\ui_gate_shots\m017-detail.png"))
     $dialogsA = [W]::DialogsOf([uint32]$p.Id)
 
     $newExplorers = @(Get-Process explorer -ErrorAction SilentlyContinue |

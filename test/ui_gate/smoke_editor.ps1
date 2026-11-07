@@ -1,6 +1,9 @@
 param(
     [string]$Exe = ".build\AHKDeck.exe",
-    [string]$Screenshots = ".screenshots"
+    [string]$Screenshots = ".temp\m083_shots",
+    # Screenshots are a by-product, not a judgement: PrintWindow waits for a
+    # window that is drawing, and on a busy desktop that wait never ends.
+    [switch]$Capture
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,11 +55,14 @@ public static class W {
     // WM_KEYDOWN itself is posted to our window, which is what FLTK reads.
     public static void CtrlS(IntPtr h) {
         keybd_event(0x11, 0, 0, UIntPtr.Zero);
-        System.Threading.Thread.Sleep(40);
+        // m083: the Ctrl press travels through the system input queue; the app
+        // only learns about it when it pumps messages. A short pause used to
+        // race, and then Ctrl+S arrived without Ctrl and did nothing.
+        System.Threading.Thread.Sleep(250);
         PostMessage(h, 0x0100, (IntPtr)0x53, (IntPtr)0x001F0001); // WM_KEYDOWN 'S'
-        System.Threading.Thread.Sleep(40);
+        System.Threading.Thread.Sleep(120);
         keybd_event(0x11, 0, 2, UIntPtr.Zero);
-        System.Threading.Thread.Sleep(200);
+        System.Threading.Thread.Sleep(250);
     }
 
     public static bool Capture(IntPtr h, string path) {
@@ -135,8 +141,11 @@ try {
     [W]::PressF2($h)
     Start-Sleep -Milliseconds 600
 
-    # Focus the editor (right column starts at x=316, y=74) and append a marker.
-    [W]::Click($h, 520, 200)
+    # m083: no click into the editor any more. F2 already loads the script and
+    # puts the caret in it (LoadIntoEditor takes the focus), so the keys land
+    # where the user would type them. The old click at (520,200) landed in the
+    # LIST pane - the list got much wider in m037 - and stole the focus back,
+    # which is why the marker never reached the disk for weeks.
     Start-Sleep -Milliseconds 300
     [W]::TypeAscii($h, "; m015-editor-mark")
     Start-Sleep -Milliseconds 300
@@ -145,27 +154,22 @@ try {
     Start-Sleep -Milliseconds 700
     $method = "Ctrl+S"
     $saved = [System.IO.File]::ReadAllText($target).Contains("m015-editor-mark")
-    if (-not $saved) {
-        $method = "save button (fallback)"
-        [W]::Click($h, 547, 489)
-        Start-Sleep -Milliseconds 800
-        $saved = [System.IO.File]::ReadAllText($target).Contains("m015-editor-mark")
-    }
 
     $shot = Join-Path (Get-Location) (Join-Path $Screenshots "m015-editor.png")
-    $captured = [W]::Capture($h, $shot)
+    $captured = $false
+    if ($Capture) { $captured = [W]::Capture($h, $shot) }
 
     $bytes = [System.IO.File]::ReadAllBytes($target)
     $hasBom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
     $hasCrlf = ($bytes -contains 13)
 
-    # Test loop: 保存并运�?must save and then execute inside this host.
+    # Test loop: 保存并运�?must save and then execute inside this host.
     [W]::CtrlS($h)
     [W]::Click($h, 30, 58 + (($row - 1) * 26) + 18)
     Start-Sleep -Milliseconds 5000
     $ran = Test-Path (Join-Path $scripts "editor-out.txt")
     $shot2 = Join-Path (Get-Location) (Join-Path $Screenshots "m015-editor-run.png")
-    [void][W]::Capture($h, $shot2)
+    if ($Capture) { [void][W]::Capture($h, $shot2) }
 
     Write-Output "Saved via: $method"
     Write-Output "Editor screenshot (PrintWindow): $captured -> $shot"

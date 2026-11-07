@@ -17,6 +17,13 @@
 //
 // Threading: this runs on its own thread and never touches FLTK. Everything the
 // window must do goes through agent::Toolbox's sinks.
+//
+// Inside, the endpoint is two threads (m081/m083): a reader thread that owns
+// stdin and applies notifications the moment they arrive, and an executor thread
+// that runs the request frames one at a time. The split exists because a
+// `notifications/cancelled` has to be able to interrupt a long `run_editor` -
+// with one thread, the cancel line would sit unread in the pipe until the call
+// it meant to stop had already timed out.
 
 #pragma once
 

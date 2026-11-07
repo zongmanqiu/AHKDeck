@@ -4,8 +4,12 @@
 
 #include <windows.h>
 
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <mutex>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -105,6 +109,75 @@ Json McpToolArray(const std::vector<ToolDef> &aDefs)
 	return tools;
 }
 
+namespace
+{
+
+// m081/m083: the reader/executor split.
+//
+// The endpoint has to answer two different clocks at once. A request frame must
+// be executed strictly one at a time (Toolbox::Call serializes on its own
+// mutex, and the tool contract depends on that), but a `notifications/cancelled`
+// that arrives *while* a long `run_editor` is in flight has to be acted on
+// immediately - otherwise the client can never stop a call it lost patience
+// with. A single thread cannot do both: while it sits inside `tools/call` it is
+// not reading stdin, so the cancel line stays in the pipe and the run loop
+// waits out its whole timeout.
+//
+// So: the reader thread owns stdin and nothing else. It splits frames, hands
+// request frames to the executor through a queue, and applies notifications on
+// the spot. The executor thread runs on this function's own thread and stays
+// exactly as serial as it was before.
+class FrameQueue
+{
+public:
+	void Push(std::string aLine)
+	{
+		{
+			std::lock_guard<std::mutex> lock(mMutex);
+			mFrames.push_back(std::move(aLine));
+		}
+		mCv.notify_one();
+	}
+
+	bool Pop(std::string &aLine, const std::atomic<bool> &aRunning)
+	{
+		std::unique_lock<std::mutex> lock(mMutex);
+		mCv.wait_for(lock, std::chrono::milliseconds(20), [&] {
+			return !mFrames.empty() || mReaderDone || !aRunning.load();
+		});
+		if (!aRunning.load())
+			return false; // shutting down: never start another tool call
+		if (mFrames.empty())
+			return false;
+		aLine = std::move(mFrames.front());
+		mFrames.pop_front();
+		return true;
+	}
+
+	void MarkReaderDone()
+	{
+		{
+			std::lock_guard<std::mutex> lock(mMutex);
+			mReaderDone = true;
+		}
+		mCv.notify_all();
+	}
+
+	bool ReaderDone()
+	{
+		std::lock_guard<std::mutex> lock(mMutex);
+		return mReaderDone;
+	}
+
+private:
+	std::mutex mMutex;
+	std::condition_variable mCv;
+	std::deque<std::string> mFrames;
+	bool mReaderDone = false;
+};
+
+} // namespace
+
 void ServeStdio(Toolbox &aToolbox, const std::atomic<bool> &aRunning,
 	const std::function<void(const std::string &)> &aLog)
 {
@@ -117,144 +190,198 @@ void ServeStdio(Toolbox &aToolbox, const std::atomic<bool> &aRunning,
 
 	WriteErrorLog(aLog, "mcp: AHKDeck MCP endpoint ready on stdio\n");
 
-	std::string pending;
-	char chunk[65536];
-	while (aRunning.load())
-	{
-		DWORD available = 0;
-		if (PeekNamedPipe(in, nullptr, 0, nullptr, &available, nullptr) && available == 0)
+	FrameQueue queue;
+
+	// The reader thread: stdin in, request frames out, notifications applied
+	// here and now.
+	std::thread reader([&] {
+		std::string pending;
+		// B1: an oversize frame must be dropped as a whole. Clearing the buffer
+		// without a dropping state leaves the rest of that frame behind, and the
+		// leftovers are parsed as frames of their own - after which every frame
+		// boundary in the session is wrong (a burst of -32700 until reconnect).
+		bool discarding = false;
+		char chunk[65536];
+		while (aRunning.load())
 		{
-			// Poll instead of blocking so aRunning stays authoritative; the deck
-			// must be able to close this endpoint when the window exits.
-			Sleep(20);
+			DWORD available = 0;
+			if (PeekNamedPipe(in, nullptr, 0, nullptr, &available, nullptr) && available == 0)
+			{
+				// Poll instead of blocking so aRunning stays authoritative; the deck
+				// must be able to close this endpoint when the window exits.
+				Sleep(20);
+				continue;
+			}
+
+			DWORD got = 0;
+			if (!ReadFile(in, chunk, sizeof(chunk), &got, nullptr) || got == 0)
+			{
+				WriteErrorLog(aLog, "mcp: client closed stdin, endpoint stopped\n");
+				break;
+			}
+			pending.append(chunk, got);
+
+			for (;;)
+			{
+				const size_t newline = pending.find('\n');
+				if (newline == std::string::npos)
+				{
+					if (!discarding && pending.size() > kMaxLine)
+					{
+						discarding = true;
+						WriteErrorLog(aLog, "mcp: oversize frame dropped\n");
+					}
+					if (discarding)
+						pending.clear();
+					break;
+				}
+				std::string line = pending.substr(0, newline);
+				pending.erase(0, newline + 1);
+				if (!line.empty() && line.back() == '\r')
+					line.pop_back();
+				if (discarding)
+				{
+					// Swallow the rest of the dropped frame, up to its newline.
+					discarding = false;
+					continue;
+				}
+				if (line.empty())
+					continue;
+
+				Json request;
+				std::string parseError;
+				if (!Json::Parse(line, request, parseError))
+				{
+					// The executor answers -32700 so the error keeps its place in
+					// the response order.
+					queue.Push(std::move(line));
+					continue;
+				}
+				if (!request.Has("id"))
+				{
+					// A notification has no answer, and it may arrive while the
+					// executor is busy inside a tool call - that is exactly the
+					// case notifications/cancelled exists for. Handle it here.
+					if (request["method"].AsString() == "notifications/cancelled")
+						aToolbox.Cancel();
+					continue;
+				}
+				queue.Push(std::move(line));
+			}
+		}
+		queue.MarkReaderDone();
+	});
+
+	// The executor thread: this one. Requests run one at a time, in order.
+	std::string line;
+	while (true)
+	{
+		if (!queue.Pop(line, aRunning))
+		{
+			if (!aRunning.load() || queue.ReaderDone())
+				break;
 			continue;
 		}
 
-		DWORD got = 0;
-		if (!ReadFile(in, chunk, sizeof(chunk), &got, nullptr) || got == 0)
+		Json request;
+		std::string parseError;
+		if (!Json::Parse(line, request, parseError))
 		{
-			WriteErrorLog(aLog, "mcp: client closed stdin, endpoint stopped\n");
-			return;
+			WriteFrame(ErrorFrame(Json(), -32700, "JSON 解析失败: " + parseError));
+			continue;
 		}
-		pending.append(chunk, got);
-
-		for (;;)
+		const std::string method = request["method"].AsString();
+		const Json id = IdOf(request);
+		if (method.empty())
 		{
-			const size_t newline = pending.find('\n');
-			if (newline == std::string::npos)
-			{
-				if (pending.size() > kMaxLine)
-				{
-					WriteErrorLog(aLog, "mcp: oversize frame dropped\n");
-					pending.clear();
-				}
-				break;
-			}
-			std::string line = pending.substr(0, newline);
-			pending.erase(0, newline + 1);
-			if (!line.empty() && line.back() == '\r')
-				line.pop_back();
-			if (line.empty())
-				continue;
-
-			Json request;
-			std::string parseError;
-			if (!Json::Parse(line, request, parseError))
-			{
-				WriteFrame(ErrorFrame(Json(), -32700, "JSON 解析失败: " + parseError));
-				continue;
-			}
-			const std::string method = request["method"].AsString();
-			const Json id = IdOf(request);
-			const bool notification = !request.Has("id");
-			if (method.empty())
-			{
-				// A response to something we sent (we send none) - ignore quietly.
-				continue;
-			}
-
-			if (method == "initialize")
-			{
-				const std::string requested = request["params"]["protocolVersion"].AsString();
-				std::string version = kSupportedVersions[0];
-				for (const char *known : kSupportedVersions)
-				{
-					if (requested == known)
-					{
-						version = requested;
-						break;
-					}
-				}
-				Json capabilities = Json::MakeObject();
-				capabilities.Set("tools", Json::MakeObject());
-				Json serverInfo = Json::MakeObject();
-				serverInfo.Set("name", Json("ahkdeck"));
-				serverInfo.Set("title", Json("AHKDeck - AutoHotkey v2 script deck"));
-				serverInfo.Set("version", Json(VersionString()));
-				Json result = Json::MakeObject();
-				result.Set("protocolVersion", Json(version));
-				result.Set("capabilities", std::move(capabilities));
-				result.Set("serverInfo", std::move(serverInfo));
-				WriteErrorLog(aLog, "mcp: initialize from protocolVersion=" + requested + "\n");
-				if (!notification)
-					WriteFrame(ResultFrame(id, std::move(result)));
-				continue;
-			}
-
-			if (notification || method == "ping")
-			{
-				if (notification)
-					continue; // initialized / cancelled / progress: nothing to answer
-				Json result = Json::MakeObject();
-				WriteFrame(ResultFrame(id, std::move(result)));
-				continue;
-			}
-
-			if (method == "tools/list")
-			{
-				Json result = Json::MakeObject();
-				result.Set("tools", McpToolArray(aToolbox.Definitions()));
-				WriteFrame(ResultFrame(id, std::move(result)));
-				continue;
-			}
-
-			if (method == "tools/call")
-			{
-				const Json &params = request["params"];
-				const std::string name = params["name"].AsString();
-				if (name.empty())
-				{
-					WriteFrame(ErrorFrame(id, -32602, "tools/call 缺少 params.name"));
-					continue;
-				}
-				const Json &arguments = params["arguments"];
-				const std::string argumentsJson = arguments.IsObject() ? arguments.Dump() : std::string();
-
-				const std::string toolResult = aToolbox.Call(name, argumentsJson);
-
-				Json content = Json::MakeArray();
-				Json block = Json::MakeObject();
-				block.Set("type", Json("text"));
-				block.Set("text", Json(toolResult));
-				content.Push(std::move(block));
-
-				Json result = Json::MakeObject();
-				result.Set("content", std::move(content));
-				Json parsed;
-				std::string ignored;
-				const bool failed = Json::Parse(toolResult, parsed, ignored)
-					? !parsed["ok"].AsBool(true)
-					: true;
-				result.Set("isError", Json(failed));
-
-				WriteErrorLog(aLog, "mcp: tools/call " + name + (failed ? " -> error\n" : " -> ok\n"));
-				WriteFrame(ResultFrame(id, std::move(result)));
-				continue;
-			}
-
-			WriteFrame(ErrorFrame(id, -32601, "未知方法: " + method));
+			// A response to something we sent (we send none) - ignore quietly.
+			continue;
 		}
+
+		if (method == "initialize")
+		{
+			const std::string requested = request["params"]["protocolVersion"].AsString();
+			std::string version = kSupportedVersions[0];
+			for (const char *known : kSupportedVersions)
+			{
+				if (requested == known)
+				{
+					version = requested;
+					break;
+				}
+			}
+			Json capabilities = Json::MakeObject();
+			capabilities.Set("tools", Json::MakeObject());
+			Json serverInfo = Json::MakeObject();
+			serverInfo.Set("name", Json("ahkdeck"));
+			serverInfo.Set("title", Json("AHKDeck - AutoHotkey v2 script deck"));
+			serverInfo.Set("version", Json(VersionString()));
+			Json result = Json::MakeObject();
+			result.Set("protocolVersion", Json(version));
+			result.Set("capabilities", std::move(capabilities));
+			result.Set("serverInfo", std::move(serverInfo));
+			WriteErrorLog(aLog, "mcp: initialize from protocolVersion=" + requested + "\n");
+			WriteFrame(ResultFrame(id, std::move(result)));
+			continue;
+		}
+
+		if (method == "tools/list")
+		{
+			Json result = Json::MakeObject();
+			result.Set("tools", McpToolArray(aToolbox.Definitions()));
+			WriteFrame(ResultFrame(id, std::move(result)));
+			continue;
+		}
+
+		if (method == "tools/call")
+		{
+			const Json &params = request["params"];
+			const std::string name = params["name"].AsString();
+			if (name.empty())
+			{
+				WriteFrame(ErrorFrame(id, -32602, "tools/call 缺少 params.name"));
+				continue;
+			}
+			const Json &arguments = params["arguments"];
+			const std::string argumentsJson = arguments.IsObject() ? arguments.Dump() : std::string();
+
+			const std::string toolResult = aToolbox.Call(name, argumentsJson);
+
+			Json content = Json::MakeArray();
+			Json block = Json::MakeObject();
+			block.Set("type", Json("text"));
+			block.Set("text", Json(toolResult));
+			content.Push(std::move(block));
+
+			Json result = Json::MakeObject();
+			result.Set("content", std::move(content));
+			Json parsed;
+			std::string ignored;
+			const bool failed = Json::Parse(toolResult, parsed, ignored)
+				? !parsed["ok"].AsBool(true)
+				: true;
+			result.Set("isError", Json(failed));
+
+			WriteErrorLog(aLog, "mcp: tools/call " + name + (failed ? " -> error\n" : " -> ok\n"));
+			WriteFrame(ResultFrame(id, std::move(result)));
+			continue;
+		}
+
+		if (method == "ping")
+		{
+			Json result = Json::MakeObject();
+			WriteFrame(ResultFrame(id, std::move(result)));
+			continue;
+		}
+
+		WriteFrame(ErrorFrame(id, -32601, "未知方法: " + method));
 	}
+
+	// The reader may be sitting in PeekNamedPipe/ReadFile; it polls aRunning
+	// every 20 ms, so it leaves on its own. Joining it here is what lets the
+	// deck free the window instead of exiting the process (m083/B3).
+	reader.join();
+	WriteErrorLog(aLog, "mcp: endpoint stopped\n");
 }
 
 } // namespace mcp

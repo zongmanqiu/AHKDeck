@@ -51,6 +51,20 @@ bool WriteRaw(const std::wstring &aPath, const std::string &aBytes)
 	return ok;
 }
 
+// ReadTextDocument normalizes to LF; expectations built from CRLF text must go
+// through the same shape before comparing.
+std::string ToLf(std::string aText)
+{
+	std::string out;
+	for (size_t i = 0; i < aText.size(); ++i)
+	{
+		if (aText[i] == '\r' && i + 1 < aText.size() && aText[i + 1] == '\n')
+			continue;
+		out += aText[i];
+	}
+	return out;
+}
+
 } // namespace
 
 int main()
@@ -111,6 +125,46 @@ int main()
 		Check(document.crlf, "utf16 CRLF detected");
 		Check(document.crlfOnly, "utf16 is pure CRLF");
 		Check(document.utf8 == text, "utf16 content round-trip");
+	}
+
+	// m080: a BOM-less file that is not valid UTF-8 is ANSI text. The editor
+	// used to pass the raw bytes through and the canonical rewrite persisted
+	// the mojibake - opening a GBK script corrupted it. Build the ANSI bytes
+	// from this machine's own code page so the case is machine-independent:
+	// whatever the ACP can encode must come back as the same characters.
+	{
+		const std::wstring path = dir + L"\\ansi.ahk";
+		const std::wstring wide = L"s := \"你好\"\r\nif (s = \"你好\")\r\n    ExitApp(0)\r\n";
+		const int ansiLen = WideCharToMultiByte(CP_ACP, 0, wide.c_str(), (int)wide.size(),
+			nullptr, 0, nullptr, nullptr);
+		std::string ansi((size_t)ansiLen, '\0');
+		WideCharToMultiByte(CP_ACP, 0, wide.c_str(), (int)wide.size(),
+			ansi.data(), ansiLen, nullptr, nullptr);
+		const int backLen = MultiByteToWideChar(CP_ACP, 0, ansi.data(), ansiLen, nullptr, 0);
+		std::wstring back((size_t)backLen, L'\0');
+		MultiByteToWideChar(CP_ACP, 0, ansi.data(), ansiLen, back.data(), backLen);
+		const bool lossless = back == wide;
+		Check(WriteRaw(path, ansi), "ansi raw write");
+		Check(ahkdeck::ReadTextDocument(path, document, error), "ansi read");
+		Check(document.crlf, "ansi CRLF detected");
+		// The characters must survive the round trip whatever the code page is.
+		const int expectLen = WideCharToMultiByte(CP_UTF8, 0, back.c_str(), backLen,
+			nullptr, 0, nullptr, nullptr);
+		std::string expected((size_t)expectLen, '\0');
+		WideCharToMultiByte(CP_UTF8, 0, back.c_str(), backLen,
+			expected.data(), expectLen, nullptr, nullptr);
+		Check(document.utf8 == ToLf(expected), "ansi content round-trips through the code page");
+		if (lossless)
+		{
+			Check(document.encoding == ahkdeck::TextEncoding::Ansi, "ansi encoding detected");
+			const int wantLen = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), (int)wide.size(),
+				nullptr, 0, nullptr, nullptr);
+			std::string want((size_t)wantLen, '\0');
+			WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), (int)wide.size(),
+				want.data(), wantLen, nullptr, nullptr);
+			Check(document.utf8 == ToLf(want), "ansi decoded with the system code page (CJK ACP)");
+		}
+		DeleteFileW(path.c_str());
 	}
 
 	// Mixed line endings are decoded but cannot be called canonical.

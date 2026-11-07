@@ -154,6 +154,7 @@ const char *TextEncodingName(TextEncoding aEncoding)
 	{
 	case TextEncoding::Utf8Bom: return "UTF-8 BOM";
 	case TextEncoding::Utf16Le: return "UTF-16LE";
+	case TextEncoding::Ansi: return "ANSI";
 	default: return "UTF-8";
 	}
 }
@@ -187,7 +188,40 @@ bool ReadTextDocument(const std::wstring &aPath, TextDocument &aOut, std::string
 	}
 	else
 	{
-		decoded.assign(bytes.data() + begin, bytes.size() - begin);
+		// m080: a BOM-less file is UTF-8 only if it actually validates as UTF-8.
+		// The old code assigned the raw bytes unconditionally, so an ANSI/GBK
+		// script was read as mojibake and the editor's canonical rewrite
+		// (ui/DeckUI.cpp LoadIntoEditor) persisted it - opening the file was
+		// enough to corrupt it. The kernel keeps the official rule (BOM-less =
+		// UTF-8, invalid sequences become U+FFFD: script.h DEFAULT_READ_FLAGS has
+		// no DETECT_UTF8 and the default script codepage is CP_UTF8); the editor
+		// is the deck's own component and may read smarter, while the write side
+		// stays UTF-8-only (see WriteTextDocument).
+		const int utf8Len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+			bytes.data() + begin, (int)(bytes.size() - begin), nullptr, 0);
+		if (utf8Len > 0 || bytes.size() == begin)
+		{
+			decoded.assign(bytes.data() + begin, bytes.size() - begin);
+		}
+		else
+		{
+			const int wideLen = MultiByteToWideChar(CP_ACP, 0,
+				bytes.data() + begin, (int)(bytes.size() - begin), nullptr, 0);
+			if (wideLen <= 0)
+			{
+				aError = "the file is neither valid UTF-8 nor text in the system ANSI code page";
+				return false;
+			}
+			std::wstring wide((size_t)wideLen, L'\0');
+			MultiByteToWideChar(CP_ACP, 0, bytes.data() + begin,
+				(int)(bytes.size() - begin), wide.data(), wideLen);
+			const int outLen = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), wideLen,
+				nullptr, 0, nullptr, nullptr);
+			decoded.assign((size_t)outLen, '\0');
+			WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), wideLen,
+				decoded.data(), outLen, nullptr, nullptr);
+			encoding = TextEncoding::Ansi;
+		}
 	}
 
 	bool crlf = false;
@@ -204,6 +238,12 @@ bool ReadTextDocument(const std::wstring &aPath, TextDocument &aOut, std::string
 bool WriteTextDocument(const std::wstring &aPath, const std::string &aUtf8,
 	TextEncoding aEncoding, bool aCrlf, std::size_t *aBytesWritten, std::string &aError)
 {
+	// m080: the write side never produces ANSI. A read-side Ansi document
+	// already carries corrected text; persisting it as UTF-8 without a BOM is
+	// the m042 canonical form, and official AutoHotkey v2 reads that cleanly.
+	if (aEncoding == TextEncoding::Ansi)
+		aEncoding = TextEncoding::Utf8NoBom;
+
 	bool ignored = false;
 	std::string lf = NormalizeNewlines(aUtf8, ignored);
 	std::string payload = aCrlf ? ToCrlf(lf) : lf;

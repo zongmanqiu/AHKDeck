@@ -102,7 +102,22 @@ static const int PECIA_BLANK_ROWS_PAST_END = 3;
    clamps the top line) and stashed in vscroll_applied_limit; update_v_scrollbar()
    reuses that recorded value instead of recomputing it. */
 static int vscroll_bottom_line(int nbuf, int nvis) {
-  return nbuf + 2 + PECIA_BLANK_ROWS_PAST_END - nvis;
+  /* PATCH (AHKDeck m084): the blank rows may not eat the whole viewport.
+   *
+   * The formula assumes the viewport is taller than the blank area. With
+   * fewer than PECIA_BLANK_ROWS_PAST_END + 1 visible rows it lands PAST the
+   * end of the text: the target row carries no text at all, its line start
+   * is -1, and FLTK's scroll arithmetic hands position_to_line() a row
+   * without a line start. That is what tripped the consistency check on
+   * every console line in the MCP gate (the console pane is only a few
+   * rows tall in a small window).
+   *
+   * The last line of the text has to stay on screen, so the blank area
+   * shrinks with the viewport. */
+  int blank = PECIA_BLANK_ROWS_PAST_END;
+  if (blank > nvis - 1) blank = nvis - 1;
+  if (blank < 0) blank = 0;
+  return nbuf + 2 + blank - nvis;
 }
 
 /* PATCH (Pecia): the limit scroll_() actually applied on its last call, or 0
@@ -2957,8 +2972,33 @@ void Fl_Text_Display::offset_line_starts( int newTopLineNum ) {
     mFirstChar = rewind_lines( buf->length(), mNBufferLines - newTopLineNum + 1 );
   }
 
+  /* PATCH (AHKDeck m084): mFirstChar has to stay a valid buffer position.
+   *
+   * The four branches above start from "the nearest known line start". A
+   * visible row that carries no text has the line start -1, so the
+   * arithmetic can start from -1 - and skip_lines()/rewind_lines() then
+   * return -1 as well. A negative mFirstChar poisons every later query:
+   * position_to_line() fails its consistency check and Fl::error() fires -
+   * once per appended line, which is the popup storm m084 chased (the deck's
+   * console appends a line, the append trips the check, the error message
+   * is appended to the very same console, and the loop never ends).
+   *
+   * "The row we scrolled to has no text" means the text ends before it, so
+   * the end of the text is the honest answer when scrolling down, and the
+   * start of the text when scrolling up. The line starts array is stale in
+   * that case as well, so it is rebuilt from the new anchor instead of
+   * being shifted - otherwise mFirstChar would sit past mLastChar and the
+   * display would stay broken until the next full relayout. */
+  bool rebuildLineStarts = false;
+  if ( mFirstChar < 0 ) {
+    mFirstChar = (newTopLineNum > oldTopLineNum) ? buf->length() : 0;
+    rebuildLineStarts = true;
+  }
+
   /* Fill in the line starts array */
-  if ( lineDelta < 0 && -lineDelta < nVisLines ) {
+  if ( rebuildLineStarts ) {
+    calc_line_starts( 0, nVisLines - 1 );
+  } else if ( lineDelta < 0 && -lineDelta < nVisLines ) {
     for ( i = nVisLines - 1; i >= -lineDelta; i-- )
       lineStarts[ i ] = lineStarts[ i + lineDelta ];
     calc_line_starts( 0, -lineDelta );

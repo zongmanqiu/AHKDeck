@@ -18,7 +18,11 @@ enum class TextEncoding
 {
 	Utf8NoBom,
 	Utf8Bom,
-	Utf16Le
+	Utf16Le,
+	// m080: BOM-less bytes that are not valid UTF-8, decoded with the system
+	// ANSI code page on the READ side only - WriteTextDocument never produces
+	// it (see there).
+	Ansi
 };
 
 const char *TextEncodingName(TextEncoding aEncoding);

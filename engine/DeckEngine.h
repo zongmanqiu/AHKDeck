@@ -46,6 +46,11 @@ struct ErrorRecord
 	int thread = 0;
 	int seq = 0;
 	int line = 0;
+	// The record has been written to its session's JSONL. The log write and the
+	// console write belong together, but a tool that wants the log NOW may
+	// flush the log itself (FlushPendingLogs) before the UI tick gets there -
+	// without this flag the record would land in the file twice (m083).
+	bool logged = false;
 };
 
 enum class SessionState
@@ -120,6 +125,21 @@ public:
 	// it over. aTimeoutMs = INFINITE blocks until one arrives; false on timeout.
 	bool PopRecord(ErrorRecord &aRecord, DWORD aTimeoutMs);
 
+	// How many kernel records are still waiting to be routed and written to
+	// their session's JSONL. A record reaches the log when the UI tick drains
+	// the queue: the console write and the log write happen together, in one
+	// place, so the two can never disagree. A caller that wants the log NOW
+	// waits for this to reach zero - otherwise it reads a file that is still
+	// empty because the UI has not ticked yet (m083).
+	size_t PendingRecords() const;
+
+	// Writes every pending record to its session's JSONL right now and returns
+	// how many it wrote. The queue keeps the records - the UI still gets them
+	// for the console - but the file is already complete when this returns.
+	// A caller that reads the log does not have to wait for the UI tick, and
+	// the two can no longer race each other (m083).
+	size_t FlushPendingLogs();
+
 private:
 	Engine() = default;
 	~Engine();
@@ -128,6 +148,19 @@ private:
 
 	static void __stdcall OnError(const char *aJson);
 	static void __stdcall OnThreadStarted(void *aCtx);
+
+	// Waits until the kernel's report about a failed load has arrived. The
+	// kernel raises it from the script thread, which can be a moment AFTER
+	// NewThread() gave up on that thread - and the first load of a cold kernel
+	// takes long enough for the caller to read the log before the record
+	// exists. Without this wait, "the script failed" and "the script said
+	// nothing" look the same to the caller (m083).
+	bool WaitForLoadRecord(const std::wstring &aScriptPath, DWORD aTimeoutMs);
+
+	// Routes one record to its session, writes it to that session's JSONL and
+	// applies the "a failure stops the script" rule. The caller holds
+	// mSessionsMutex; the return value is the thread to ask to stop, or 0.
+	DWORD PublishRecord(ErrorRecord &aRecord);
 
 	struct Entry
 	{
@@ -170,7 +203,7 @@ private:
 	std::wstring mUnattributedLog;    // the same file, absolute, made on demand
 	std::ofstream mUnattributedFile;
 
-	std::mutex mErrorMutex;
+	mutable std::mutex mErrorMutex;
 	std::condition_variable mErrorCv;
 	std::deque<ErrorRecord> mErrors;
 };

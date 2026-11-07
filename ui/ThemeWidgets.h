@@ -5,10 +5,84 @@
 #include <FL/fl_draw.H>
 #include <initializer_list>
 
+// The popup menus' check-mark colour (Theme.cpp). The menu bar and every
+// popup use it, so a check box that wants to look like the menu's check mark
+// has to use it too.
+extern Fl_Color g_popupCheckColor;
+
+// The one flat 1px line colour every box in the deck is drawn with
+// (Theme.cpp). The check box needs it for its own border.
+extern Fl_Color g_borderColour;
+
 namespace ahkdeck
 {
 namespace ui
 {
+
+// m086: a check box drawn EXACTLY like the menu bar's check mark.
+//
+// FLTK's own Fl_Check_Button draws a filled box with a tick in a contrasting
+// colour - and with the "gtk+" scheme the tick ends up black. That is why the
+// find bar's switches looked foreign next to our menus. This widget copies
+// the menu's drawing (Fl_Menu_Item::draw in the patched FLTK):
+//
+//   unchecked -> an empty square with one 1px border
+//   checked   -> the same square, filled with the menu's check colour
+//   the label sits W + 6px to the right of the box
+//
+// m087: the menu draws the UNCHECKED box as FL_BORDER_FRAME, and the theme
+// replaces that with a 1px outer line PLUS a 1px inner black line - two
+// lines, so the empty box looked wider than the filled one and the switch
+// changed width when it was ticked. Both states are now drawn by hand with
+// the SAME single 1px border (g_borderColour), so the box keeps its width
+// and only the fill changes.
+class PeciaCheckButton : public Fl_Button
+{
+public:
+	PeciaCheckButton(int x, int y, int w, int h, const char *label = nullptr)
+		: Fl_Button(x, y, w, h, label)
+	{
+		type(FL_TOGGLE_BUTTON);
+		align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+		box(FL_NO_BOX);
+	}
+
+	// The menu's own geometry: a 14px box centred in the row.
+	static int BoxSize(int aHeight)
+	{
+		const int d = (aHeight - FL_NORMAL_SIZE + 1) / 2;
+		return aHeight - 2 * d;
+	}
+
+	// The gap between the box and the label (the menu uses 3 + 3).
+	static constexpr int kLabelGap = 6;
+
+	void draw() override
+	{
+		const int d = (h() - FL_NORMAL_SIZE + 1) / 2;
+		const int size = h() - 2 * d;
+		const int bx = x() + 2;
+		const int by = y() + d;
+		const Fl_Color tick = g_popupCheckColor ? g_popupCheckColor
+			: DeckColors().highlight2;
+		if (value())
+		{
+			fl_color(tick);
+			fl_rectf(bx, by, size, size);
+		}
+		// One border, one colour, both states: the box never changes width.
+		fl_color(g_borderColour);
+		fl_rect(bx, by, size, size);
+		draw_label(x() + size + kLabelGap, y(), w() - size - kLabelGap, h());
+	}
+
+	int handle(int event) override
+	{
+		if (event == FL_ENTER || event == FL_LEAVE)
+			redraw();
+		return Fl_Button::handle(event);
+	}
+};
 
 // Flat button with the Pecia hover/pressed fill (no 3D bevel).
 class HoverButton : public Fl_Button

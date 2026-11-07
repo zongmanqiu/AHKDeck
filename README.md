@@ -1,6 +1,11 @@
 # AHKDeck
 
-Windows x64 的 AHK v2 脚本工作台，使用 C++17、FLTK 与定制 AutoHotkey_H 内核。
+**[⬇️ 下载 0.1.0 (Gitee)](https://gitee.com/qiuzongman/AHKDeck/releases/download/0.1.0/AHKDeck_0.1.0.zip)**
+ ｜ **[⬇️ 下载 0.1.0 (GitHub)](https://github.com/zongmanqiu/AHKDeck/releases/download/0.1.0/AHKDeck_0.1.0.zip)**
+ ｜ [Gitee主仓](https://gitee.com/qiuzongman/AHKDeck)
+ ｜ [GitHub镜像](https://github.com/zongmanqiu/AHKDeck)
+
+> Windows x64 的 AHK v2 脚本工作台，使用 C++17、FLTK 与定制 AutoHotkey_H 内核。
 脚本会话在宿主进程内运行；真正退出宿主时一并停止。标题栏关闭通常只是隐藏到托盘，脚本继续运行。
 
 ## 使用
@@ -10,15 +15,15 @@ Windows x64 的 AHK v2 脚本工作台，使用 C++17、FLTK 与定制 AutoHotke
 - AI 接入使用 MCP stdio：外部客户端负责模型和修正循环，本程序提供脚本工具与可见编辑区，不内建聊天面板。
 - 仅运行可信脚本。工具路径校验不等于脚本执行沙箱；与官方 AHK 的一致性由具体对拍用例验证，不作完全兼容保证。
 
-从项目根运行成品：
+在解压后的程序目录运行：
 
 ```bat
-.build\AHKDeck.exe
-.build\AHKDeck.exe --version
-.build\AHKDeck.exe --run .build\Scripts\示例-报错.ahk
-.build\AHKDeck.exe --journal --run .build\Scripts\示例-报错.ahk
-.build\AHKDeck.exe --mcp-stdio
-.build\AHKDeck.exe --quit <pid>
+AHKDeck.exe
+AHKDeck.exe --version
+AHKDeck.exe --run Scripts\示例-报错.ahk
+AHKDeck.exe --journal --run Scripts\示例-报错.ahk
+AHKDeck.exe --mcp-stdio
+AHKDeck.exe --quit 目标实例PID
 ```
 
 `--journal` 输出逐行 JSON 事件；`--run` 每次运行一个脚本，可在脚本路径后传参。
@@ -29,7 +34,9 @@ Windows x64 的 AHK v2 脚本工作台，使用 C++17、FLTK 与定制 AutoHotke
 需要 Windows x64、MSVC C++ 工具链与 Windows SDK、CMake（至少 3.16）、NMake、MSBuild，以及下载工具 curl/tar。
 MCP 门禁另外需要 Python；未找到 Python 时 CMake 不注册这些测试。
 
-从项目根执行：
+当前构建脚本要求源码位于工作区的 `.main/` 子目录；`.3rd/`、`.temp/`、`.build/` 与其同级，分别存放依赖、构建中间物和成品。它们是相对目录约定，不绑定本机位置。
+
+从该工作区执行：
 
 ```bat
 .main\build\full.bat

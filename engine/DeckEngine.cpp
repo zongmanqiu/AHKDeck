@@ -690,22 +690,35 @@ DWORD Engine::StartSession(const std::wstring &aScriptPath, const std::vector<st
 	StartCtx *ctx = new StartCtx();
 	DWORD threadId = mNewThread(text.data(), cmd.data(), nullptr, &Engine::OnThreadStarted, ctx);
 
+	if (!threadId && !ctx->started)
+	{
+		// Load-time failure: the kernel reports why through the sink, and
+		// Route() attaches that record to this session by file; the official
+		// exit code for it is CRITICAL_ERROR (2). There is no thread handle
+		// left to wait on.
+		//
+		// "The sink already reported it" is not always true: the kernel raises
+		// the report from the script thread, and on a cold kernel that can be
+		// a moment AFTER NewThread() gave up on that thread. The caller would
+		// then read an empty log and conclude the script printed nothing
+		// (m083). Wait for the report - and wait WITHOUT holding
+		// mSessionsMutex: the UI needs that lock to route the very record we
+		// are waiting for.
+		WaitForLoadRecord(aScriptPath, 2000);
+
+		std::lock_guard<std::mutex> lock(mSessionsMutex);
+		Entry &entry = mSessions[sessionId];
+		entry.started = false;
+		entry.pub.state = SessionState::Finished;
+		entry.pub.rc = 2;
+		delete ctx;
+		entry.ctx = nullptr;
+		return sessionId;
+	}
+
 	std::lock_guard<std::mutex> lock(mSessionsMutex);
 	Entry &stored = mSessions[sessionId];
 	stored.ctx = ctx;
-
-	if (!threadId && !ctx->started)
-	{
-		// Load-time failure: the sink already reported why, and Route() attaches
-		// that record to this session by file; the official exit code for it is
-		// CRITICAL_ERROR (2). There is no thread handle left to wait on.
-		stored.started = false;
-		stored.pub.state = SessionState::Finished;
-		stored.pub.rc = 2;
-		delete ctx;
-		stored.ctx = nullptr;
-		return sessionId;
-	}
 
 	if (!threadId)
 		threadId = ctx->id; // started, but NewThread could not report the id
@@ -922,6 +935,107 @@ size_t Engine::StopAll()
 	return signalled;
 }
 
+size_t Engine::PendingRecords() const
+{
+	std::lock_guard<std::mutex> lock(mErrorMutex);
+	return mErrors.size();
+}
+
+bool Engine::WaitForLoadRecord(const std::wstring &aScriptPath, DWORD aTimeoutMs)
+{
+	const std::string want = Utf8Of(aScriptPath);
+	const size_t wantSlash = want.find_last_of("\\/");
+	const std::string wantLeaf = wantSlash == std::string::npos ? want : want.substr(wantSlash + 1);
+	const ULONGLONG deadline = GetTickCount64() + aTimeoutMs;
+	size_t before = 0;
+	{
+		std::lock_guard<std::mutex> lock(mErrorMutex);
+		before = mErrors.size();
+	}
+	for (;;)
+	{
+		{
+			std::lock_guard<std::mutex> lock(mErrorMutex);
+			if (mErrors.size() < before)
+				return true; // the UI consumed it already - it is routed and logged
+			for (const auto &rec : mErrors)
+			{
+				if (rec.file.empty())
+					return true;
+				if (SamePathI(rec.file, want))
+					return true;
+				const size_t slash = rec.file.find_last_of("\\/");
+				const std::string leaf = slash == std::string::npos
+					? rec.file : rec.file.substr(slash + 1);
+				if (SamePathI(leaf, wantLeaf))
+					return true;
+			}
+		}
+		if (GetTickCount64() >= deadline)
+			return false;
+		Sleep(10);
+	}
+}
+
+// Routes one record to its session and writes it to the session's JSONL.
+// The caller holds mSessionsMutex. Returns the thread that must be asked to
+// stop, or 0.
+//
+// The record keeps its "logged" flag: a tool may have flushed the log before
+// the UI got here, and the file must not receive the same line twice.
+DWORD Engine::PublishRecord(ErrorRecord &aRecord)
+{
+	DWORD quitThread = 0;
+	if (!aRecord.session)
+		aRecord.session = Route(aRecord);
+	StampSession(aRecord);
+	if (!aRecord.logged)
+	{
+		WriteLog(aRecord);
+		aRecord.logged = true;
+	}
+	if (aRecord.session && (aRecord.severity == "fail" || aRecord.severity == "critical"))
+	{
+		auto it = mSessions.find(aRecord.session);
+		if (it != mSessions.end())
+		{
+			it->second.pub.fatal = true;
+			// An unhandled failure is the official dialog's "Exit": the script
+			// stops. The kernel only unwinds the thread that raised it, so a
+			// repeating timer would re-raise forever - m011 measured 17 KB of
+			// identical records in 10 s. Stopping the session is what the user
+			// would have clicked, and it is the only way to keep the storm out
+			// of the log an AI is about to read.
+			if (it->second.started && it->second.pub.state == SessionState::Running)
+			{
+				it->second.pub.state = SessionState::Stopping;
+				quitThread = it->second.pub.threadId;
+			}
+		}
+	}
+	return quitThread;
+}
+
+size_t Engine::FlushPendingLogs()
+{
+	// Lock order is mSessionsMutex -> mErrorMutex, the same one StartSession
+	// uses when it queues a record from inside the session table. Taking them
+	// the other way round would deadlock the two against each other.
+	size_t written = 0;
+	std::lock_guard<std::mutex> lock(mSessionsMutex);
+	std::lock_guard<std::mutex> errorLock(mErrorMutex);
+	for (auto &rec : mErrors)
+	{
+		if (rec.logged)
+			continue;
+		const DWORD quitThread = PublishRecord(rec);
+		if (quitThread)
+			PostThreadMessageW(quitThread, WM_QUIT, 0, 0);
+		++written;
+	}
+	return written;
+}
+
 bool Engine::PopRecord(ErrorRecord &aRecord, DWORD aTimeoutMs)
 {
 	ErrorRecord rec;
@@ -945,29 +1059,7 @@ bool Engine::PopRecord(ErrorRecord &aRecord, DWORD aTimeoutMs)
 	DWORD quitThread = 0;
 	{
 		std::lock_guard<std::mutex> lock(mSessionsMutex);
-		if (!rec.session)
-			rec.session = Route(rec);
-		StampSession(rec);
-		WriteLog(rec);
-		if (rec.session && (rec.severity == "fail" || rec.severity == "critical"))
-		{
-			auto it = mSessions.find(rec.session);
-			if (it != mSessions.end())
-			{
-				it->second.pub.fatal = true;
-				// An unhandled failure is the official dialog's "Exit": the script
-				// stops. The kernel only unwinds the thread that raised it, so a
-				// repeating timer would re-raise forever - m011 measured 17 KB of
-				// identical records in 10 s. Stopping the session is what the user
-				// would have clicked, and it is the only way to keep the storm out
-				// of the log an AI is about to read.
-				if (it->second.started && it->second.pub.state == SessionState::Running)
-				{
-					it->second.pub.state = SessionState::Stopping;
-					quitThread = it->second.pub.threadId;
-				}
-			}
-		}
+		quitThread = PublishRecord(rec);
 	}
 	if (quitThread)
 		PostThreadMessageW(quitThread, WM_QUIT, 0, 0);

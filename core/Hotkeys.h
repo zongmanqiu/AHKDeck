@@ -14,6 +14,7 @@
 #pragma once
 
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ahkdeck
@@ -34,6 +35,13 @@ inline constexpr unsigned int kHotkeyNoRepeat = 0x4000;
 // store). aMods carries kHotkeyNoRepeat: v1.3 used Hotkey, "On" without the
 // Tilde, so a held key must not repeat the toggle.
 bool ParseAhkHotkey(const std::string &aText, unsigned int &aMods, unsigned int &aVirtualKey,
+	std::string &aCanonical, std::string &aError);
+
+// m088: the same spelling, but for a *menu command* shortcut. Those live inside
+// the deck window, so a bare function key ("F3", "Del") is safe there, while
+// the system-wide script hotkeys still need a modifier. A bare letter or digit
+// stays rejected in both scopes: it would eat the key while typing.
+bool ParseMenuShortcut(const std::string &aText, unsigned int &aMods, unsigned int &aVirtualKey,
 	std::string &aCanonical, std::string &aError);
 
 struct HotkeyEntry
@@ -62,5 +70,16 @@ std::string HotkeyOf(const std::vector<HotkeyEntry> &aEntries, const std::string
 // the spelling after parsing, so "^!C" and "^!c" count as one binding.
 std::string OwnerOfHotkey(const std::vector<HotkeyEntry> &aEntries, const std::string &aName,
 	const std::string &aHotkey);
+
+// m090: two actions must never share one combo. Both sides are parsed in the
+// menu scope (the wider one, which also accepts a bare function key), so a menu
+// default and a script binding compare the same way. An empty side never
+// collides.
+bool SameShortcut(const std::string &aLeft, const std::string &aRight);
+
+// m090: one combo, one action. aRows is (name, combo) in table order; when two
+// rows carry the same combo the later one keeps it and every earlier one is
+// cleared. A hand-edited file is normalized by the save path, not rejected.
+void MakeShortcutsUnique(std::vector<std::pair<std::string, std::string>> &aRows);
 
 } // namespace ahkdeck

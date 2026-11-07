@@ -44,6 +44,35 @@ std::wstring LeafOf(const std::wstring &aPath)
 	return p == std::wstring::npos ? aPath : aPath.substr(p + 1);
 }
 
+// A kernel record reaches its session's JSONL when the UI tick drains the
+// engine's record queue: the console write and the log write happen together,
+// in one place, so the two can never disagree. A tool that reads the log
+// cannot depend on that tick - the UI may be busy, and the reader would then
+// see a file that is still empty and conclude the script printed nothing
+// (m083). So the reader writes the pending records itself.
+void WaitForLogDrain()
+{
+	Engine &engine = Engine::Instance();
+	const ULONGLONG start = GetTickCount64();
+	int quiet = 0;
+	for (;;)
+	{
+		const size_t written = engine.FlushPendingLogs();
+		if (written == 0)
+		{
+			if (++quiet >= 5)
+				break; // nothing new to write for 50 ms
+		}
+		else
+		{
+			quiet = 0;
+		}
+		if (GetTickCount64() - start > 2000)
+			break;
+		Sleep(10);
+	}
+}
+
 bool SamePathI(const std::wstring &aLeft, const std::wstring &aRight)
 {
 	if (aLeft.size() != aRight.size())
@@ -436,6 +465,10 @@ Json Toolbox::OpenAiSchema() const
 std::string Toolbox::Call(const std::string &aName, const std::string &aArgumentsJson)
 {
 	std::lock_guard<std::mutex> lock(mCallMutex);
+	// m081: cancel is one call's semantics, not a process-wide switch. Without
+	// this reset the first cancelled run makes every later run skip its wait
+	// loop and report state=running instantly.
+	mCancel.store(false);
 
 	Json args;
 	std::string parseError;
@@ -695,7 +728,10 @@ std::string Toolbox::ToolRunEditor(const Json &aArgs)
 		if (GetTickCount64() - started > (ULONGLONG)timeoutMs)
 			break;
 	}
-	Sleep(300);
+	// The UI thread owns PopRecord()/WriteLog(); the record of this run is
+	// written when the UI drains the queue, so wait for that before reading
+	// the file back (m083).
+	WaitForLogDrain();
 
 	Session session;
 	std::string output;
@@ -770,7 +806,7 @@ std::string Toolbox::ToolRunScript(const Json &aArgs)
 
 	// The UI thread owns PopRecord()/WriteLog(); give it a beat to flush the
 	// JSONL before reading the file back.
-	Sleep(300);
+	WaitForLogDrain();
 
 	Session session;
 	std::string output;

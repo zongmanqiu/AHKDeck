@@ -67,6 +67,17 @@ public:
         Base::draw();
         this->cursor_color(saved);
         if (composing) drawCompositionOverlay();
+        else drawHint();
+    }
+
+    // --- m084: the inline hint (Pecia's gray note inside an empty field) ---
+    //
+    // Pecia draws a gray "Find:" / "Replace:" note INSIDE the input, and it
+    // only shows while the field is empty and not focused. A separate widget
+    // on top of the input would swallow clicks; drawing it here cannot.
+    void setHint(const char *aText) {
+        m_hint = aText ? aText : "";
+        this->redraw();
     }
 
     // --- ImeInPlace::Host -------------------------------------------------
@@ -139,6 +150,33 @@ public:
     int imeCompositionStartPos() const { return m_compStart; }
 
 private:
+    // m084: the gray hint inside an empty field (see setHint).
+    void drawHint() {
+        if (m_hint.empty()) return;
+        const char *val = this->value();
+        if (val && *val) return;            // only while the field is empty
+        if (Fl::focus() == this) return;    // Pecia hides it while focused
+        const int X = this->x() + Fl::box_dx(this->box());
+        const int Y = this->y() + Fl::box_dy(this->box());
+        const int W = this->w() - Fl::box_dw(this->box());
+        const int H = this->h() - Fl::box_dh(this->box());
+        if (W <= 0 || H <= 0) return;
+        // The hint sits a little smaller than the text, like Pecia's note.
+        const int size = this->textsize() > 2 ? this->textsize() - 2 : this->textsize();
+        fl_font(this->textfont(), size);
+        const int lineH = fl_height();
+        // The same vertical place Fl_Input_ puts its own text: the baseline
+        // sits at (H - height)/2 + height - descent. Using the top of the
+        // line instead would push the hint half out of the field.
+        const int baseline = (H - lineH) / 2 + (lineH - fl_descent());
+        fl_push_clip(X, Y, W, H);
+        fl_color(fl_rgb_color(140, 140, 140));
+        fl_draw(m_hint.c_str(), X + 1, Y + baseline);
+        fl_pop_clip();
+    }
+
+    std::string m_hint;
+
     // 组合串画在 Fl_Input 的文本原点：X/Y 是去掉边框后的文本区，top 与
     // Fl_Input_::drawtext 的单行垂直居中算法一致；x 再减去水平滚动量。
     void drawCompositionOverlay() {

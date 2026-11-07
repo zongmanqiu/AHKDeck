@@ -94,7 +94,13 @@ inline std::string HotkeyDisplayText(const std::string &aAhk)
 	{
 		if (!out.empty())
 			out += '+';
-		out += aAhk.substr(i);
+		std::string key = aAhk.substr(i);
+		// m091: a single letter is always shown upper-case. The stored text can
+		// be lower-case ("^!m" from a hand-edited hotkeys.txt); the dialog, the
+		// list cell and the menu label must not inherit that spelling.
+		if (key.size() == 1 && key[0] >= 'a' && key[0] <= 'z')
+			key[0] = (char)(key[0] - 'a' + 'A');
+		out += key;
 	}
 	return out.empty() ? std::string("（无）") : out;
 }

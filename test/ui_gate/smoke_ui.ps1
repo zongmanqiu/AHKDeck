@@ -2,7 +2,7 @@ param(
     [string]$Exe = ".build\AHKDeck.exe",
     [string]$Probe = ".main\test\ui_gate\probe",
     [ValidateSet("run", "boom")][string]$Case = "run",
-    [string]$Screenshots = ".screenshots"
+    [string]$Screenshots = ".temp\ui_gate_shots"
 )
 
 $ErrorActionPreference = "Stop"
@@ -138,9 +138,12 @@ try {
         if ($len2 -le $len1) { throw "heartbeat did not grow" }
     }
     else {
-        $log = Get-ChildItem (Join-Path (Get-Location) "logs") -Filter "ui-boom-*.jsonl" |
+        # m083: the logs live next to the EXE (the deck is portable), not in the
+        # project root. The old path only worked when the exe sat in the root.
+        $logDir = Join-Path (Split-Path -Parent (Resolve-Path $Exe).Path) "Logs"
+        $log = Get-ChildItem $logDir -Filter "ui-boom-*.jsonl" |
             Sort-Object LastWriteTime | Select-Object -Last 1
-        if (-not $log) { throw "no JSONL for ui-boom" }
+        if (-not $log) { throw "no JSONL for ui-boom in $logDir" }
         $record = Get-Content $log.FullName | Select-Object -Last 1 | ConvertFrom-Json
         Write-Output "JSONL record: severity=$($record.severity) phase=$($record.phase) line=$($record.line) message=$($record.message)"
         if ($record.severity -ne "fail") { throw "expected severity=fail" }

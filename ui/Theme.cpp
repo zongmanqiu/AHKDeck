@@ -41,12 +41,16 @@ void ThemedBorderBox(int x, int y, int w, int h, Fl_Color background)
 	fl_rect(x, y, w, h);
 }
 
+// m093: ONE 1px line. The old body drew g_borderColour plus a 1px FL_BLACK
+// inner rect, which made every UNCHECKED menu box (视图/主题 ...) read as a
+// 2px double frame while the deck's own check boxes are a single hairline.
+// FL_BORDER_FRAME is used only by the menu check boxes (Fl_Menu patch), so
+// collapsing it to the shared g_borderColour unifies them without touching
+// any other widget.
 void ThemedBorderFrame(int x, int y, int w, int h, Fl_Color)
 {
 	Fl::set_box_color(g_borderColour);
 	fl_rect(x, y, w, h);
-	Fl::set_box_color(FL_BLACK);
-	fl_rect(x + 1, y + 1, w - 2, h - 2);
 }
 
 void StyleScrollbar(Fl_Scrollbar *aBar, const ThemeColors &aColors)

@@ -1,6 +1,6 @@
 param(
     [string]$Exe = ".build\AHKDeck.exe",
-    [string]$Screenshots = ".screenshots"
+    [string]$Screenshots = ".temp\ui_gate_shots"
 )
 
 # m023 - the v1.3 workbench features, on the shipped exe.
@@ -236,13 +236,13 @@ $failures = @()
 
 Add-Type -AssemblyName System.Windows.Forms
 
-# The console is the only place the deck talks. ¸´ÖÆ puts it on the clipboard, so
+# The console is the only place the deck talks. ï¿½ï¿½ï¿½ï¿½ puts it on the clipboard, so
 # a gate can read the product's own words instead of guessing from pixels.
 function Get-DeckConsole($hwnd) {
     $had = $false
     $old = ""
     try { $had = [System.Windows.Forms.Clipboard]::ContainsText(); if ($had) { $old = [System.Windows.Forms.Clipboard]::GetText() } } catch {}
-    [W]::KeyTo($hwnd, 0x78)           # ¸´ÖÆ (last toolbar button, m026)
+    [W]::KeyTo($hwnd, 0x78)           # ï¿½ï¿½ï¿½ï¿½ (last toolbar button, m026)
     Start-Sleep -Milliseconds 500
     $text = ""
     try { if ([System.Windows.Forms.Clipboard]::ContainsText()) { $text = [System.Windows.Forms.Clipboard]::GetText() } } catch {}
@@ -562,12 +562,12 @@ $filterY = ($wr.Bottom - $wr.Top) - 72
     # panes down by 30px, so this cell must run before the strip opens.
     # m023 used to hand the right-click over to the script's own tray menu when the
     # row was running. That made one gesture mean two things, so it is gone: the
-    # script's menu now lives in the row's ²Ëµ¥ cell, and right-click always shows
+    # script's menu now lives in the row's ï¿½Ëµï¿½ cell, and right-click always shows
     # the deck's menu - running row included.
     $rowTray = $ListTop + (3 * 26) + 10               # row 4 = m023-tray.ahk
     [W]::Click($h, 120, $rowTray)                      # select row 4
     Start-Sleep -Milliseconds 200
-    [W]::KeyTo($h, 0x74)                            # ÔËÐÐ
+    [W]::KeyTo($h, 0x74)                            # ï¿½ï¿½ï¿½ï¿½
     Start-Sleep -Milliseconds 1500
     # Read the product's own account before judging the gesture: if the marker is
     # missing, the click did not land on this row and the rest of the cell is void.
@@ -576,7 +576,7 @@ $filterY = ($wr.Bottom - $wr.Top) - 72
     [void][W]::Capture($h, (Join-Path $Screenshots "m026-rightclick-running.png"))
 
     # ---- 17: and the same on a row that never started -------------------------
-    # The anchoring itself is the m023 ¡ì11 criterion: Fl_Menu_Item::popup() takes
+    # The anchoring itself is the m023 ï¿½ï¿½11 criterion: Fl_Menu_Item::popup() takes
     # WIDGET-relative coordinates and adds the event's root offset itself, so
     # passing event_x_root() double-adds the window origin.
     $rowIdle = $ListTop + 26 + 10                      # row 2 = m023-include.ahk
@@ -588,7 +588,7 @@ $filterY = ($wr.Bottom - $wr.Top) - 72
     [W]::GlobalKey(0x78, 0x11, 0x12, 0x10)  # start it with the hotkey
     Start-Sleep -Milliseconds 1800
     $beforeRestart = @(Get-Content $beat -ErrorAction SilentlyContinue)
-    [W]::KeyTo($h, 0x75)               # ÖØÆô
+    [W]::KeyTo($h, 0x75)               # ï¿½ï¿½ï¿½ï¿½
     Start-Sleep -Milliseconds 1800
     $afterRestart = @(Get-Content $beat -ErrorAction SilentlyContinue)
     [void][W]::Capture($h, (Join-Path $Screenshots "m023-restart.png"))
@@ -602,16 +602,16 @@ $filterY = ($wr.Bottom - $wr.Top) - 72
     $restarted = ($beforeRestart.Count -ge 4 -and $afterRestart.Count -ge 1 `
         -and ($afterRestart[0] -split '\|')[0] -eq '1' -and $tickAfter -gt $tickBefore)
     Check $restarted `
-        "8  ÖØÆô replaced the session: heartbeat restarted from 1 at a later tick ($($beforeRestart[0]) -> $($afterRestart[0]))"
+        "8  ï¿½ï¿½ï¿½ï¿½ replaced the session: heartbeat restarted from 1 at a later tick ($($beforeRestart[0]) -> $($afterRestart[0]))"
 
     # ---- 9/10: the binding strip ---------------------------------------------
     [W]::Click($h, 120, $rowMenu)
-    [W]::KeyTo($h, 0x77)               # ¿ì½Ý¼ü
+    [W]::KeyTo($h, 0x77)               # ï¿½ï¿½Ý¼ï¿½
     Start-Sleep -Milliseconds 400
     [void][W]::Capture($h, (Join-Path $Screenshots "m023-hotkey-strip.png"))
     [W]::Combo($h, 0x76, 0x11, 0x10)           # the spelling a user types
     [void][W]::Capture($h, (Join-Path $Screenshots "m023-strip-open.png"))
-    [W]::KeyTo($h, 0x1B)               # ±£´æ
+    [W]::KeyTo($h, 0x1B)               # ï¿½ï¿½ï¿½ï¿½
     Start-Sleep -Milliseconds 600
     $savedBindings = Text-Of $hotkeys
     [void][W]::Capture($h, (Join-Path $Screenshots "m023-strip-save.png"))
@@ -620,38 +620,38 @@ $filterY = ($wr.Bottom - $wr.Top) - 72
         ("9  the strip saved and canonicalised it (^!+f7 -> ^!+F7 in hotkeys.txt) [file: " `
             + ($savedBindings -replace "`r`n", " / ") + "]")
 
-    [W]::KeyTo($h, 0x77)               # ¿ì½Ý¼ü again
+    [W]::KeyTo($h, 0x77)               # ï¿½ï¿½Ý¼ï¿½ again
     Start-Sleep -Milliseconds 300
-    [W]::KeyTo($h, 0x1B)               # Çå³ý
+    [W]::KeyTo($h, 0x1B)               # ï¿½ï¿½ï¿½
     Start-Sleep -Milliseconds 600
     $afterClear = Text-Of $hotkeys
     Check ($afterClear -match "m023-menu\.ahk=\^\+F7") "10  Esc cancel kept the existing binding"
 
-    # ---- 19..24: m026 the per-row ²Ëµ¥ cell and the traffic light -------------
+    # ---- 19..24: m026 the per-row ï¿½Ëµï¿½ cell and the traffic light -------------
     # One session at a time, so the menu window that appears can only belong to it.
     # The cell's x is the product's own arithmetic: the list column is
     # (window - 2*pad) wide, and the columns are dot 18 | name | hotkey 104 | menu 76.
     $MenuCellX = 8 + 1 + 36 + 18
-    [W]::KeyTo($h, 0x76)               # È«²¿Í£Ö¹
+    [W]::KeyTo($h, 0x76)               # È«ï¿½ï¿½Í£Ö¹
     Start-Sleep -Milliseconds 3500
     Remove-Item $beat, $menuMark, $trayMark -ErrorAction SilentlyContinue
     [W]::Click($h, 120, $ListTop + (3 * 26) + 10)   # row 4 = m023-tray.ahk
     Start-Sleep -Milliseconds 200
-    [W]::KeyTo($h, 0x74)                # ÔËÐÐ
+    [W]::KeyTo($h, 0x74)                # ï¿½ï¿½ï¿½ï¿½
     Start-Sleep -Milliseconds 1600
     Check (Test-Path $trayMark) "19  clean slate: row 4 is the tray probe and it is running (its marker exists)"
 
-    # 20: the row's own ²Ëµ¥ cell pops THAT script's tray menu, anchored at the
+    # 20: the row's own ï¿½Ëµï¿½ cell pops THAT script's tray menu, anchored at the
     # pointer (the kernel reads GetCursorPos itself, so CoordMode cannot interfere).
     [W]::Click($h, $MenuCellX, $ListTop + (3 * 26) + 10)
     Start-Sleep -Milliseconds 800
     $account20 = Last-Console $h 1
-    Assert-MenuAnchored "20  the row's ²Ëµ¥ cell popped that script's own menu [console: $account20]" $deck.Id $h
+    Assert-MenuAnchored "20  the row's ï¿½Ëµï¿½ cell popped that script's own menu [console: $account20]" $deck.Id $h
 
     # 21/22: the same cell on a script that never built a tray menu - the kernel's
     # default menu is still the script's own menu, and the cell only exists while
     # the row is running.
-    [W]::KeyTo($h, 0x76)               # È«²¿Í£Ö¹ again, one session at a time
+    [W]::KeyTo($h, 0x76)               # È«ï¿½ï¿½Í£Ö¹ again, one session at a time
     Start-Sleep -Milliseconds 2000
     Remove-Item $beat -ErrorAction SilentlyContinue
     [W]::Click($h, 120, $ListTop + 10)     # row 1 = m023-beat
@@ -699,7 +699,7 @@ $filterY = ($wr.Bottom - $wr.Top) - 72
     # which script starts when the only visible row is double-clicked, and which
     # one stays absent. m023-menu.ahk deletes its marker on start, so "no marker"
     # proves the other script was not touched.
-    [W]::KeyTo($h, 0x76)               # È«²¿Í£Ö¹
+    [W]::KeyTo($h, 0x76)               # È«ï¿½ï¿½Í£Ö¹
     Start-Sleep -Milliseconds 3500
     $stopAccount = Last-Console $h 2
     Write-Output "stop-all account: $stopAccount"

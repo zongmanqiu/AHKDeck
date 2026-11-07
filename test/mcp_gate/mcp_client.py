@@ -20,6 +20,7 @@ there is not measuring anything, so a red run is the pass condition here.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -65,7 +66,7 @@ def cell(name: str, ok: bool, detail: str = "") -> None:
 
 
 class McpStdio:
-    def __init__(self, cmd: list[str], work: Path) -> None:
+    def __init__(self, cmd: list[str], work: Path, env: dict | None = None) -> None:
         self.stderr_path = work / "mcp-stderr.log"
         self.stderr = open(self.stderr_path, "wb")
         self.proc = subprocess.Popen(
@@ -74,6 +75,7 @@ class McpStdio:
             stdout=subprocess.PIPE,
             stderr=self.stderr,
             bufsize=0,
+            env=env,
         )
         self.next_id = 0
         self.deadline = time.time() + 90
@@ -103,8 +105,11 @@ class McpStdio:
         self._send(payload)
         return json.loads(self._read_line())
 
-    def notify(self, method: str) -> None:
-        self._send({"jsonrpc": "2.0", "method": method})
+    def notify(self, method: str, params: dict | None = None) -> None:
+        payload = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            payload["params"] = params
+        self._send(payload)
 
     def tool(self, name: str, arguments: dict) -> tuple[dict, bool]:
         """Return (parsed tool payload, isError)."""
@@ -130,7 +135,8 @@ class McpStdio:
         self.stderr.close()
 
 
-def probe(client: McpStdio, resident_file: Path, exe_dir: Path) -> None:
+def probe(client: McpStdio, resident_file: Path, exe_dir: Path,
+          autosave_probe: Path | None = None) -> None:
     # --- 1. handshake -------------------------------------------------------
     reply = client.request(
         "initialize",
@@ -187,6 +193,33 @@ def probe(client: McpStdio, resident_file: Path, exe_dir: Path) -> None:
     cell("unknown tool -> isError", is_err and "未知工具" in str(unknown_tool.get("error")),
          json.dumps(unknown_tool, ensure_ascii=False)[:160])
 
+    # --- 3.5 an oversize frame must not break the frame stream (m083/B1) ---
+    # The endpoint drops a frame bigger than 8 MB. Dropping it must consume
+    # the WHOLE frame: if the leftovers are parsed as frames of their own,
+    # every frame boundary after that is wrong - the session answers with a
+    # burst of -32700 until the client reconnects. So the first frame after the
+    # oversize one must be the ping's own answer.
+    oversize_ok = True
+    oversize_detail = ""
+    try:
+        assert client.proc.stdin is not None
+        client.proc.stdin.write(b"x" * (9 * 1024 * 1024) + b"\n")
+        client.proc.stdin.flush()
+    except (BrokenPipeError, OSError) as exc:
+        oversize_ok = False
+        oversize_detail = f"the endpoint died on the oversize frame: {exc}"
+    if oversize_ok:
+        client.next_id += 1
+        client._send({"jsonrpc": "2.0", "id": client.next_id, "method": "ping"})
+        raw = client._read_line()
+        try:
+            reply = json.loads(raw)
+        except json.JSONDecodeError:
+            reply = {}
+        oversize_ok = "result" in reply and "error" not in reply
+        oversize_detail = raw[:180]
+    cell("ping after an oversize frame answers ping", oversize_ok, oversize_detail)
+
     # --- 4. read the deck's own state -------------------------------------
     scripts, err = client.tool("list_scripts", {})
     entries = scripts.get("scripts") or []
@@ -219,6 +252,17 @@ def probe(client: McpStdio, resident_file: Path, exe_dir: Path) -> None:
     cell("fixed script passes", run2.get("rc") == 0 and not run2.get("fatal"),
          f"state={run2.get('state')} rc={run2.get('rc')} output={str(run2.get('output'))[:120]}")
 
+    # --- 5.5 a script with chinese text (m083) ---------------------------
+    # A Chinese script is the normal thing to edit here. Replacing the editing
+    # area with UTF-8 text used to trip FLTK's own consistency check
+    # ("FI_Tex_Displayposition_to_line: Consitency check pt failed"), which
+    # pops a modal dialog on the user's screen and wedges the endpoint. If
+    # that comes back, the next tool call never answers and the gate hangs.
+    client.tool("edit_editor", {"content": "#Requires AutoHotkey v2.0\n; 中文注释：你好，世界\n"})
+    cjk, _ = client.tool("run_editor", {"timeout_ms": 6000})
+    cell("a script with chinese text runs", cjk.get("rc") in (None, 0),
+         f"rc={cjk.get('rc')} state={cjk.get('state')}")
+
     # --- 6. the policy boundary still holds over the endpoint -------------
     denied, err = client.tool("write_script", {"name": "..\\evil.ahk", "content": FIXED})
     cell("'..\\evil.ahk' refused", err and bool(denied.get("error")),
@@ -246,6 +290,42 @@ def probe(client: McpStdio, resident_file: Path, exe_dir: Path) -> None:
         after, _ = client.tool("get_session_output", {"session": int(session)})
         cell("session readable after stop", after.get("ok") is True, str(after)[:160])
 
+    # --- 7.5 cancellation (m081) -------------------------------------------
+    # The client gives up on an in-flight run. The endpoint must answer
+    # promptly instead of serving the whole timeout, and the NEXT run must
+    # still wait its full budget - a cancel must not latch.
+    client.next_id += 1
+    cancel_id = client.next_id
+    cancel_sent_at = time.time()
+    client._send({"jsonrpc": "2.0", "id": cancel_id, "method": "tools/call",
+                  "params": {"name": "run_editor", "arguments": {"timeout_ms": 20000}}})
+    time.sleep(1.0)
+    client.notify("notifications/cancelled", {"requestId": cancel_id})
+    cancelled_reply = json.loads(client._read_line())
+    cancelled_elapsed = time.time() - cancel_sent_at
+    cblocks = ((cancelled_reply.get("result") or {}).get("content") or [])
+    ctext = "".join(b.get("text", "") for b in cblocks if b.get("type") == "text")
+    try:
+        cpayload = json.loads(ctext)
+    except json.JSONDecodeError:
+        cpayload = {}
+    cell("cancelled run answers before its timeout", cancelled_elapsed < 8.0,
+         f"{cancelled_elapsed:.1f}s")
+    cell("cancelled run reports state=running", cpayload.get("state") == "running",
+         str(cpayload)[:140])
+    if cpayload.get("session"):
+        client.tool("stop_script", {"session": int(cpayload["session"])})
+
+    # The cancel must not latch onto later runs. RESIDENT lives ~8 s, so a
+    # 12 s budget only returns early if the wait loop is broken.
+    latch_sent_at = time.time()
+    run5, _ = client.tool("run_editor", {"timeout_ms": 12000})
+    latch_elapsed = time.time() - latch_sent_at
+    cell("cancel does not latch onto later runs", latch_elapsed >= 6.0,
+         f"{latch_elapsed:.1f}s state={run5.get('state')} rc={run5.get('rc')}")
+    if run5.get("session"):
+        client.tool("stop_script", {"session": int(run5["session"])})
+
 
     # --- 8. the OTHER half of the redaction -------------------------------
     # The load error above only proves the "file" field collapses to a name.
@@ -264,6 +344,22 @@ def probe(client: McpStdio, resident_file: Path, exe_dir: Path) -> None:
     cell("exe prefix folded to <exe>", "<exe>" in out4, out4[:220].replace("\n", " | "))
     leaks4 = [m.group(0) for m in re.finditer(r"[A-Za-z]:[\\/][^\"\\s]{0,60}", out4)]
     cell("no drive-letter path in include error", not leaks4, str(leaks4)[:200])
+
+    # --- 9. tool edits must not ride the timed save (m082) -----------------
+    # edit_editor promises "not saved". The timed save used to break that
+    # promise behind the user's back. The deck runs with AHKDECK_AUTOSAVE_MS=600
+    # and a script already open (AHKDECK_OPEN_SCRIPT), because the timed save
+    # only applies to an editor that owns a disk file. Several edits land during
+    # the earlier sections, so a regression shows up here within ~2 s.
+    if autosave_probe is not None:
+        client.tool("edit_editor", {"content": "; autosave probe v2\n"})
+        time.sleep(1.8)
+        try:
+            disk = autosave_probe.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            disk = ""
+        cell("tool edits are not autosaved", "v1" in disk and "v2" not in disk,
+             disk[:80].replace("\n", " | "))
 
 
 def report() -> int:
@@ -287,9 +383,20 @@ def main() -> int:
         client = McpStdio([sys.executable, str(fake), "--mcp-stdio"], work)
         resident = work / "selftest-resident.txt"
         exe_dir = work
+        autosave_probe = None
+        probe_ahk = None
     else:
         exe = sys.argv[1]
-        client = McpStdio([exe, "--mcp-stdio"], work)
+        # m082: the deck must run with a fast timed save and a script already
+        # open in the editor, or the autosave cell below has nothing to watch.
+        probe_ahk = Path(exe).parent / "Scripts" / "mcp-autosave-probe.ahk"
+        probe_ahk.parent.mkdir(parents=True, exist_ok=True)
+        probe_ahk.write_text("; autosave probe v1\r\n", encoding="utf-8")
+        env = dict(os.environ)
+        env["AHKDECK_AUTOSAVE_MS"] = "600"
+        env["AHKDECK_OPEN_SCRIPT"] = "mcp-autosave-probe.ahk"
+        client = McpStdio([exe, "--mcp-stdio"], work, env=env)
+        autosave_probe = probe_ahk
         # run_editor executes the editing area from <exe dir>\.temp\ai-editor.ahk
         # (m062 wants that changed: A_ScriptDir differs from where the user saves).
         exe_dir = Path(exe).parent
@@ -299,7 +406,7 @@ def main() -> int:
                 stale.unlink()
 
     try:
-        probe(client, resident, exe_dir)
+        probe(client, resident, exe_dir, autosave_probe)
     except Exception as exc:  # noqa: BLE001 - a gate reports, it does not traceback
         cell("probe completed", False, f"{type(exc).__name__}: {exc}")
     finally:
@@ -315,6 +422,16 @@ def main() -> int:
                     break
                 except OSError:
                     time.sleep(0.1)
+        # m082: the autosave probe lives in the shipped Scripts folder and must
+        # not outlive the gate either.
+        if probe_ahk is not None:
+            for _attempt in range(20):
+                try:
+                    if probe_ahk.exists():
+                        probe_ahk.unlink()
+                    break
+                except OSError:
+                    time.sleep(0.1)
         if not selftest:
             cell("gate leaves no temp file behind",
                  not resident.exists() and not (Path(exe_dir) / ".temp" / "mcp-gate.txt").exists(),
@@ -325,6 +442,19 @@ def main() -> int:
                  log[:120].replace("\n", " | "))
         except OSError as exc:
             cell("endpoint stderr captured", False, str(exc))
+        # m084: FLTK's own errors must never appear. They used to open a modal
+        # dialog (class "FLTK", so the #32770 counter never saw them) - one per
+        # console line, and the error message was appended to the very console
+        # that caused it, so the deck looped until it died. The error channel
+        # writes them to stderr with the "[fltk]" tag; a line here means the
+        # library tripped a consistency check again.
+        try:
+            log = client.stderr_path.read_bytes().decode("utf-8", "replace")
+            fltk_lines = [ln for ln in log.splitlines() if ln.startswith("[fltk]")]
+            cell("no FLTK error in the endpoint log", not fltk_lines,
+                 f"{len(fltk_lines)}: {fltk_lines[:2]}")
+        except OSError as exc:
+            cell("FLTK error log read", False, str(exc))
 
     failures = report()
     if selftest:
