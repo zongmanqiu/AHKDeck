@@ -12,7 +12,7 @@ if(CMAKE_GENERATOR MATCHES "Makefiles")
     set(CMAKE_DEPENDS_USE_COMPILER FALSE)
 endif()
 
-project(AHKDeck VERSION 0.0.1 LANGUAGES C CXX RC)
+project(AHKDeck VERSION 0.2.0 LANGUAGES C CXX RC)
 
 # Static CRT (/MT): the shipped exe must run with ZERO VC++ redistributable
 # dependencies ("单 exe 即装即用"). CMP0091 NEW lets CMAKE_MSVC_RUNTIME_LIBRARY
@@ -203,12 +203,19 @@ target_sources(AHKDeck PRIVATE "${CMAKE_BINARY_DIR}/version_info.rc")
 # identical to what 帮助 > MCP 接入 opens, with no second place to update.
 # The same rule applies to licenses\: the upstream license texts are part of the
 # distributed product (GPL-2.0 requires the copy to travel with the program).
+# m119: LICENSE and THIRD-PARTY-NOTICES.md are part of the distribution as well,
+# so the .build folder is already the complete release whitelist (see
+# build/打包清单.md); the packaging step only copies, never invents files.
 add_custom_command(TARGET AHKDeck POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_SOURCE_DIR}/docs" "$<TARGET_FILE_DIR:AHKDeck>/docs"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_SOURCE_DIR}/licenses" "$<TARGET_FILE_DIR:AHKDeck>/licenses"
-    COMMENT "Staging docs and licenses next to AHKDeck.exe")
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/LICENSE" "$<TARGET_FILE_DIR:AHKDeck>/LICENSE"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/THIRD-PARTY-NOTICES.md" "$<TARGET_FILE_DIR:AHKDeck>/THIRD-PARTY-NOTICES.md"
+    COMMENT "Staging docs, licenses and notices next to AHKDeck.exe")
 
 # ----------------------------------------------------------------------------
 # Tests (ctest gate - build/5_test.bat fails on any failing test).

@@ -1,7 +1,7 @@
 # AHKDeck
 
-**[⬇️ 下载 0.1.0 (Gitee)](https://gitee.com/qiuzongman/AHKDeck/releases/download/0.1.0/AHKDeck_0.1.0.zip)**
- ｜ **[⬇️ 下载 0.1.0 (GitHub)](https://github.com/zongmanqiu/AHKDeck/releases/download/0.1.0/AHKDeck_0.1.0.zip)**
+**[⬇️ 下载 0.2.0 (Gitee)](https://gitee.com/qiuzongman/AHKDeck/releases/download/0.2.0/AHKDeck_0.2.0.zip)**
+ ｜ **[⬇️ 下载 0.2.0 (GitHub)](https://github.com/zongmanqiu/AHKDeck/releases/download/0.2.0/AHKDeck_0.2.0.zip)**
  ｜ [Gitee主仓](https://gitee.com/qiuzongman/AHKDeck)
  ｜ [GitHub镜像](https://github.com/zongmanqiu/AHKDeck)
 
@@ -47,6 +47,7 @@ MCP 门禁另外需要 Python；未找到 Python 时 CMake 不注册这些测试
 流程：工具链检查 → 下载依赖 → 应用补丁 → 构建 → 测试，失败即停。
 日常增量构建用 `.main\build\4_build.bat`，验证用 `.main\build\5_test.bat`。
 产品包含 `AHKDeck.exe` 和 `AutoHotkey64.dll`，不是单文件分发；脚本同步到 `.build/Scripts/`。
+发行包由 [6_package.ps1](build/6_package.ps1) 用 7z 生成，白名单见 [打包清单](build/打包清单.md)。
 依赖版本以 [build/deps.txt](build/deps.txt) 为准，详细步骤见 [构建说明](build/build_readme.md)。
 
 ## 文档导航

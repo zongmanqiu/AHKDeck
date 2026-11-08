@@ -71,3 +71,11 @@ full.bat                 :: 一键全链路
 再运行 `ctest --output-on-failure -LE gui`。设置 `AHKDECK_GATE_UI=1` 后追加 GUI 标签测试。
 测试注册以 [CMakeLists.txt](../CMakeLists.txt) 为准；Python 不可用时 MCP 测试不会注册。
 默认流水线并不运行所有 `test/` 脚本；手动 UI 冒烟和成品对拍需单独调用并满足各自前置条件。
+
+## 打包
+
+发行包由助手用 **7z** 打包，规则与文件清单见 [打包清单](打包清单.md)。
+[6_package.ps1](6_package.ps1) 按白名单从 `.build` 取件，暂存到 `.temp\package-<版本>\`，
+产出 `.build\AHKDeck_<版本>.zip`；`settings.json`、`hotkeys.txt`、`Logs\`、`Backups\`、
+`update.cache.json` 等运行期文件一律不入包。zip 里的版本号取自 `CMakeLists.txt` 的
+`project(AHKDeck VERSION ...)`。

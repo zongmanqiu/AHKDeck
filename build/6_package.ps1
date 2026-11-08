@@ -1,10 +1,14 @@
 # 6_package.ps1 - build the portable release zip from .build, whitelist only.
 #
-# The folder a user unzips must contain exactly what the release advertises:
-#   AHKDeck.exe, AutoHotkey64.dll, Scripts\ (samples), docs\ (the MCP access
-#   doc), licenses\ (upstream license texts), LICENSE, THIRD-PARTY-NOTICES.md.
-# Never: settings.json, Logs\, update.cache.json, .temp\, ahkdeck_backup\, the
+# The manifest and the rules live in build/打包清单.md. In short: the folder a
+# user unzips must contain exactly what the release advertises - AHKDeck.exe,
+# AutoHotkey64.dll, Scripts\ (samples), docs\ (the MCP access doc), licenses\
+# (upstream license texts), LICENSE, THIRD-PARTY-NOTICES.md. Never: settings.json,
+# hotkeys.txt, Logs\, Backups\, update.cache.json, .temp\, ahkdeck_backup\, the
 # installer bat. Those are per-machine state, not the product.
+#
+# The zip is made with 7z (m119), not System.IO.Compression. Set AHKDECK_7Z to
+# the full path of 7z.exe/7za.exe when it is not on PATH.
 #
 # Usage (from anywhere; paths are derived from this script):
 #   powershell -ExecutionPolicy Bypass -File .main\build\6_package.ps1
@@ -15,8 +19,6 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $build = Join-Path $root ".build"
 $temp = Join-Path $root ".temp"
-$srcDocs = Join-Path $root ".main\docs"
-$srcLicenses = Join-Path $root ".main\licenses"
 
 if (-not (Test-Path (Join-Path $build "AHKDeck.exe"))) {
     throw "AHKDeck.exe not found in .build - run 4_build.bat first"
@@ -32,40 +34,47 @@ $stage = Join-Path $temp ("package-" + $version)
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Path $stage | Out-Null
 
-$items = @("AHKDeck.exe", "AutoHotkey64.dll", "LICENSE", "THIRD-PARTY-NOTICES.md", "Scripts")
+$items = @("AHKDeck.exe", "AutoHotkey64.dll", "LICENSE", "THIRD-PARTY-NOTICES.md",
+           "docs", "licenses", "Scripts")
 foreach ($item in $items) {
     $src = Join-Path $build $item
-    if (-not (Test-Path $src)) {
-        if ($item -eq "THIRD-PARTY-NOTICES.md" -or $item -eq "LICENSE") { continue }
-        throw "missing release item: $item"
-    }
+    if (-not (Test-Path $src)) { throw "missing release item in .build: $item" }
     Copy-Item $src -Destination $stage -Recurse -Force
 }
 
-# docs: taken from source so the zip always matches the shipped text.
-if (Test-Path $srcDocs) {
-    $dstDocs = Join-Path $stage "docs"
-    New-Item -ItemType Directory -Path $dstDocs -Force | Out-Null
-    Copy-Item (Join-Path $srcDocs "*") -Destination $dstDocs -Force
+$sevenZip = $env:AHKDECK_7Z
+if (-not $sevenZip) {
+    $found = Get-Command 7z, 7za -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found) { $sevenZip = $found.Source }
 }
-
-# licenses: upstream license originals travel with the program (GPL-2.0).
-if (Test-Path $srcLicenses) {
-    $dstLicenses = Join-Path $stage "licenses"
-    New-Item -ItemType Directory -Path $dstLicenses -Force | Out-Null
-    Copy-Item (Join-Path $srcLicenses "*") -Destination $dstLicenses -Force
+if (-not $sevenZip) {
+    foreach ($candidate in @(
+            (Join-Path $env:ProgramFiles "7-Zip\7z.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "7-Zip\7z.exe")) ) {
+        if (Test-Path $candidate) { $sevenZip = $candidate; break }
+    }
+}
+if (-not $sevenZip) {
+    throw "7-Zip not found - install it or set AHKDECK_7Z to 7z.exe/7za.exe"
 }
 
 $zip = Join-Path $build ("AHKDeck_" + $version + ".zip")
 if (Test-Path $zip) { Remove-Item $zip -Force }
-[System.IO.Compression.ZipFile]::CreateFromDirectory(
-    $stage, $zip, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+
+Push-Location $stage
+try {
+    & $sevenZip a -tzip -mx=9 $zip * | Out-Null
+    if ($LASTEXITCODE -gt 1) { throw "7z failed with exit code $LASTEXITCODE" }
+} finally {
+    Pop-Location
+}
 
 $entries = [System.IO.Compression.ZipFile]::OpenRead($zip).Entries |
     ForEach-Object { $_.FullName }
 $size = (Get-Item $zip).Length
 "zip     : $zip"
 "version : $version"
+"7z      : $sevenZip"
 "bytes   : $size"
 "entries : $($entries.Count)"
 $entries | Sort-Object | ForEach-Object { "  " + $_ }
