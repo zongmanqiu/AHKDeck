@@ -8,7 +8,7 @@ REM   [2/4] re-apply patches (3_patch.bat) unless AHKDECK_SKIP_PATCH=1
 REM   [3/4] FLTK static lib: rebuild if missing / older than patches / missing
 REM         patch hooks (check_fltk_patch.ps1 probes the ARCHIVE, not mtimes -
 REM         a library built from unpatched sources links and runs fine and
-REM         silently loses features; pecia's menu shadow was lost that way)
+REM         silently loses features; the menu shadow was lost that way)
 REM         or on the wrong CRT: the exe is /MT (single exe, no redistributable)
 REM         and FLTK's FLTK_MSVC_RUNTIME_DLL defaults to ON = /MD, which ignores
 REM         CMAKE_MSVC_RUNTIME_LIBRARY - so the configure line passes both

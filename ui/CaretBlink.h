@@ -1,5 +1,5 @@
 // CaretBlink.h - one process-wide 500 ms caret phase, shared by every text
-// entry in the deck (Pecia's ui/CaretBlink.h).
+// entry in the deck.
 //
 // Why: FLTK's Fl_Input does not blink at all (Fl_Input_::drawtext() only asks
 // "does it have focus", never a timer), while Fl_Text_Display only honors

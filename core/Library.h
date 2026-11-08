@@ -14,7 +14,7 @@
 namespace ahkdeck
 {
 
-// %LOCALAPPDATA%\AHKDeck\library.txt, or empty when the variable is missing.
+// library.txt next to the exe (portable mode, same rule as Settings/Hotkeys).
 std::wstring DefaultLibraryPath();
 
 // A missing file is not an error: it is the first run. Blank lines are skipped

@@ -36,6 +36,21 @@ Fl_Color ThemeBorderLine();
 // content bars (background3), so it reads as its own strip.
 Fl_Color MenuBarBackground();
 
+// m071: the deck's text and row sizes are one fact each, spelled once. A row is
+// 26px; a dialog stacks rows with a 2px gap, so its step is 28.
+constexpr int kTextSize = 16;
+constexpr int kSubTextSize = 14;
+constexpr int kRowStep = 28;
+constexpr int TextSize() { return kTextSize; }
+constexpr int SubTextSize() { return kSubTextSize; }
+constexpr int RowStep() { return kRowStep; }
+
+// m071: semantic colours outside the deck's eight-key palette. They used to be
+// literals in the widget that happened to need them.
+Fl_Color AlertRed();     // the one "failed / stopped" red
+Fl_Color RunningGreen(); // the one "running" green
+Fl_Color CloseHoverRed(); // the title bar's close-button hover
+
 // The 1px outer ring of every deck window, main or dialog. It lives here
 // because the ring is one element; a window that picked its own border tone is
 // the difference between two chrome looks.
@@ -49,11 +64,11 @@ void StyleInput(Fl_Input *aInput);
 void StyleChoice(Fl_Choice *aChoice);
 void StyleTextDisplay(Fl_Text_Display *aDisplay);
 
-// Pecia's flat two-rectangle scrollbar: track + thumb, no FLTK grooves or
+// The deck's flat two-rectangle scrollbar: track + thumb, no FLTK grooves or
 // arrows. The geometry must match Fl_Slider's hit test exactly, otherwise
 // the thumb is drawn where the mouse cannot grab it.
-void DrawPeciaScrollbar(Fl_Scrollbar *aBar, bool aHorizontal);
-void DrawPeciaScrollbarCorner(Fl_Scrollbar *aVertical, Fl_Scrollbar *aHorizontal);
+void DeckDrawScrollbar(Fl_Scrollbar *aBar, bool aHorizontal);
+void DeckDrawScrollbarCorner(Fl_Scrollbar *aVertical, Fl_Scrollbar *aHorizontal);
 
 } // namespace ui
 } // namespace ahkdeck

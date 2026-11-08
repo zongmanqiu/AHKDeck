@@ -4,6 +4,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace ahkdeck {
@@ -413,9 +414,12 @@ bool Engine::Load(std::string &aError)
 	mNewThread = reinterpret_cast<decltype(mNewThread)>(GetProcAddress(mModule, "DeckNewThread"));
 	mAhkReady = reinterpret_cast<decltype(mAhkReady)>(GetProcAddress(mModule, "ahkReady"));
 	mSetErrorSink = reinterpret_cast<decltype(mSetErrorSink)>(GetProcAddress(mModule, "DeckSetErrorSink"));
+	// m061: FileAppend's stdout target. The kernel hands us one JSON line; without
+	// this export the console cannot see what a script prints.
+	mSetOutputSink = reinterpret_cast<decltype(mSetOutputSink)>(GetProcAddress(mModule, "DeckSetOutputSink"));
 	mSetIsolation = reinterpret_cast<decltype(mSetIsolation)>(GetProcAddress(mModule, "DeckSetScriptIsolation"));
 
-	if (!mNewThread || !mSetErrorSink || !mSetIsolation)
+	if (!mNewThread || !mSetErrorSink || !mSetOutputSink || !mSetIsolation)
 	{
 		aError = "AutoHotkey64.dll is not an AHKDeck-capable kernel (patched build required)";
 		FreeLibrary(mModule);
@@ -425,6 +429,7 @@ bool Engine::Load(std::string &aError)
 
 	// Install once; the sink is process-wide inside the kernel.
 	mSetErrorSink(&Engine::OnError);
+	mSetOutputSink(&Engine::OnOutput);
 	// Every script thread here must behave like a standalone script (the official
 	// AutoHotkey.exe), not like a secondary thread of one multi-script process.
 	mSetIsolation(true);
@@ -441,6 +446,17 @@ bool Engine::Load(std::string &aError)
 			*slash = 0;
 		mLogRoot = std::wstring(exePath) + L"\\Logs";
 		CreateDirectoryW(mLogRoot.c_str(), nullptr);
+
+		// m106: the cap is an env knob only (no settings entry): the gate runs
+		// with a tiny value, a user never has to know it exists.
+		wchar_t capText[32] = {0};
+		const DWORD capLen = GetEnvironmentVariableW(L"AHKDECK_LOG_CAP", capText, 32);
+		if (capLen > 0 && capLen < 32)
+		{
+			const long long parsed = _wtoi64(capText);
+			if (parsed >= 64 * 1024 && parsed <= 64ll * 1024 * 1024)
+				mLogCap = (size_t)parsed;
+		}
 	}
 	return true;
 }
@@ -485,6 +501,7 @@ void Engine::Unload()
 	mNewThread = nullptr;
 	mAhkReady = nullptr;
 	mSetErrorSink = nullptr;
+	mSetOutputSink = nullptr;
 	mSetIsolation = nullptr;
 	// Never FreeLibrary the kernel. AHK_H's detach path tears the remaining script
 	// threads down while the caller holds the loader lock, which is not a state
@@ -498,6 +515,51 @@ void Engine::Unload()
 	// spinning the consumer forever). The follow-up arm measured 0 hangs in 200
 	// runs, so the defect no longer reproduces - but nothing here separates which
 	// change mattered. See .plan/m012-宿主退出挂起.md.
+}
+
+int Engine::ValidateFile(const std::wstring &aScriptPath, std::string &aError,
+	std::vector<ErrorRecord> &aRecords)
+{
+	aRecords.clear();
+	if (!Load(aError))
+		return 1;
+
+	// The kernel's only validate-only entry is its own command line string:
+	// "/validate" makes LoadFromFile parse the script and return 0 (or 2 on a
+	// load failure) before InitForExecution, so no statement ever runs
+	// (script.cpp: mValidateThenExit). Main is the DLL's equivalent of
+	// AutoHotkey.exe's WinMain, which is why the caller must be a fresh process.
+	using MainProc = int(__stdcall *)(int, wchar_t **);
+	MainProc mainProc = reinterpret_cast<MainProc>(GetProcAddress(mModule, "Main"));
+	if (!mainProc)
+	{
+		aError = "AutoHotkey64.dll has no Main export; validate is unavailable";
+		return 1;
+	}
+
+	wchar_t exePath[MAX_PATH] = {0};
+	if (!GetModuleFileNameW(nullptr, exePath, MAX_PATH))
+	{
+		aError = "cannot resolve the host executable path";
+		return 1;
+	}
+	// argv[0] is the name the kernel puts in its own messages; the file to parse
+	// is argv[2].
+	wchar_t *argv[3] = {exePath, const_cast<wchar_t *>(L"/validate"),
+		const_cast<wchar_t *>(aScriptPath.c_str())};
+	const int rc = mainProc(3, argv);
+
+	// Load errors were raised on this thread and handed to the sink; drain them
+	// here, without routing: this process has no session and no log to write.
+	{
+		std::lock_guard<std::mutex> lock(mErrorMutex);
+		while (!mErrors.empty())
+		{
+			aRecords.push_back(std::move(mErrors.front()));
+			mErrors.pop_front();
+		}
+	}
+	return rc;
 }
 
 void __stdcall Engine::OnError(const char *aJson)
@@ -520,6 +582,28 @@ void __stdcall Engine::OnError(const char *aJson)
 	catch (...)
 	{
 		// A throwing callback across a DLL boundary would be fatal.
+	}
+}
+
+// m061: stdout records take the same queue as errors; kind already says "stdout",
+// so the consumer can print it as plain text and the log stays machine-readable.
+void __stdcall Engine::OnOutput(const char *aJson)
+{
+	try
+	{
+		if (!aJson)
+			return;
+		ErrorRecord rec;
+		ParseRecord(std::string(aJson), rec);
+		Engine &engine = Engine::Instance();
+		{
+			std::lock_guard<std::mutex> lock(engine.mErrorMutex);
+			engine.mErrors.push_back(std::move(rec));
+		}
+		engine.mErrorCv.notify_one();
+	}
+	catch (...)
+	{
 	}
 }
 
@@ -593,14 +677,16 @@ void Engine::WriteLog(const ErrorRecord &aRecord)
 {
 	std::ofstream *log = &mUnattributedFile;
 	std::wstring path;
+	Entry *entry = nullptr;
 
 	if (aRecord.session)
 	{
 		auto it = mSessions.find(aRecord.session);
 		if (it != mSessions.end())
 		{
-			log = &it->second.log;
-			path = it->second.logFull;
+			entry = &it->second;
+			log = &entry->log;
+			path = entry->logFull;
 		}
 	}
 	if (path.empty())
@@ -622,6 +708,39 @@ void Engine::WriteLog(const ErrorRecord &aRecord)
 	log->write(aRecord.json.data(), (std::streamsize)aRecord.json.size());
 	log->put('\n');
 	log->flush();
+
+	// m106: rotate only per-session files; an unattributed file has no session
+	// to grow without bound, so it stays append-only.
+	if (entry)
+	{
+		entry->logBytes += aRecord.json.size() + 1;
+		if (entry->logBytes >= mLogCap)
+			RotateLog(*entry);
+	}
+}
+
+// All callers hold mSessionsMutex.
+void Engine::RotateLog(Entry &aEntry)
+{
+	aEntry.log.close();
+	const std::wstring oldPath = aEntry.logFull + L".1";
+	MoveFileExW(aEntry.logFull.c_str(), oldPath.c_str(), MOVEFILE_REPLACE_EXISTING);
+	aEntry.log.open(aEntry.logFull.c_str(), std::ios::binary | std::ios::trunc);
+	aEntry.logBytes = 0;
+	if (!aEntry.log.is_open())
+	{
+		// Keep the session alive: StartSession already reported the log problem,
+		// and the console copy of every record remains the source of truth.
+		aEntry.log.open(aEntry.logFull.c_str(), std::ios::binary | std::ios::app);
+		return;
+	}
+	const std::string marker = "{\"session\":" + std::to_string(aEntry.pub.id)
+		+ ",\"kind\":\"log\",\"message\":\"log rotated at " + std::to_string(mLogCap)
+		+ " bytes; the previous file is kept as .1\"}";
+	aEntry.log.write(marker.data(), (std::streamsize)marker.size());
+	aEntry.log.put('\n');
+	aEntry.log.flush();
+	aEntry.logBytes = marker.size() + 1;
 }
 
 DWORD Engine::StartSession(const std::wstring &aScriptPath, const std::vector<std::wstring> &aArgs,

@@ -15,8 +15,10 @@
 
 #include "agent/McpServer.h"
 #include "agent/Toolbox.h"
+#include "core/Housekeeping.h"
 #include "core/Hotkeys.h"
 #include "core/Json.h"
+#include "core/ResourceStats.h"
 #include "core/Settings.h"
 #include "core/TextFile.h"
 #include "core/Version.h"
@@ -29,6 +31,7 @@
 #include <shellapi.h>
 #include <winver.h>
 
+#include <cstdint>
 #include <cstdio>
 
 #include <FL/x.H>
@@ -240,19 +243,23 @@ constexpr int kRowHeight = 26;
 //   * a BAR (the find bar, the action band that holds 保存/关闭/清空/运行)
 //     is 32px: the 26px control plus 3px of air above and below, so a
 //     control's frame line never touches the edge of the band it sits in.
-// The font stays 16px everywhere. Pecia's bar is 32px too - only its control
+// The font stays 16px everywhere. This bar is 32px too - only its control
 // is smaller, because its font is 11px.
 constexpr int kConsoleButtonH = 26;
 constexpr int kConsoleButtonGap = 10;
 constexpr int kConsoleButtonPadX = 12;
 constexpr int kConsoleButtonMinW = 48;
 constexpr int kPaneBarH = 32; // editor/AI middle band that holds the actions
-// m052: Pecia's AI defaults (endpoint is the full completions URL).
-constexpr int kConsoleOutputPercent = 25;
+// m052: AI defaults (endpoint is the full completions URL).
+constexpr int kConsoleOutputPercent = 25; // default height share of the console
 constexpr int kConsoleOutputMinH = 60;
-constexpr int kEditorMinH = 80;
+// m112: the grab band between panes. It reuses the 6px the layout already
+// leaves empty, and every pane keeps at least a fifth of the window so a drag
+// can never squeeze one out of sight.
+constexpr int kSplitterSize = 6;
+constexpr int kPaneMinSharePct = 20;
 
-// m084: the find/replace bar copies Pecia's layout rules.
+// m084: the find/replace bar layout rules.
 //   * the inputs have a FIXED width (120px) - they are search fields, not
 //     text areas, and a field that stretches over the whole column is what
 //     made the old bar look coarse;
@@ -270,10 +277,10 @@ constexpr int kFindGap = 6;
 // touching it.
 constexpr int kFindFieldH = 26;
 constexpr int kFindRowH = 32;
-// m087: the collapse button at the right end of the find bar (Pecia's "X").
+// m087: the collapse button at the right end of the find bar (the deck's "X").
 constexpr int kFindCloseW = 22;
 // m086: the check box's own width rule: the 14px box plus the gap in front
-// of the text (PeciaCheckButton::kLabelGap).
+// of the text (DeckCheckButton::kLabelGap).
 constexpr int kFindChkPad = 20;
 // The counter keeps this much room in the first row, so the controls never
 // squeeze "k/N" out of the row.
@@ -298,10 +305,10 @@ int FitButtonWidth(Fl_Button *aButton)
 	return width < HoverButton::kMinW ? HoverButton::kMinW : width;
 }
 
-// m085: Pecia's checkbox width - the little square plus the gap in front of
+// m085: checkbox width - the little square plus the gap in front of
 // the text (CHK_PAD = 24). The text is measured in the widget's own font, so
 // the long "区分大小写" and the short "Aa" form both get the right width.
-// m086: the rule now belongs to PeciaCheckButton (a 14px box + a 6px gap).
+// m086: the rule now belongs to DeckCheckButton (a 14px box + a 6px gap).
 int FitCheckWidth(Fl_Button *aCheck, const char *aLabel)
 {
 	if (!aCheck || !aLabel)
@@ -407,8 +414,8 @@ std::string PathLabel(const char *aPath)
 	return out;
 }
 
-// m089: Pecia's Edit whitelist for the right-click menu (editor/Editor.cpp
-// isContextEditItem): the everyday editing actions, judged by the item's own
+// m089: whitelist of edit actions for the right-click menu (the
+// IsContextEditItem filter): the everyday editing actions, judged by the item's own
 // shortcut. Find / Replace carry keys of their own and stay in the menu bar.
 bool IsContextEditItem(const Fl_Menu_Item &aItem)
 {
@@ -423,7 +430,7 @@ bool IsContextEditItem(const Fl_Menu_Item &aItem)
 		s == (FL_CTRL + 'a');
 }
 
-// Right-align a row of console actions inside the bar (Pecia fitButtonRow):
+// Right-align a row of console actions inside the bar (fit-to-label rule):
 // size each button to its label, then place right-to-left. The caller picks the
 // font/padding so four actions still fit a narrow editor column.
 void FitConsoleButtonRow(std::initializer_list<Fl_Button *> aButtons,
@@ -517,7 +524,7 @@ DWORD OfficialRc(const Session &aSession)
 class EditorBox;
 class ScriptBrowser;
 
-// Filter box with Pecia's left magnifier (m031). The custom boxtype insets the
+// Filter box with a left magnifier (m031). The custom boxtype insets the
 // text by 24px, so the glyph is drawn in the empty gutter instead of over the
 // first typed character.
 class SearchInput : public BlinkInput
@@ -534,7 +541,8 @@ public:
 	}
 
 	// In the list pane the search sits inside the pane frame, so it must not
-	// draw a second border of its own (Pecia's dialog search keeps its border).
+	// draw a second border of its own (dialog search outside the pane keeps
+	// its border).
 	static Fl_Boxtype FlatBoxType()
 	{
 		static const Fl_Boxtype type = []() {
@@ -633,12 +641,7 @@ static void DrawGear(int aCx, int aCy, int aRadius, Fl_Color aColor)
 	fl_arc(aCx - 2, aCy - 2, 4, 4, 0, 360);
 }
 
-// m043: the editing indicator. A diagonal pen body with a nib, drawn inside
-// the same 10px box the play/pause glyph uses.
-static Fl_Color AlertRed()
-{
-	return fl_rgb_color(0xC6, 0x28, 0x28);
-}
+// m077: the one alert red now lives in Theme.cpp (m071), next to its siblings.
 
 
 class GearHeader : public Fl_Box
@@ -688,6 +691,100 @@ public:
 	}
 };
 
+// m112: the 6px band between two panes is a grab handle. It is exactly the gap
+// the panes already leave, so the drag target costs no layout space; a hover
+// or drag tints it, the cursor flips to the matching double arrow. The widget
+// never decides the split itself: it reports the dragged edge in window
+// coordinates and the owner clamps it, recomputes the share and calls Layout.
+class DeckSplitter : public Fl_Widget
+{
+public:
+	enum Axis
+	{
+		Column, // a vertical band; drags left/right and splits widths
+		Row     // a horizontal band; drags up/down and splits heights
+	};
+
+	explicit DeckSplitter(Axis aAxis)
+		: Fl_Widget(0, 0, 0, 0, nullptr), mAxis(aAxis)
+	{
+		box(FL_NO_BOX);
+	}
+
+	// Grip limits in the widget's own coordinate axis (window/client coords).
+	void bounds(int aMin, int aMax)
+	{
+		mMin = aMin;
+		mMax = aMax;
+	}
+
+	std::function<void(int)> onMove;   // clamped edge coordinate
+	std::function<void()> onRelease;   // persist the resulting share
+
+	void draw() override
+	{
+		// m114: the band owns no colour of its own. It sits in the gap the two
+		// panes already leave empty, so the window background must show through
+		// exactly as it did before the gap was draggable. Filling it with a theme
+		// colour painted a bright stripe between the panes, and the green hover
+		// fill left a trail of stale bands while the split moved. Only the cursor
+		// signals the grab now.
+	}
+
+	int handle(int aEvent) override
+	{
+		switch (aEvent)
+		{
+		case FL_ENTER:
+			fl_cursor(mAxis == Column ? FL_CURSOR_WE : FL_CURSOR_NS);
+			return 1;
+		case FL_LEAVE:
+			fl_cursor(FL_CURSOR_DEFAULT);
+			return 1;
+		case FL_PUSH:
+			if (Fl::event_button() != FL_LEFT_MOUSE)
+				return 0;
+			mDrag = true;
+			// Root coordinates: Layout() moves this widget under the pointer on
+			// every step, so widget-relative coordinates would feed back.
+			mGrab = mAxis == Column ? Fl::event_x_root() : Fl::event_y_root();
+			mEdgeStart = mAxis == Column ? x() : y();
+			return 1;
+		case FL_DRAG:
+		{
+			if (!mDrag)
+				return 0;
+			const int cur = mAxis == Column ? Fl::event_x_root() : Fl::event_y_root();
+			int edge = mEdgeStart + (cur - mGrab);
+			if (edge < mMin)
+				edge = mMin;
+			if (edge > mMax)
+				edge = mMax;
+			if (onMove)
+				onMove(edge);
+			return 1;
+		}
+		case FL_RELEASE:
+			if (!mDrag)
+				return 0;
+			mDrag = false;
+			if (onRelease)
+				onRelease();
+			return 1;
+		default:
+			return Fl_Widget::handle(aEvent);
+		}
+	}
+
+private:
+	Axis mAxis;
+	bool mDrag = false;
+	int mGrab = 0;
+	int mEdgeStart = 0;
+	int mMin = 0;
+	int mMax = 1 << 30;
+};
+
 class DeckWindow : public Fl_Double_Window
 {
 public:
@@ -698,7 +795,7 @@ public:
 	int handle(int aEvent) override;
 	void draw() override;
 
-	// The client area is what the layout speaks; with the Pecia frame the
+	// The client area is what the layout speaks; with the deck frame the
 	// native window is 1px wider and taller than it (the 1px border lives in
 	// the non-client strip). Ask Win32 rather than guessing what FLTK did with
 	// the outer size it was given.
@@ -709,7 +806,7 @@ public:
 	// The custom caption buttons route here: close keeps v1.3's hide-to-tray
 	// meaning, never DestroyWindow.
 	void TitleClose();
-	// Called once after show(): installs the Pecia frame + shadow.
+	// Called once after show(): installs the deck frame + shadow.
 	void InstallFrame();
 
 	// m084: FLTK's own error channel writes here (ui/FltkErrorChannel.h). The
@@ -725,7 +822,7 @@ public:
 	// drive the browser itself.
 	void ShowContextMenu(int aIndex);
 	// m089: the editor's right-click menu, assembled from the live menu bar
-	// (Pecia's rule: no second list - a new menu item shows up by itself).
+	// (Rule: no second list - a new menu item shows up by itself).
 	void ShowEditorContextMenu();
 	void EditRow(int aIndex);
 	// The per-row 菜单 cell calls this, so it is not a private detail.
@@ -737,13 +834,16 @@ public:
 	bool ApplyShortcutRows(const std::vector<std::pair<std::string, std::string>> &aRows);
 
 	// m033: Settings > Shortcuts dialog. It lists every script and records a
-	// combo in a cell, the way Pecia's shortcut settings page does.
+	// combo in a cell, the way this shortcut settings page does.
 	int ScriptCount() const { return (int)mScripts.size(); }
 	std::string ScriptNameAt(int aIndex) const;
 	std::string ScriptBindingAt(int aIndex) const;
 	void ShowShortcutDialog();
 	// m092: Help > About / Check for Updates.
 	void ShowUpdateDialog();
+	// m097/m098: Help > MCP 接入 - opens docs\MCP接入.md next to the exe.
+	// A dialog would only be a second copy of what that file already says.
+	void OpenMcpDocs();
 	bool ConfirmRestartForUpdate();
 	// m088: the command table, read by the shortcut dialog (the rows it
 	// lists) and by the key dispatcher (the editor asks first, the window
@@ -753,6 +853,9 @@ public:
 	std::string MenuCommandKey(int aIndex) const;      // "new"
 	std::string MenuCommandBinding(int aIndex) const;  // the binding in force
 	std::string MenuCommandDefault(int aIndex) const;  // the built-in binding
+	// m108: the "show the main window" shortcut (the tray menu's 主窗口 action).
+	// "" = unbound; there is no built-in default.
+	std::string ShowWindowBinding() const;
 	// Runs the command whose binding matches the key that is being pressed.
 	int DispatchShortcut();
 	// m082 gate hook: the only way a tool-driven gate can put a Scripts file
@@ -825,7 +928,7 @@ public:
 	// 编辑 menu) unfolds it again.
 	void SetFindBarVisible(bool aVisible);
 	// m089: the find bar is a toggle - the same menu item (or key) brings it
-	// up and takes it away again. Pecia's cbFind/cbReplace do exactly this.
+	// up and takes it away again. The find/replace callbacks do exactly this.
 	void ToggleFindBar(bool aFocusReplace);
 	// The menu items carry a check mark while the bar is on screen.
 	void SyncFindMenuState();
@@ -842,6 +945,12 @@ public:
 	// the very window the user is looking at: same editing area, same sessions,
 	// same "宿主关闭 = 脚本全关". Only "AHKDeck.exe --mcp-stdio" starts it.
 	void StartMcp();
+	// m117: --mcp-stdio starts with the window hidden to the tray. An agent
+	// client calls tools frequently, and a deck window in front of the user for
+	// every call is exactly what should not happen; the tray icon stays the way
+	// back in. Without a tray icon the window stays visible - a hidden window
+	// with no way back is worse than a visible one.
+	void StartMcpBackground();
 	void StopMcp();
 	bool McpStarted() const { return mMcpStarted; }
 
@@ -867,7 +976,6 @@ private:
 		IdReplace,
 		IdClearConsole,
 		IdCopyConsole,
-		IdViewList,
 		IdViewEditor,
 		IdToggleRounded,
 		IdToggleShadow,
@@ -889,7 +997,10 @@ private:
 		IdAbout,
 		// m092: Help > Check for Updates (About moved into the same group).
 		IdCheckUpdate,
-		// m088: the 编辑 menu (Pecia's Edit menu) and the commands that own a
+		// m097: MCP access lives next to 检查更新 - both are "help me use this
+		// from outside the deck".
+		IdMcpAccess,
+		// m088: the 编辑 menu and the commands that own a
 		// button but no menu entry (the middle band, the editor's own reload).
 		IdEditUndo,
 		IdEditRedo,
@@ -911,7 +1022,7 @@ private:
 	//
 	// The menu bar is built from it, the shortcut dialog lists it, the keys
 	// are dispatched from it, and the user's rebinding is stored against its
-	// stable key. Pecia keeps the same three things apart: the menu table
+	// stable key. Keep the same three things apart: the menu table
 	// (MenuTable.cpp), the shortcut table (ShortcutCore.h) and the config.
 	struct CommandSpec
 	{
@@ -980,6 +1091,11 @@ private:
 	void RebindHotkeys();
 	void LoadHotkeyFile();
 	void HandleIntent(const NativeHooks::Intent &aIntent);
+	// m109: one startup pass over .temp\ / Backups\ / Logs\ (settings.json knob).
+	void RunHousekeeping();
+	// m108: the tray menu's 主窗口 action, shared by the tray click and the
+	// window's global hotkey so both entries behave the same.
+	void ShowFromTray();
 	void HideToTray();
 	void RequestQuit();
 	std::string BindingOf(const ScriptRow &aRow) const;
@@ -1085,6 +1201,7 @@ private:
 	}
 	static void OnMenu(Fl_Widget *aWidget, void *aData);
 	static void OnTick(void *aSelf);
+	static void TrimWorkingSetCb(void *aSelf);
 	static void OnBufferModified(int aPos, int aInserted, int aDeleted, int aRestyled,
 		const char *aText, void *aSelf);
 
@@ -1161,30 +1278,30 @@ private:
 	BlinkInput *mFindInput = nullptr;
 	BlinkInput *mReplaceInput = nullptr;
 	Fl_Button *mFindNext = nullptr;
-	// m085: Pecia's bar has both directions. "上一个" walks back through the
+	// m085: the bar has both directions. "上一个" walks back through the
 	// matches, "下一个" walks forward.
 	Fl_Button *mFindPrev = nullptr;
 	Fl_Button *mReplaceOne = nullptr;
 	Fl_Button *mReplaceAll = nullptr;
-	// m085: Pecia's case toggle is a real check box with a text label, not a
+	// m085: the case toggle is a real check box with a text label, not a
 	// light button with a corner mark (m084's "Aa" looked broken).
 	// m086: the switches are drawn exactly like the menu bar's check mark.
-	PeciaCheckButton *mMatchCase = nullptr;
+	DeckCheckButton *mMatchCase = nullptr;
 	// m085: the wrap switch - without it "下一个" silently jumped back to the
 	// top, which is exactly the "循环搜索" the user asked for.
-	PeciaCheckButton *mWrap = nullptr;
-	// m086: Pecia's "全词匹配" - the match must be a whole word.
-	PeciaCheckButton *mWholeWord = nullptr;
-	// m085: the grey band the bar sits on (Pecia: FL_FLAT_BOX, 200/200/200).
+	DeckCheckButton *mWrap = nullptr;
+	// m086: "全词匹配" - the match must be a whole word.
+	DeckCheckButton *mWholeWord = nullptr;
+	// m085: the grey band the bar sits on (FL_FLAT_BOX, 200/200/200).
 	Fl_Box *mFindBarBg = nullptr;
-	// m084: Pecia's centred match counter ("k/N") at the end of the first row.
+	// m084: the centred match counter ("k/N") at the end of the first row.
 	Fl_Box *mFindCount = nullptr;
 	// m087: the find bar's switch - "X" folds the bar away, Ctrl+F (or the
 	// 编辑 menu, or F3) brings it back. The bar is the only part of the
 	// editor pane the user may hide, because it is the only part that is
 	// not the text.
 	Fl_Button *mFindClose = nullptr;
-	// m089: the bar starts FOLDED, like Pecia's. The 编辑 > 查找… / 替换…
+	// m089: the bar starts FOLDED. The 编辑 > 查找… / 替换…
 	// entries are switches now: press once and the bar comes up, press
 	// again and it goes away. A bar that was always on screen could not be
 	// "pressed again to hide" - the first press would hide a bar the user
@@ -1205,15 +1322,22 @@ private:
 	std::thread mMcpThread;
 	std::atomic<bool> mMcpRunning{false};
 	bool mMcpStarted = false;
+	// m117: set only by the background start; the endpoint's EOF then quits the
+	// deck, because a hidden window with no client is an invisible orphan.
+	bool mMcpBackground = false;
 
 	// FLTK text buffers may only be read on the UI thread, so tools never touch
 	// the editor: the tick copies the editing area into this snapshot and the
 	// tool thread reads the copy.
 	std::mutex mSnapshotMutex;
 	std::string mEditorSnapshot;
+	// m062: the backing file travels with the snapshot, so run_editor resolves
+	// A_ScriptDir from the same moment the text came from.
+	std::wstring mEditorPathSnapshot;
 	long mSnapshotChars = -1;
 	std::string mSnapshotKey;
 	std::string EditorSnapshot();
+	std::wstring EditorPathSnapshot();
 	void RefreshEditorSnapshot();
 
 	// What a tool asked the window to do, applied on the UI thread.
@@ -1238,8 +1362,20 @@ private:
 	bool mFrameInstalled = false;
 	bool mRoundedCorners = true;
 	bool mWindowShadow = true;
-	bool mShowList = true;
+	// m112: the script list is the deck's spine and is always shown; only the
+	// editor/console column can be folded away.
 	bool mShowEditor = true;
+	// m112: the two draggable shares (percent). 50/25 reproduce the old fixed
+	// equal-columns / quarter-console layout exactly, so nothing moves on a
+	// fresh install.
+	int mListPct = 50;
+	int mConsolePct = kConsoleOutputPercent;
+	DeckSplitter *mSplitV = nullptr;
+	DeckSplitter *mSplitH = nullptr;
+	// The editor column's inner body (top and height) as last laid out, so the
+	// row splitter can turn a dragged y into a console share.
+	int mBodyTop = 0;
+	int mBodyH = 0;
 	bool mViewFromEnv = false;
 	bool mConfigMissing = false;
 	bool mConfigWritable = false;
@@ -1256,10 +1392,26 @@ private:
 	const std::vector<Session> &CachedSessions() const;
 	void InvalidateSessions() const { mSessionsCacheValid = false; }
 	std::string mLastStatus; // avoid a copy_label/redraw when nothing changed
+	// m107: the host's own footprint, refreshed every 2 s by OnTick and
+	// appended to the status line. The sampler keeps its previous reading, so
+	// each refresh is a delta, not a lifetime total.
+	ResourceSampler mResourceSampler;
+	std::string mResourceText;
+	ULONGLONG mLastResourceCheck = 0;
 	bool mUpdatingList = false;
 	std::map<DWORD, SessionState> mSeenState;
 	std::map<DWORD, std::string> mSessionName;
 	std::map<DWORD, bool> mExitReported;
+
+	// m110: the moment the last script session ends, the kernel's load-time
+	// allocations (parser tables, class objects, per-thread stacks) are still
+	// resident in the working set. A one-shot trim 2 s later hands those pages
+	// back to the OS: the status line's memory number falls back to the idle
+	// footprint without touching commit size or any live session. Two guards:
+	// the timeout is one-shot and removed on teardown (no UAF), and the callback
+	// re-checks that nothing started during the 2 s window before trimming.
+	bool mHadRunning = false;
+	bool mTrimPending = false;
 
 	std::wstring mEditPath;
 	std::wstring mSettingsPath;
@@ -1287,6 +1439,8 @@ private:
 	std::vector<HotkeyEntry> mHotkeys;
 	std::wstring mHotkeyPath;
 	std::map<int, std::wstring> mHotkeyTargets; // hotkey id -> script path
+	// m109: days kept by the startup cleanup; 0 = off (settings.json only).
+	int mHousekeepingDays = kHousekeepingDefaultDays;
 	std::string mLastTrayTip;                   // NIM_MODIFY only on change
 	std::vector<Fl_Menu_Item> mContextItems;    // the row menu, rebuilt per popup
 	std::vector<std::string> mContextLabels;    // ... and the text it points at
@@ -1309,11 +1463,11 @@ public:
 	{
 		Fl_Browser::draw();
 		fl_push_clip(x(), y(), w(), h());
-		DrawPeciaScrollbar(&scrollbar, false);
+		DeckDrawScrollbar(&scrollbar, false);
 		fl_pop_clip();
 	}
 
-	// m032: click a hotkey cell and record the combo right there (Pecia's
+	// m032: click a hotkey cell and record the combo right there (the
 	// ShortcutDialog gesture, without a dialog). Enter commits, Esc/blur
 	// cancels; the cell itself paints the pending combo.
 	void BeginHotkeyRecord(int aLine)
@@ -1388,7 +1542,7 @@ public:
 				const std::string token = HotkeyKeyToken(key);
 				if (!token.empty())
 				{
-					// Pecia commits on the captured key itself; there is no Enter
+					// The deck commits on the captured key itself; there is no Enter
 					// step, so clicking elsewhere after pressing the combo cannot
 					// throw the new binding away.
 					const std::string text = HotkeyRecordText(key);
@@ -1407,7 +1561,7 @@ public:
 				return 0;
 			}
 			if (aEvent == FL_PUSH)
-				CancelHotkeyRecord(); // a click elsewhere cancels, like Pecia
+				CancelHotkeyRecord(); // a click elsewhere cancels the recording
 		}
 
 		// Right-click: ONE meaning, whatever the row is doing - the deck's own
@@ -1548,7 +1702,7 @@ protected:
 		int rx = 0, ry = 0, rw = 0, rh = 0;
 		mOwner->MenuCellRect(X, Y, H, rx, ry, rw, rh);
 
-		// Pecia's combo cell: panel-coloured fill (background3) so it reads
+		// Combo cell: panel-coloured fill (background3) so it reads
 		// as an input, then the binding text from Fl_Browser on top.
 		int hx = 0, hy = 0, hw = 0, hh = 0;
 		mOwner->HotkeyCellRect(X, Y, H, hx, hy, hw, hh);
@@ -1572,7 +1726,7 @@ protected:
 		}
 		else
 		{
-			// Cover Fl_Browser's own text and redraw with Pecia's 8px inset.
+			// Cover Fl_Browser's own text and redraw with the 8px inset.
 			const int index = mOwner->IndexOfLine(line);
 			const std::string binding = mOwner->ScriptBindingAt(index);
 			fl_color(mHoverHotkeyLine == line ? DeckColors().highlight1
@@ -1665,7 +1819,7 @@ protected:
 		}
 		else
 		{
-			fl_color(fl_rgb_color(0x2E, 0x7D, 0x32));
+			fl_color(RunningGreen());
 			fl_begin_polygon();
 			fl_vertex(cx, cy);
 			fl_vertex(cx, cy + d);
@@ -1712,7 +1866,7 @@ private:
 	int mLastY = 0;
 };
 
-// Pecia's clipEllipsis, copied as-is: shorten a name to fit the row and end it
+// clipEllipsis: shorten a name to fit the row and end it
 // with "...", backing off to a UTF-8 character boundary. The full name stays
 // reachable through the row tooltip.
 static std::string ClipEllipsis(const std::string &aText, int aMaxW)
@@ -1742,7 +1896,7 @@ static std::string ClipEllipsis(const std::string &aText, int aMaxW)
 	return aText.substr(0, lo) + dots;
 }
 
-// m073: Pecia's Settings > Shortcuts dialog, copied function for function.
+// m073: the Settings > Shortcuts dialog.
 // One row per script: the name occupies the row, the combo is a 130px box at
 // its right. Click the combo to record (the accent fill is the recording
 // state), the hint in the filter bar shows the prompt/error, and the filter
@@ -1773,10 +1927,10 @@ private:
 
 	static std::string Lower(std::string aText);
 
-	// The same three rejection classes as Pecia's shortcutValidate, plus the
+	// The same three rejection classes as the shared shortcutValidate, plus the
 	// rule that comes from OUR scope: a script's binding is a system-wide
 	// RegisterHotKey entry, so a bare key (even F5) would swallow that key in
-	// every application. Pecia can accept bare keys because its shortcuts are
+	// every application. The deck can accept bare keys because its shortcuts are
 	// in-window menu accelerators.
 	// m088: a menu command IS in-window, so there a plain function key is
 	// allowed - it only lives in this window.
@@ -1804,13 +1958,14 @@ private:
 	void FinishOk();
 
 	DeckWindow *mDeck = nullptr;
-	PeciaScroll *mScroll = nullptr;
+	DeckScroll *mScroll = nullptr;
 	SearchInput *mFilter = nullptr;
 	Fl_Box *mFilterHint = nullptr;
 	Fl_Button *mResetBtn = nullptr;
 	Fl_Button *mOkBtn = nullptr;
 	Fl_Button *mCancelBtn = nullptr;
 	Fl_Box *mTopSpacer = nullptr;
+	Fl_Box *mLegend = nullptr;
 	Fl_Box *mBottomSpacer = nullptr;
 	std::vector<RowState> mRows;
 	std::vector<RowWidget *> mWidgets;
@@ -1851,6 +2006,17 @@ public:
 		mComboText = aText;
 		redraw();
 	}
+	// m116: a system-wide binding (RegisterHotKey) reads red; a menu command is
+	// an in-window accelerator and keeps the normal text colour. m117: the NAME
+	// is red for every global row from the start (bound or not), so the scope is
+	// visible before any key is recorded; the shortcut text turns red only once
+	// a combo exists ("（无）" stays normal).
+	void setGlobal(bool aGlobal, bool aBound)
+	{
+		mGlobal = aGlobal;
+		mBound = aBound;
+		redraw();
+	}
 	void setName(const std::string &aName)
 	{
 		mName = aName;
@@ -1870,6 +2036,8 @@ private:
 	bool mRecording = false;
 	bool mConflict = false;
 	bool mComboHover = false;
+	bool mGlobal = false;
+	bool mBound = false;
 	std::string mName;
 	std::string mComboText;
 };
@@ -1882,7 +2050,7 @@ ShortcutDialogWindow::ShortcutDialogWindow(DeckWindow *aDeck)
 	const int margin = 12;
 	const int barH = 32;
 	const int btnH = 24;
-	const int pad = 16;      // Pecia's dialog_pad: above and below the rows
+	const int pad = 16;      // dialog padding: above and below the rows
 	const int searchH = 22;
 	const int iconW = 24;
 	const int filterTop = top + 560 - 2 * barH;
@@ -1892,7 +2060,7 @@ ShortcutDialogWindow::ShortcutDialogWindow(DeckWindow *aDeck)
 
 	// The list owns the whole pane: flush against the caption above and the
 	// filter bar below. Rows are drawn inside it, not as a second frame.
-	mScroll = new PeciaScroll(0, top, 520, filterTop - top);
+	mScroll = new DeckScroll(0, top, 520, filterTop - top);
 	mScroll->type(Fl_Scroll::VERTICAL);
 	mScroll->scrollbar.type(FL_VERT_SLIDER);
 	mScroll->box(FL_FLAT_BOX);
@@ -1907,7 +2075,7 @@ ShortcutDialogWindow::ShortcutDialogWindow(DeckWindow *aDeck)
 	filterBar->color(DeckColors().background3);
 	mFilter = new SearchInput(24, filterTop + (barH - searchH) / 2,
 		520 - 48, searchH);
-	mFilter->textsize(16);
+	mFilter->textsize(TextSize());
 	mFilter->color(DeckColors().background1);
 	mFilter->textcolor(DeckColors().text1);
 	mFilter->selection_color(DeckColors().highlight2);
@@ -1918,7 +2086,7 @@ ShortcutDialogWindow::ShortcutDialogWindow(DeckWindow *aDeck)
 	mFilterHint = new Fl_Box(FL_NO_BOX, 24 + iconW + 4,
 		filterTop + (barH - searchH) / 2, 520 - 48 - iconW - 8, searchH,
 		"过滤");
-	mFilterHint->labelsize(16);
+	mFilterHint->labelsize(TextSize());
 	mFilterHint->labelcolor(DeckColors().text2);
 	mFilterHint->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
 	filterBar->resizable(nullptr);
@@ -1939,7 +2107,7 @@ ShortcutDialogWindow::ShortcutDialogWindow(DeckWindow *aDeck)
 	{
 		button->color(DeckColors().background2);
 		button->selection_color(DeckColors().highlight1);
-		button->labelsize(16);
+		button->labelsize(TextSize());
 		button->labelcolor(DeckColors().text1);
 	}
 	FitButtonRow({ mResetBtn, mOkBtn, mCancelBtn }, 520, btnTop + barH / 2,
@@ -1964,14 +2132,14 @@ ShortcutDialogWindow::ShortcutDialogWindow(DeckWindow *aDeck)
 
 int ShortcutDialogWindow::handle(int aEvent)
 {
-	// Pecia: a click on empty dialog space also cancels the recording; row
+	// A click on empty dialog space also cancels the recording; row
 	// widgets consume their own clicks and stop it there.
 	if (aEvent == FL_PUSH && mRecording)
 	{
 		StopRecording();
 		UpdateHintText();
 	}
-	// Pecia's dialog-wide OK shortcut (its default combo): Ctrl+Enter confirms
+	// The dialog-wide OK shortcut (the default combo): Ctrl+Enter confirms
 	// unless a row is recording - then the keys belong to the recording row.
 	if ((aEvent == FL_KEYDOWN || aEvent == FL_SHORTCUT) && !mRecording &&
 		Fl::event_key() == FL_Enter && (Fl::event_state() & FL_CTRL))
@@ -2011,16 +2179,16 @@ bool ShortcutDialogWindow::ValidateCombo(int aKey, unsigned aMods,
 	const unsigned mods = aMods & (FL_CTRL | FL_SHIFT | FL_ALT | FL_META);
 	if (mods == 0)
 	{
-		// m088: a menu command lives in this window only, so a plain function
-		// key is fine there; a script's binding is global and must carry a
-		// modifier.
-		const bool plainFunctionKey =
-			(aKey >= FL_F + 1 && aKey <= FL_F + 12) || aKey == FL_Delete;
-		if (!aMenu || !plainFunctionKey)
+		// m117: a plain function key (F1-F12) is a deliberate press and never
+		// something typed into a field, so both scopes may bind it bare. Delete
+		// stays menu-only: a system-wide Delete would eat deletion everywhere.
+		const bool plainFunctionKey = aKey >= FL_F + 1 && aKey <= FL_F + 12;
+		const bool plainDelete = aMenu && aKey == FL_Delete;
+		if (!plainFunctionKey && !plainDelete)
 		{
 			aError = aMenu
 				? "菜单快捷键至少要有一个修饰键，或用 F1-F12 / Del 这类功能键"
-				: "全局快捷键至少要有一个修饰键（Ctrl / Alt / Shift / Win）";
+				: "全局快捷键至少要有一个修饰键（Ctrl / Alt / Shift / Win），或使用功能键 F1-F12";
 			return false;
 		}
 	}
@@ -2049,8 +2217,8 @@ bool ShortcutDialogWindow::ValidateCombo(int aKey, unsigned aMods,
 	text += token;
 	unsigned int parsedMods = 0;
 	unsigned int parsedKey = 0;
-	// m088: a menu binding may be a bare function key ("F3"), which the global
-	// scope rejects; parse it in the scope the row belongs to.
+	// m088: parse in the scope the row belongs to. m117: both scopes now accept
+	// a bare function key, so the system parser is the one that decides.
 	return aMenu
 		? ParseMenuShortcut(text, parsedMods, parsedKey, aCanonical, aError)
 		: ParseAhkHotkey(text, parsedMods, parsedKey, aCanonical, aError);
@@ -2072,9 +2240,48 @@ void ShortcutDialogWindow::BuildRows(int aPad)
 	// The top spacer is part of the scrollable content: without it FL_Scroll
 	// starts at a negative offset and the top pad vanishes on the first drag.
 	mTopSpacer = new Fl_Box(FL_NO_BOX, 0, mScroll->y(), 0, aPad, nullptr);
-	// m088: the menu commands first, in the table's order. Their name is
-	// Pecia's: the group, then the path ("菜单 > 文件 > 新建"). The script
-	// switches come after them ("开关 > 示例-心跳").
+	// m116: one red note above the list, explaining why some rows are red.
+	// FL_FLAT_BOX (not FL_NO_BOX) so the text clears what it paints over: a
+	// label-only box composites onto the previous frame and darkens.
+	mLegend = new Fl_Box(FL_FLAT_BOX, 24, mScroll->y(), 520 - 48, 22,
+		"红色为全局快捷键");
+	mLegend->color(DeckColors().background1);
+	mLegend->labelcolor(DeckColors().highlight3);
+	// Same 16px as the row names: one note in a second size would read as the
+	// very "inconsistent font" the rows were just fixed for.
+	mLegend->labelsize(TextSize());
+	mLegend->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+	// m108: the window's own action first: it is the one binding that works
+	// while the window is hidden. isMenu stays false because this row is a
+	// system-wide RegisterHotKey entry, like a script's (m117: a bare F-key is
+	// allowed there, a bare letter is not).
+	{
+		RowState state;
+		state.isMenu = false;
+		state.key = "window.show";
+		state.name = "窗口 > 显示主窗口";
+		state.combo = mDeck ? mDeck->ShowWindowBinding() : std::string();
+		if (!state.combo.empty())
+		{
+			unsigned int mods = 0;
+			unsigned int key = 0;
+			std::string canonical;
+			std::string error;
+			if (ParseAhkHotkey(state.combo, mods, key, canonical, error))
+				state.combo = canonical;
+		}
+		mRows.push_back(state);
+		RowWidget *row = new RowWidget(12, 0, 520 - 24, 26);
+		row->setDialog(this);
+		row->setIndex((int)mRows.size() - 1);
+		row->setName(state.name);
+		row->setComboText(ComboText(state.combo));
+		row->setGlobal(true, !state.combo.empty());
+		mWidgets.push_back(row);
+	}
+	// m088: the menu commands first, in the table's order. Their name shows
+	// the group, then the path ("菜单 > 文件 > 新建"). The script
+	// switches come after them ("开关 > 脚本名").
 	const int menuCount = mDeck ? mDeck->MenuCommandCount() : 0;
 	for (int i = 0; i < menuCount; ++i)
 	{
@@ -2100,8 +2307,8 @@ void ShortcutDialogWindow::BuildRows(int aPad)
 		state.key = mDeck->ScriptNameAt(i);
 		state.name = "开关 > " + state.key;
 		state.combo = mDeck->ScriptBindingAt(i);
-		// The file is hand-editable ("^!a"), so normalize the spelling the way
-		// Pecia does on load: parse and re-serialize. Unparseable text is kept
+		// The file is hand-editable ("^!a"), so normalize the spelling: parse
+		// and re-serialize on load. Unparseable text is kept
 		// verbatim so the row still shows what the file actually says.
 		if (!state.combo.empty())
 		{
@@ -2118,6 +2325,7 @@ void ShortcutDialogWindow::BuildRows(int aPad)
 		row->setIndex((int)mRows.size() - 1);
 		row->setName(state.name);
 		row->setComboText(ComboText(state.combo));
+		row->setGlobal(true, !state.combo.empty());
 		mWidgets.push_back(row);
 	}
 	mBottomSpacer = new Fl_Box(FL_NO_BOX, 0, 0, 0, aPad, nullptr);
@@ -2126,16 +2334,25 @@ void ShortcutDialogWindow::BuildRows(int aPad)
 	RecomputeConflicts();
 }
 
-// Visible rows stack from the top with Pecia's 26px/2px rhythm; the top and
+// Visible rows stack from the top with the 26px/2px rhythm; the top and
 // bottom spacers keep dialog_pad at both ends of the scrollable content.
 void ShortcutDialogWindow::RepositionRows()
 {
 	if (!mScroll)
 		return;
 	const int pad = 16;
+	const int topPad = 8;
+	const int noteH = 22;
 	if (mTopSpacer)
-		mTopSpacer->resize(0, mScroll->y(), 0, pad);
-	int y = mScroll->y() + pad;
+		mTopSpacer->resize(0, mScroll->y(), 0, topPad);
+	int y = mScroll->y() + topPad;
+	// m116: the red note keeps its own line above the rows, so the first row
+	// starts noteH + 6px lower than it did before.
+	if (mLegend)
+	{
+		mLegend->resize(24, y, w() - 48, noteH);
+		y += noteH + 6;
+	}
 	int lastRowBottom = y;
 	for (size_t i = 0; i < mWidgets.size(); ++i)
 	{
@@ -2147,7 +2364,7 @@ void ShortcutDialogWindow::RepositionRows()
 		}
 		row->show();
 		row->resize(12, y, w() - 24, 26);
-		y += 28;
+		y += RowStep();
 		lastRowBottom = y - 2;
 	}
 	if (mBottomSpacer)
@@ -2155,7 +2372,7 @@ void ShortcutDialogWindow::RepositionRows()
 	mScroll->redraw();
 }
 
-// Pecia's filter: a lowercase substring of the name or of the shortcut text.
+// Filter: a lowercase substring of the name or of the shortcut text.
 bool ShortcutDialogWindow::rowVisible(size_t aIndex) const
 {
 	if (mFilterText.empty())
@@ -2177,7 +2394,7 @@ void ShortcutDialogWindow::ApplyFilter()
 	UpdateHintVisibility();
 }
 
-// Same rule as Pecia's find bar: the hint is visible only while the input
+// Same rule as the find bar: the hint is visible only while the input
 // is empty AND unfocused.
 void ShortcutDialogWindow::UpdateHintVisibility()
 {
@@ -2222,7 +2439,11 @@ void ShortcutDialogWindow::SetError(const char *aText)
 void ShortcutDialogWindow::RebuildComboLabels()
 {
 	for (size_t i = 0; i < mRows.size() && i < mWidgets.size(); ++i)
+	{
 		mWidgets[i]->setComboText(ComboText(mRows[i].combo));
+		// A row that just got (or lost) a combo changes between red and normal.
+		mWidgets[i]->setGlobal(!mRows[i].isMenu, !mRows[i].combo.empty());
+	}
 }
 
 void ShortcutDialogWindow::RecomputeConflicts()
@@ -2290,9 +2511,9 @@ void ShortcutDialogWindow::OnRowComboChanged(RowWidget *aRow, int aKey, unsigned
 	const int index = aRow->index();
 	if (index < 0 || (size_t)index >= mRows.size())
 		return;
-	// m088: a script's binding is a system-wide RegisterHotKey entry, so it
-	// must carry a modifier; a menu command only lives in this window, so a
-	// plain function key is allowed there.
+	// m088: a script's binding is a system-wide RegisterHotKey entry; a menu
+	// command only lives in this window. m117: ValidateCombo now allows a bare
+	// function key in both scopes, so the difference is only the parser's scope.
 	const bool isMenu = mRows[(size_t)index].isMenu;
 	std::string canonical;
 	std::string error;
@@ -2302,7 +2523,7 @@ void ShortcutDialogWindow::OnRowComboChanged(RowWidget *aRow, int aKey, unsigned
 		return; // keep recording
 	}
 	// New binding wins: the action that already owned the combo is cleared,
-	// exactly like Pecia (one combo per action, no silent duplicates).
+	// exactly as scoped (one combo per action, no silent duplicates).
 	for (size_t i = 0; i < mRows.size(); ++i)
 	{
 		if ((int)i != index && SameBinding(mRows[i].combo, canonical))
@@ -2381,7 +2602,7 @@ int ShortcutDialogWindow::RowWidget::handle(int aEvent)
 	// Accept focus (and keep it) so the row receives FL_KEYDOWN while recording.
 	if (aEvent == FL_FOCUS)
 		return 1;
-	// Only the shortcut cell reacts to the pointer, the same way Pecia tints
+	// Only the shortcut cell reacts to the pointer, the same way the menu row tints
 	// its combo box: the row itself stays flat (m093).
 	if (aEvent == FL_ENTER || aEvent == FL_MOVE || aEvent == FL_LEAVE)
 	{
@@ -2408,8 +2629,18 @@ void ShortcutDialogWindow::RowWidget::draw()
 	Fl_Box::draw();
 	const ThemeColors &colors = DeckColors();
 
-	// Name: same colour in every state, clipped to leave room for the combo.
-	fl_color(colors.text1);
+	// m116: the row owns its background. FLTK repaints a child without repainting
+	// its parent, and GDI draws antialiased text with a transparent background,
+	// so a row redrawn on its own (hover, conflict, a recorded combo) blended the
+	// glyphs onto the previous frame - after a few repaints the row looked
+	// bolder than its neighbours. Clearing first makes every paint identical.
+	fl_color(colors.background1);
+	fl_rectf(x(), y(), w(), h());
+
+	// Name: red for every system-wide row, even before a key is bound - the
+	// colour is what tells the user "this binding works outside the deck".
+	const bool globalBound = mGlobal && mBound;
+	fl_color(mGlobal ? colors.highlight3 : colors.text1);
 	fl_font(FL_HELVETICA, 16);
 	const int avail = w() - kComboW - 32;
 	const std::string clipped = ClipEllipsis(mName, avail - 12);
@@ -2427,7 +2658,7 @@ void ShortcutDialogWindow::RowWidget::draw()
 	fl_color(mConflict ? colors.highlight3 : colors.text1);
 	fl_rect(cx, cy, kComboW, ch);
 	fl_color(mRecording ? colors.text1
-		: (mConflict ? colors.highlight3 : colors.text1));
+		: (mConflict || globalBound ? colors.highlight3 : colors.text1));
 	fl_font(FL_HELVETICA, 16);
 	// Left-aligned so every shortcut starts at the same x ("F3", "Ctrl+F"
 	// and "Delete" share one column; centering would float each one).
@@ -2457,7 +2688,7 @@ public:
 		label->box(FL_NO_BOX);
 		label->labelcolor(DeckColors().text2);
 		label->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
-		label->labelsize(16);
+		label->labelsize(TextSize());
 		mInput = new BlinkInput(24, top + 44, 352, 26);
 		mInput->value(aInitial);
 		StyleInput(mInput);
@@ -2469,7 +2700,7 @@ public:
 		mHint->box(FL_NO_BOX);
 		mHint->labelcolor(DeckColors().highlight2);
 		mHint->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
-		mHint->labelsize(14);
+		mHint->labelsize(SubTextSize());
 		HoverButton *ok = new HoverButton(216, top + 124, 76, 26, "确定");
 		HoverButton *cancel = new HoverButton(300, top + 124, 76, 26, "取消");
 		StyleButton(ok);
@@ -2552,9 +2783,9 @@ public:
 	{
 		Fl_Text_Display::draw();
 		fl_push_clip(x(), y(), w(), h());
-		DrawPeciaScrollbarCorner(mVScrollBar, mHScrollBar);
-		DrawPeciaScrollbar(mVScrollBar, false);
-		DrawPeciaScrollbar(mHScrollBar, true);
+		DeckDrawScrollbarCorner(mVScrollBar, mHScrollBar);
+		DeckDrawScrollbar(mVScrollBar, false);
+		DeckDrawScrollbar(mHScrollBar, true);
 		fl_pop_clip();
 	}
 
@@ -2576,7 +2807,7 @@ public:
 
 // A text editor that owns the file shortcuts, so they work even while the
 // editor widget has focus (the global-handler route missed them), and that
-// hosts Pecia's in-place IME composition so pinyin input draws ONE caret at
+// hosts the in-place IME composition so pinyin input draws ONE caret at
 // the insertion point instead of FLTK's floating window plus its own caret.
 class EditorBox : public Fl_Text_Editor, public ImeInPlace::Host
 {
@@ -2703,7 +2934,7 @@ public:
 		if (composing)
 			show_cursor(0);
 		Fl_Text_Editor::draw();
-		// Pecia resizes the horizontal bar to the widget's left edge in draw():
+		// The horizontal bar is resized to the widget's left edge in draw():
 		// FLTK leaves the line-number gutter under the bar's left end, which
 		// showed as a stray colour block beside the track.
 		if (mHScrollBar && mHScrollBar->visible())
@@ -2715,9 +2946,9 @@ public:
 		}
 		DrawLineNumberSeparator();
 		fl_push_clip(x(), y(), w(), h());
-		DrawPeciaScrollbarCorner(mVScrollBar, mHScrollBar);
-		DrawPeciaScrollbar(mVScrollBar, false);
-		DrawPeciaScrollbar(mHScrollBar, true);
+		DeckDrawScrollbarCorner(mVScrollBar, mHScrollBar);
+		DeckDrawScrollbar(mVScrollBar, false);
+		DeckDrawScrollbar(mHScrollBar, true);
 		DrawCursorScrollMarker();
 		fl_pop_clip();
 		if (!composing)
@@ -2759,7 +2990,7 @@ public:
 		}
 		if (aEvent == FL_PUSH && Fl::event_button() == FL_RIGHT_MOUSE)
 		{
-			// m089: the editor's right-click menu (Pecia: the editor and the
+			// m089: the editor's right-click menu (from the editor and the
 			// preview share one menu, assembled from the live menu bar).
 			mOwner->ShowEditorContextMenu();
 			return 1;
@@ -2845,13 +3076,16 @@ private:
 };
 
 // m088: the command table. The order is the menu order (File, Edit, View,
-// Script, Settings - Pecia puts Edit right after File), and the entries
+// Script, Settings - Edit sits right after File), and the entries
 // without a menu path are the commands that own a button but no menu item
 // (the middle band's four buttons, the editor's own reload).
 //
-// The default shortcuts are the ones the deck has always had (Ctrl+N, Ctrl+Q,
-// Ctrl+1/2, Ctrl+S, Ctrl+L, Ctrl+F/H, F3) plus Pecia's Edit menu keys
-// (Ctrl+Z/Y/X/C/V/A). Every one of them can be re-bound in 设置 > 快捷键.
+// m118: only the keys a user already knows from Windows Notepad stay enabled
+// by default - Ctrl+N / Ctrl+S, Ctrl+Z / Ctrl+Y / Ctrl+X / Ctrl+C / Ctrl+V /
+// Ctrl+A, Del, Ctrl+F, F3, Shift+F3, Ctrl+H. They cover 文件 and 编辑, the two
+// groups whose behaviour matches Notepad exactly, and muscle memory is worth
+// more than a longer default list. Every other command starts unbound: the
+// tray, the buttons and the menu still reach it, and 设置 > 快捷键 binds it.
 const std::vector<DeckWindow::CommandSpec> &DeckWindow::Commands()
 {
 	static const std::vector<CommandSpec> specs = {
@@ -2861,10 +3095,10 @@ const std::vector<DeckWindow::CommandSpec> &DeckWindow::Commands()
 		// them under 文件 instead of "窗口 > 中部条带".
 		{IdSave, "save", "文件/保存", "菜单", "保存", FL_CTRL + 's', 0, false},
 		{IdCloseScriptEdit, "closeScript", "文件/关闭脚本", "菜单", "关闭脚本", 0, 0, false},
-		{IdRescan, "rescan", "文件/重新扫描", "菜单", "重新扫描", FL_CTRL + FL_SHIFT + 'r', 0, false},
+		{IdRescan, "rescan", "文件/重新扫描", "菜单", "重新扫描", 0, 0, false},
 		{IdOpenScriptsFolder, "openScriptsFolder", "文件/打开脚本文件夹", "菜单", "打开脚本文件夹", 0, 0, false},
 		{IdHideTray, "hideTray", "文件/隐藏到托盘", "菜单", "隐藏到托盘", 0, 0, false},
-		{IdQuit, "quit", "文件/退出", "菜单", "退出", FL_CTRL + 'q', 0, false},
+		{IdQuit, "quit", "文件/退出", "菜单", "退出", 0, 0, false},
 		{IdEditUndo, "undo", "编辑/撤销", "菜单", "撤销", FL_CTRL + 'z', 0, true},
 		{IdEditRedo, "redo", "编辑/重做", "菜单", "重做", FL_CTRL + 'y', 0, true},
 		{IdEditCut, "cut", "编辑/剪切", "菜单", "剪切", FL_CTRL + 'x', 0, true},
@@ -2876,8 +3110,7 @@ const std::vector<DeckWindow::CommandSpec> &DeckWindow::Commands()
 		{IdFindNext, "findNext", "编辑/查找下一个", "菜单", "查找下一个", FL_F + 3, 0, false},
 		{IdFindPrev, "findPrev", "编辑/查找上一个", "菜单", "查找上一个", FL_F + 3 | FL_SHIFT, 0, false},
 		{IdReplace, "replace", "编辑/替换…", "菜单", "替换…", FL_CTRL + 'h', 0, false},
-		{IdViewList, "viewList", "视图/脚本列表", "菜单", "脚本列表", FL_CTRL + '1', FL_MENU_TOGGLE, false},
-		{IdViewEditor, "viewEditor", "视图/编辑器与控制台", "菜单", "编辑器与控制台", FL_CTRL + '2', FL_MENU_TOGGLE, false},
+		{IdViewEditor, "viewEditor", "视图/编辑器与控制台", "菜单", "编辑器与控制台", 0, FL_MENU_TOGGLE, false},
 		{IdToggleRounded, "rounded", "视图/窗口圆角", "菜单", "窗口圆角", 0, FL_MENU_TOGGLE, false},
 		{IdToggleShadow, "shadow", "视图/窗口阴影", "菜单", "窗口阴影", 0, FL_MENU_TOGGLE, false},
 		{IdRun, "run", "脚本/运行", "菜单", "运行", 0, 0, false},
@@ -2888,20 +3121,22 @@ const std::vector<DeckWindow::CommandSpec> &DeckWindow::Commands()
 		{IdEditSelected, "editSelected", "脚本/编辑", "菜单", "编辑", 0, 0, false},
 		{IdNotepad, "notepad", "脚本/用记事本打开", "菜单", "用记事本打开", 0, 0, false},
 		{IdHotkeyEdit, "hotkeyEdit", "设置/快捷键…", "菜单", "快捷键…", 0, 0, false},
-		{IdLogs, "logs", "设置/打开日志文件夹", "菜单", "打开日志文件夹", FL_CTRL + FL_SHIFT + 'l', 0, false},
+		{IdLogs, "logs", "设置/打开日志文件夹", "菜单", "打开日志文件夹", 0, 0, false},
 		{IdOpenConfigFile, "openConfig", "设置/打开配置文件", "菜单", "打开配置文件", 0, 0, false},
 		// m092: the About box and the updater live in their own 帮助 group,
 		// after 设置. The key menu.about is unchanged, so existing rebinds
 		// keep working.
 		{IdAbout, "about", "帮助/关于", "菜单", "关于", 0, 0, false},
 		{IdCheckUpdate, "checkUpdate", "帮助/检查更新", "菜单", "检查更新", 0, 0, false},
+		// m097: no default key - it is a one-time setup step, not a daily action.
+		{IdMcpAccess, "mcpAccess", "帮助/MCP 接入", "菜单", "MCP 接入", 0, 0, false},
 		// m090: what is left of the middle band owns buttons but no menu item -
-		// 清空 is a console action, 运行 belongs to 脚本/运行 - so Pecia lists
+		// 清空 is a console action, 运行 belongs to 脚本/运行 - so the list keeps
 		// those as "Window > ..." rows in the same dialog.
-		{IdClearConsole, "clearConsole", "", "窗口 > 中部条带", "清空", FL_CTRL + 'l', 0, false},
+		{IdClearConsole, "clearConsole", "", "窗口 > 中部条带", "清空", 0, 0, false},
 		{IdRunOrStopEdit, "runOrStop", "", "窗口 > 中部条带", "运行", 0, 0, false},
-		{IdReloadEditor, "reloadEditor", "", "窗口 > 编辑区", "重新载入", FL_CTRL + 'r', 0, false},
-		{IdCopyConsole, "copyConsole", "", "窗口 > 控制台", "复制", FL_F + 9, 0, false},
+		{IdReloadEditor, "reloadEditor", "", "窗口 > 编辑区", "重新载入", 0, 0, false},
+		{IdCopyConsole, "copyConsole", "", "窗口 > 控制台", "复制", 0, 0, false},
 	};
 	return specs;
 }
@@ -2910,36 +3145,31 @@ DeckWindow::DeckWindow(Engine &aEngine)
 	: Fl_Double_Window(600, 400, "AHKDeck")
 	, mEngine(aEngine)
 {
-	// Pecia frame: no OS caption. DeckTitleBar takes over dragging and the
+	// Deck frame: no OS caption. DeckTitleBar takes over dragging and the
 	// three window buttons; InstallDeckFrame() re-adds WS_THICKFRAME for the
 	// resize edges after show().
 	border(0);
 	ApplyDeckTheme();
 	color(DeckColors().background3);
-	labelsize(16);
+	labelsize(TextSize());
 
-	// Optional startup view for automation (and power users): a comma list of
-	// list/editor/chat or "all". The default stays list-only (m019).
+	// Optional startup view for automation (and power users): "editor" (or
+	// "all") opens the editor column too, "list" keeps it folded. m112: the
+	// script list itself is always present, so that is the only choice left.
 	{
 		char spec[64] = {0};
 		if (GetEnvironmentVariableA("AHKDECK_START_VIEW", spec, sizeof(spec)) > 0)
 		{
 			const std::string value(spec);
-			if (value == "all")
+			if (value == "all" || value.find("editor") != std::string::npos)
 			{
-				mShowList = mShowEditor = true;
+				mShowEditor = true;
 				mViewFromEnv = true;
 			}
-			else
+			else if (value.find("list") != std::string::npos)
 			{
-				const bool list = value.find("list") != std::string::npos;
-				const bool editor = value.find("editor") != std::string::npos;
-				if (list || editor)
-				{
-					mShowList = list;
-					mShowEditor = editor;
-					mViewFromEnv = true;
-				}
+				mShowEditor = false;
+				mViewFromEnv = true;
 			}
 		}
 	}
@@ -2987,8 +3217,8 @@ DeckWindow::DeckWindow(Engine &aEngine)
 	// The table is width-fitted; only the vertical bar may ever appear.
 	mList->has_scrollbar(Fl_Browser_::VERTICAL);
 	mList->scrollbar_size(10);
-	mList->textsize(16);
-	mList->linespacing(5); // Pecia's list pitch is font 16 + 10 = 26
+	mList->textsize(TextSize());
+	mList->linespacing(5); // list pitch is font 16 + 10 = 26
 	mList->when(FL_WHEN_CHANGED);
 	mList->callback(OnSelect, this);
 	mList->column_char('\t');
@@ -3021,7 +3251,7 @@ DeckWindow::DeckWindow(Engine &aEngine)
 		caption->color(DeckColors().background3);
 		caption->labelcolor(DeckColors().text1);
 		caption->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
-		caption->labelsize(16);
+		caption->labelsize(TextSize());
 	}
 	mFilterRule = new Fl_Box(0, 0, 0, 0);
 	mFilterRule->box(FL_FLAT_BOX);
@@ -3049,15 +3279,15 @@ DeckWindow::DeckWindow(Engine &aEngine)
 	mEditor = new EditorBox(0, 0, 0, 0, this);
 	mEditBuffer = new Fl_Text_Buffer();
 	mEditor->buffer(mEditBuffer);
-	mEditor->textsize(16);
+	mEditor->textsize(TextSize());
 	// FLTK 1.4.5 ships a line-number margin; no custom gutter needed (m016).
 	mEditor->linenumber_width(0);
-	mEditor->linenumber_size(16);
+	mEditor->linenumber_size(TextSize());
 	mEditor->linenumber_fgcolor(DeckColors().text1);
 	mEditor->linenumber_bgcolor(DeckColors().background1);
 	mEditor->linenumber_font(FL_COURIER);
 	mEditor->linenumber_align(FL_ALIGN_RIGHT);
-	// Pecia's editor caret: SIMPLE_CURSOR is the same 2px, cap-less line the
+	// The editor caret: SIMPLE_CURSOR is the same 2px, cap-less line the
 	// inputs draw, and it must blink off the shared 500 ms phase.
 	mEditor->cursor_style(Fl_Text_Display::SIMPLE_CURSOR);
 	mEditor->cursor_color(DeckColors().text1);
@@ -3067,16 +3297,16 @@ DeckWindow::DeckWindow(Engine &aEngine)
 	mConsole = new DeckDisplay(0, 0, 0, 0);
 	mBuffer = new Fl_Text_Buffer();
 	mConsole->buffer(mBuffer);
-	mConsole->textsize(16);
+	mConsole->textsize(TextSize());
 	mConsole->wrap_mode(Fl_Text_Display::WRAP_AT_BOUNDS, 0);
 
 	mEditorBorder = new Fl_Box(0, 0, 0, 0);
 	mEditorBorder->box(BorderOnlyBox());
 
 	// Find/replace bar (m016): results go to the console, never to a dialog.
-	// m084: Pecia's layout - fixed-width fields with the hint drawn inside,
+	// m084: the layout - fixed-width fields with the hint drawn inside,
 	// buttons sized by their own label, and a centred match counter.
-	// m085: Pecia's bar proper - a grey band, two rows, a check box for the
+	// m085: the bar proper - a grey band, two rows, a check box for the
 	// case, a check box for the wrap, and a button for both directions.
 	// The band is created FIRST so it sits UNDER the controls (FLTK draws the
 	// children in creation order).
@@ -3119,36 +3349,36 @@ DeckWindow::DeckWindow(Engine &aEngine)
 	mReplaceAll = new HoverButton(0, 0, 0, 0, "全部替换");
 	mReplaceAll->callback(OnReplaceAll, this);
 
-	// m085: a real check box with a text label, the way Pecia spells it.
-	// m086: PeciaCheckButton - drawn exactly like the menu bar's check mark.
-	mMatchCase = new PeciaCheckButton(0, 0, 0, 0, "区分大小写");
+	// m085: a real check box with a text label, the way the menu bar spells it.
+	// m086: DeckCheckButton - drawn exactly like the menu bar's check mark.
+	mMatchCase = new DeckCheckButton(0, 0, 0, 0, "区分大小写");
 	mMatchCase->tooltip("区分大小写");
 	mMatchCase->callback(OnMatchCase, this);
 
-	// m085: the wrap switch. On (Pecia's default): the search starts over at
+	// m085: the wrap switch. On (the default): the search starts over at
 	// the top when it runs past the end. Off: it stops and says so.
-	mWrap = new PeciaCheckButton(0, 0, 0, 0, "循环");
+	mWrap = new DeckCheckButton(0, 0, 0, 0, "循环");
 	mWrap->tooltip("查找到底后回到开头继续（循环搜索）");
 	mWrap->value(1);
 	mWrap->callback(OnMatchCase, this);
 
-	// m086: the whole-word switch (Pecia's "全词匹配").
-	mWholeWord = new PeciaCheckButton(0, 0, 0, 0, "全词匹配");
+	// m086: the whole-word switch (the "全词匹配").
+	mWholeWord = new DeckCheckButton(0, 0, 0, 0, "全词匹配");
 	mWholeWord->tooltip("只匹配完整的词（前后不是字母、数字或汉字）");
 	mWholeWord->callback(OnMatchCase, this);
 
 	mFindCount = new Fl_Box(0, 0, 0, 0);
 	mFindCount->box(FL_NO_BOX);
 	mFindCount->align(FL_ALIGN_CENTER);
-	mFindCount->labelsize(14);
+	mFindCount->labelsize(SubTextSize());
 	mFindCount->copy_label("0/0");
 
-	// m087: the bar's switch. Pecia closes its find bar with a small "X" at
+	// m087: the bar's switch. The find bar closes with a small "X" at
 	// the right end of the first row; Ctrl+F brings it back. Ours does the
 	// same, and the folded bar gives its 60px back to the editor.
 	mFindClose = new HoverButton(0, 0, 0, kFindFieldH, "X");
 	mFindClose->tooltip("收起查找栏（Ctrl+F 重新打开）");
-	mFindClose->labelsize(14);
+	mFindClose->labelsize(SubTextSize());
 	mFindClose->callback(OnFindClose, this);
 
 	// m087: the bar's own widget list, so folding and unfolding are one
@@ -3165,7 +3395,7 @@ DeckWindow::DeckWindow(Engine &aEngine)
 	// saw FL_ENTER (measured: 0 changed pixels on hover, while the console
 	// buttons - created after the overlay - changed 1232).
 
-	// Pecia's Lua console header: "输出" on the left, actions right-aligned.
+	// Tool console header: "输出" on the left, actions right-aligned.
 	// Created after the editor and its border overlay so the bar and buttons are
 	// the topmost children - otherwise the full-pane border box becomes
 	// Fl::belowmouse() and the HoverButton never sees FL_ENTER.
@@ -3185,7 +3415,7 @@ DeckWindow::DeckWindow(Engine &aEngine)
 	mStatus = new Fl_Box(0, 0, 0, 0);
 	mStatus->box(FL_FLAT_BOX);
 	mStatus->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
-	mStatus->labelsize(14);
+	mStatus->labelsize(SubTextSize());
 
 
 	mEditorWidgets = {mEditorFrame, mEditorBar, mEditorBorder,
@@ -3193,6 +3423,38 @@ DeckWindow::DeckWindow(Engine &aEngine)
 		mFindBarBg, mFindInput, mFindNext, mFindPrev, mReplaceInput, mReplaceOne,
 		mReplaceAll, mMatchCase, mWrap, mWholeWord, mFindCount, mFindClose,
 		mEditor, mConsole};
+
+	// m112: the two grab bands are created LAST so they sit above the panes and
+	// are the first children to see the pointer in the gap. They never take
+	// layout space - they occupy the 6px the panes already leave empty.
+	mSplitV = new DeckSplitter(DeckSplitter::Column);
+	mSplitV->onMove = [this](int aEdge)
+	{
+		const int usable = (ClientWidth() - 2 * 8) - kSplitterSize;
+		if (usable <= 1)
+			return;
+		const int pct = (int)std::lround((aEdge - 8) * 100.0 / usable);
+		mListPct = std::clamp(pct, kPaneMinSharePct, 100 - kPaneMinSharePct);
+		Layout();
+		// m114: resizing children does not damage the area they left behind, so
+		// a drag used to smear copies of the old panes across the window. One
+		// full damage per step keeps the double buffer honest.
+		redraw();
+	};
+	mSplitV->onRelease = [this] { SaveSettings(); redraw(); };
+
+	mSplitH = new DeckSplitter(DeckSplitter::Row);
+	mSplitH->onMove = [this](int aEdge)
+	{
+		if (mBodyH <= 1)
+			return;
+		const int outputH = mBodyTop + mBodyH - (aEdge + kSplitterSize);
+		const int pct = (int)std::lround(outputH * 100.0 / mBodyH);
+		mConsolePct = std::clamp(pct, kPaneMinSharePct, 100 - kPaneMinSharePct);
+		Layout();
+		redraw();
+	};
+	mSplitH->onRelease = [this] { SaveSettings(); redraw(); };
 
 	end();
 
@@ -3206,15 +3468,52 @@ DeckWindow::DeckWindow(Engine &aEngine)
 	mConfigWritable = mConfigMissing || IsLegacyIniPath(mSettingsPath);
 	mConfigRoot = Json::MakeObject();
 	{
-		Json loaded;
-		std::string configError;
-		if (!mConfigMissing && ReadJsonConfig(mSettingsPath, loaded, configError))
+		// m107 (side fix): a path ending in .ini is the legacy geometry format
+		// (and the UI gates' override), never a corrupt settings.json. m094's
+		// move-aside ran before this check, so an .ini override was renamed to
+		// .broken on startup and the geometry it held was then lost.
+		WindowGeometry geometry;
+		if (!IsLegacyIniPath(mSettingsPath))
 		{
-			mConfigRoot = std::move(loaded);
-			mConfigWritable = true;
+			Json loaded;
+			std::string configError;
+			if (!mConfigMissing && ReadJsonConfig(mSettingsPath, loaded, configError))
+			{
+				mConfigRoot = std::move(loaded);
+				mConfigWritable = true;
+			}
+			else if (!mConfigMissing)
+			{
+				// m094: a corrupt settings.json used to disable saving for the rest
+				// of the session ("未覆盖原文件"), so every later change was lost.
+				// Move the damaged file aside for diagnosis and start from defaults.
+				const std::wstring backup = mSettingsPath + L".broken";
+				MoveFileExW(mSettingsPath.c_str(), backup.c_str(),
+					MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+				mConfigWritable = true;
+				std::fprintf(stderr, "AHKDeck: settings.json unreadable (%s); moved to .broken\n",
+					configError.c_str());
+			}
+		}
+		else
+		{
+			// m110: a legacy .ini path that the deck has already migrated to JSON
+			// on save must still load. Try the JSON form first; fall back to the
+			// ini parser only when the file is absent or not JSON.
+			Json loaded;
+			std::string configError;
+			if (ReadJsonConfig(mSettingsPath, loaded, configError))
+			{
+				mConfigRoot = std::move(loaded);
+				mConfigWritable = true;
+			}
+			else
+			{
+				std::string settingsError;
+				LoadUiSettings(mSettingsPath, geometry, settingsError);
+			}
 		}
 
-		WindowGeometry geometry;
 		const Json &ui = mConfigRoot["ui"];
 		if (ui.IsObject())
 		{
@@ -3225,18 +3524,17 @@ DeckWindow::DeckWindow(Engine &aEngine)
 			geometry.rounded = ui["rounded"].AsBool(true);
 			geometry.shadow = ui["shadow"].AsBool(true);
 			geometry.valid = geometry.w > 0 && geometry.h > 0;
-			// m053: the view toggles are part of the config too. The automation
-			// env var wins over the saved view.
-			if (!mViewFromEnv)
-			{
-				if (ui.Has("list"))
-					mShowList = ui["list"].AsBool(mShowList);
-				if (ui.Has("editor"))
-					mShowEditor = ui["editor"].AsBool(mShowEditor);
-				if (ui.Has("chat"))
-				if (!mShowList && !mShowEditor)
-					mShowList = true;
-			}
+			// m053: the view toggle is part of the config too. The automation
+			// env var wins over the saved view. m112: the script list is always
+			// shown, so only the editor column can be folded away.
+			if (!mViewFromEnv && ui.Has("editor"))
+				mShowEditor = ui["editor"].AsBool(mShowEditor);
+			// m112: the two pane shares. Clamped on load as well, so a hand-edited
+			// file cannot squeeze a pane out of sight.
+			mListPct = std::clamp(ui["list_pct"].AsInt(mListPct), kPaneMinSharePct,
+				100 - kPaneMinSharePct);
+			mConsolePct = std::clamp(ui["console_pct"].AsInt(mConsolePct), kPaneMinSharePct,
+				100 - kPaneMinSharePct);
 		}
 		else
 		{
@@ -3266,6 +3564,21 @@ DeckWindow::DeckWindow(Engine &aEngine)
 
 	SyncEditorActions();
 
+	// m109: .temp\ / Backups\ / Logs\ are per-machine scratch space, cleaned once
+	// per launch. The window lives in settings.json (advanced users only), so the
+	// default is written back once to make the key discoverable.
+	mHousekeepingDays = RetentionDaysFromJson(mConfigRoot);
+	{
+		const Json &existing = mConfigRoot["housekeeping"];
+		if (!existing.IsObject() || !existing.Has("max_age_days"))
+		{
+			Json table = existing.IsObject() ? existing : Json::MakeObject();
+			table.Set("max_age_days", Json((double)mHousekeepingDays));
+			mConfigRoot.Set("housekeeping", table);
+			mConfigDirty = true;
+		}
+	}
+
 	std::string error;
 	if (!mEngine.Load(error))
 	{
@@ -3282,11 +3595,13 @@ DeckWindow::DeckWindow(Engine &aEngine)
 	// m064: the MCP tool thread reads the editing area through this snapshot, so
 	// run_editor can never see text older than what the user is looking at.
 	mMcpTools.SetEditorSupplier([this] { return EditorSnapshot(); });
+	mMcpTools.SetEditorPathSupplier([this] { return EditorPathSnapshot(); });
 	RefreshEditorSnapshot();
 
 
 	ScanScripts();
 	LoadHotkeyFile();
+	RunHousekeeping();
 	// m088: the user's re-bound keys go into the menu items, so the menu
 	// shows the key that is actually in force.
 	ApplyMenuShortcuts();
@@ -3345,11 +3660,16 @@ DeckWindow::DeckWindow(Engine &aEngine)
 
 DeckWindow::~DeckWindow()
 {
+	// m094: any destruction path other than Run()'s orderly shutdown used to
+	// destroy a joinable std::thread, which is std::terminate. StopMcp is
+	// idempotent, so calling it here is both safe and the last line of defence.
+	StopMcp();
 	delete mShortcutDialog;
 	mShortcutDialog = nullptr;
 	delete mNameDialog;
 	mNameDialog = nullptr;
 	Fl::remove_timeout(OnTick, this);
+	Fl::remove_timeout(TrimWorkingSetCb, this);
 	windowShadow::detach(this);
 	mHooks.Destroy(); // the tray icon must be gone before the process is
 	// FLTK 1.4.5 displays do not own their buffers, and group teardown happens
@@ -3511,6 +3831,17 @@ void DeckWindow::draw()
 	// dialogs; the kit owns how they are drawn.
 	if (mFrameInstalled)
 		PaintDeckClientBorder(this);
+
+	// m115: the list and editor frames each paint their own 1px top border, so
+	// the 6px splitter gap between them has no top run - a notch at the top
+	// right of the list pane that moves with the split. Bridge the gap with one
+	// continuous line the same colour as the pane borders.
+	if (mShowEditor)
+	{
+		const int top = DeckTitleBar::kHeight + 24 + 2;
+		fl_color(ThemeBorderLine());
+		fl_rectf(8, top + 2, ClientWidth() - 16, 1);
+	}
 }
 
 void DeckWindow::Layout()
@@ -3533,35 +3864,43 @@ void DeckWindow::Layout()
 	if (paneH <= 0)
 		return;
 
-	int visible = 0;
-	if (mShowList) ++visible;
-	if (mShowEditor) ++visible;
-	if (visible == 0)
-		return;
-
-	// Equal columns: the visible count splits the usable width, with the last
-	// column taking the rounding remainder so the three edges line up.
-	const int usable = (cw - 2 * pad) - 6 * (visible - 1);
-	const int each = usable / visible;
-	int column = 0;
-	auto nextWidth = [&]() {
-		++column;
-		return column == visible ? usable - each * (visible - 1) : each;
-	};
-	int x = pad;
-	if (mShowList)
-	{
-		const int width = nextWidth();
-		LayoutListPane(x, top, width, paneH);
-		x += width + 6;
-	}
+	// m112: the list is always there. Without the editor column it takes the
+	// whole width; with it, the 6px gap becomes the vertical grab band and the
+	// split is a drag share clamped to a fifth of the window each.
+	int listW = cw - 2 * pad;
+	const int fullUsable = (cw - 2 * pad) - kSplitterSize;
 	if (mShowEditor)
 	{
-		const int width = nextWidth();
-		LayoutEditorPane(x, top, width, paneH);
-		x += width + 6;
+		int minW = (cw * kPaneMinSharePct) / 100;
+		if (minW < 180)
+			minW = 180;
+		listW = (int)std::lround(fullUsable * (mListPct / 100.0));
+		if (listW < minW)
+			listW = minW;
+		if (listW > fullUsable - minW)
+			listW = fullUsable - minW;
 	}
+	const int editorX = pad + listW + kSplitterSize;
+	const int editorW = mShowEditor ? fullUsable - listW : 0;
 
+	LayoutListPane(pad, top, listW, paneH);
+	if (mSplitV)
+	{
+		if (mShowEditor)
+		{
+			mSplitV->bounds(pad + 180, pad + fullUsable - 180);
+			mSplitV->resize(pad + listW, top, kSplitterSize, paneH);
+			mSplitV->show();
+		}
+		else
+		{
+			mSplitV->hide();
+		}
+	}
+	if (mShowEditor)
+		LayoutEditorPane(editorX, top, editorW, paneH);
+	else if (mSplitH)
+		mSplitH->hide();
 
 	mStatus->resize(pad, ch - statusH + 1, cw - 2 * pad, statusH - 2);
 }
@@ -3623,16 +3962,26 @@ void DeckWindow::LayoutEditorPane(int x, int y, int w, int h)
 	// shape as the AI pane.
 	const int bodyTop = cy;
 	const int bodyH = ch;
-	int outputH = bodyH * kConsoleOutputPercent / 100;
-	if (outputH < kConsoleOutputMinH)
-		outputH = kConsoleOutputMinH;
-	if (outputH > bodyH - kPaneBarH - kEditorMinH)
-		outputH = bodyH - kPaneBarH - kEditorMinH;
+	mBodyTop = bodyTop;
+	mBodyH = bodyH;
+	// m112: the console share comes from the row splitter. Both sides keep at
+	// least a fifth of the column, so a drag can never hide one of them.
+	int outputH = bodyH * mConsolePct / 100;
+	int minH = (bodyH * kPaneMinSharePct) / 100;
+	if (minH < kConsoleOutputMinH)
+		minH = kConsoleOutputMinH;
+	const int maxOutput = bodyH - kPaneBarH - kSplitterSize - minH;
+	if (outputH < minH)
+		outputH = minH;
+	if (outputH > maxOutput)
+		outputH = maxOutput;
 	if (outputH < 0)
 		outputH = 0;
 	const int outputY = bodyTop + bodyH - outputH;
-	const int barY = outputY - kPaneBarH;
-	// m084: the find/replace bar sits ABOVE the editor, the way Pecia puts it:
+	// The 6px between the action band and the console is the row grab band; the
+	// action band stays with the editor above it.
+	const int barY = outputY - kSplitterSize - kPaneBarH;
+	// m084: the find/replace bar sits ABOVE the editor, the way the deck puts it:
 	// the eye goes to the field first and the text second. It used to sit
 	// between the editor and the action bar, which pushed the code away from
 	// the field that searches it.
@@ -3646,6 +3995,16 @@ void DeckWindow::LayoutEditorPane(int x, int y, int w, int h)
 	LayoutFindBar(cx, bodyTop, cw, findRowH);
 	mEditorBar->resize(cx, barY, cw, kPaneBarH);
 	mConsole->resize(cx, outputY, cw, outputH);
+	// m112: the row grab band sits in the 6px between the action band and the
+	// console. Its bounds stop the drag where either side would fall under a
+	// fifth of the column.
+	if (mSplitH)
+	{
+		const int splitY = outputY - kSplitterSize;
+		mSplitH->bounds(bodyTop + kPaneBarH + minH, bodyTop + bodyH - minH - kSplitterSize);
+		mSplitH->resize(cx, splitY, cw, kSplitterSize);
+		mSplitH->show();
+	}
 
 	// Four actions live in the middle band: 保存 / 关闭 / 清空 / 运行. The font
 	// and padding step down so the row still fits the narrow 3-column case.
@@ -3668,7 +4027,7 @@ void DeckWindow::LayoutEditorPane(int x, int y, int w, int h)
 		cx + cw, barY + kPaneBarH / 2, 8, barGap, barPad, 0, barFont);
 }
 
-// m085: the find/replace bar, copied from Pecia's FindReplace.
+// m085: the find/replace bar.
 //
 // Row 1: the needle (a FIXED 120px field with the hint drawn inside), the
 //         next button, the previous button, the "区分大小写" switch, the
@@ -3680,12 +4039,12 @@ void DeckWindow::LayoutEditorPane(int x, int y, int w, int h)
 // the deck's row height, its controls are the deck's button height, and the
 // switches are drawn exactly like the menu bar's check mark.
 //
-// Nothing stretches: the inputs keep Pecia's search-field width, the buttons
+// Nothing stretches: the inputs keep the fixed search-field width, the buttons
 // are exactly as wide as their own label (the deck's one width rule), and the
 // counter takes whatever room is left. When the column is too narrow the
 // optional controls drop out one by one instead of being squeezed: the case
 // switch shortens its label to "Aa" first, then the wrap switch goes, then
-// "全词匹配" goes, then "上一个" goes. (Pecia drops them in the other order;
+// "全词匹配" goes, then "上一个" goes. (The other order drops them in reverse;
 // the deck keeps the two switches the user actually asked for and gives up
 // the convenience button first.)
 void DeckWindow::LayoutFindBar(int x, int y, int w, int rowH)
@@ -3717,11 +4076,11 @@ void DeckWindow::LayoutFindBar(int x, int y, int w, int rowH)
 	// FLTK draws it underneath them.
 	mFindBarBg->resize(x, y, w, rowH * 2);
 
-	// m087: the bar's switch sits at the right end of the first row (Pecia
+	// m087: the bar's switch sits at the right end of the first row (the deck
 	// puts its close button there too). Everything else in the row stops
 	// before it, so the counter never runs under it.
-	// m089: Pecia's rule is a GAP on BOTH sides of the switch
-	// (FindReplace::layout: the button lands at x + w - closeW - GAP and
+	// m089: the rule is a GAP on BOTH sides of the switch
+	// (the shared layout rule: the button lands at x + w - closeW - GAP and
 	// everything else stops at button->x() - GAP). Ours had no gap on the
 	// right, so the switch sat flush against the pane's edge.
 	const int closeW = kFindCloseW;
@@ -3742,7 +4101,7 @@ void DeckWindow::LayoutFindBar(int x, int y, int w, int rowH)
 
 	// The counter keeps kFindCountMinW; a control only stays if the row still
 	// fits beside it. When the column is too narrow the controls drop out one
-	// by one - first "上一个" (a convenience), then "全词匹配" (Pecia has it,
+	// by one - first "上一个" (a convenience), then "全词匹配" (the deck has it,
 	// but it is the one nobody asked for), then the wrap switch, then the
 	// case box (in its short "Aa" form), and last "下一个".
 	// m087: the row ends at the switch, not at the pane's edge.
@@ -3806,7 +4165,7 @@ void DeckWindow::LayoutFindBar(int x, int y, int w, int rowH)
 		mFindPrev->hide();
 
 	// The case box spells itself out when there is room and shortens to the
-	// Pecia-style "Aa" when there is not - a check box either way, never the
+	// compact "Aa" when there is not - a check box either way, never the
 	// odd light button with a corner mark (m084's "Aa").
 	if (showCase)
 	{
@@ -3837,8 +4196,8 @@ void DeckWindow::LayoutFindBar(int x, int y, int w, int rowH)
 	else
 		mWrap->hide();
 
-	// The counter fills the rest of the row and centres its text, like
-	// Pecia's match display. It stops before the switch.
+	// The counter fills the rest of the row and centres its text, like the
+	// match counters elsewhere. It stops before the switch.
 	int countW = contentRight - cx;
 	if (countW < 0)
 		countW = 0;
@@ -3991,33 +4350,43 @@ void DeckWindow::AppendRecord(const ErrorRecord &aRecord)
 	const bool sameOwner = !path.empty() && !mConsolePath.empty() && SamePathI(path, mConsolePath);
 	const std::string name = NameOfSession(aRecord.session);
 
-	std::string file = aRecord.file;
-	const size_t slash = file.find_last_of("\\/");
-	if (slash != std::string::npos)
-		file = file.substr(slash + 1);
-	const std::string ownerLeaf = path.empty() ? std::string() : Utf8(LeafOf(path));
-	const bool foreignFile = !file.empty() && file != ownerLeaf;
-
-	std::string where;
-	if (aRecord.line > 0)
-	{
-		where = foreignFile ? file + ":" + std::to_string(aRecord.line)
-			: "第 " + std::to_string(aRecord.line) + " 行";
-	}
-	else if (foreignFile)
-	{
-		where = file;
-	}
-
 	std::string line = "[" + ShortTime(aRecord.ts) + "] ";
 	if (!sameOwner && !name.empty())
 		line += name + " ";
-	line += (aRecord.kind == "warn") ? "警告" : "出错";
-	if (!where.empty())
-		line += "（" + where + "）";
-	line += "：" + aRecord.message;
-	if (!aRecord.extra.empty())
-		line += " Specifically: " + aRecord.extra;
+
+	// m061: a script's own stdout is not a fault. It prints as plain text with
+	// the same time/owner prefix, never with the "出错" label or a line number.
+	if (aRecord.kind == "stdout")
+	{
+		line += aRecord.message;
+	}
+	else
+	{
+		std::string file = aRecord.file;
+		const size_t slash = file.find_last_of("\\/");
+		if (slash != std::string::npos)
+			file = file.substr(slash + 1);
+		const std::string ownerLeaf = path.empty() ? std::string() : Utf8(LeafOf(path));
+		const bool foreignFile = !file.empty() && file != ownerLeaf;
+
+		std::string where;
+		if (aRecord.line > 0)
+		{
+			where = foreignFile ? file + ":" + std::to_string(aRecord.line)
+				: "第 " + std::to_string(aRecord.line) + " 行";
+		}
+		else if (foreignFile)
+		{
+			where = file;
+		}
+
+		line += (aRecord.kind == "warn") ? "警告" : "出错";
+		if (!where.empty())
+			line += "（" + where + "）";
+		line += "：" + aRecord.message;
+		if (!aRecord.extra.empty())
+			line += " Specifically: " + aRecord.extra;
+	}
 
 	// m076: the console shows the edited script's records and nothing else.
 	// (m067 had made an unclaimed console swallow every record; the user's rule
@@ -4233,8 +4602,9 @@ bool DeckWindow::SaveSettings(std::string *aError)
 	ui.Set("h", Json((double)ClientHeight()));
 	ui.Set("rounded", Json(mRoundedCorners));
 	ui.Set("shadow", Json(mWindowShadow));
-	ui.Set("list", Json(mShowList));
 	ui.Set("editor", Json(mShowEditor));
+	ui.Set("list_pct", Json((double)mListPct));
+	ui.Set("console_pct", Json((double)mConsolePct));
 	mConfigRoot.Set("ui", ui);
 
 	std::string error;
@@ -4260,16 +4630,26 @@ void DeckWindow::UpdateStatus()
 			++running;
 	}
 
-	std::string engine = mKernelSummary.empty()
-		? (mReady ? std::string("就绪") : std::string("未载入"))
-		: (mKernelSummary + (mReady ? std::string() : std::string(" (未载入)")));
+	// m095: name the fork, not just the number. We embed AutoHotkey_H (a patched
+	// v2 fork), whose build number can differ from the official release, so
+	// "2.0.25" alone would read as upstream AutoHotkey. The number itself still
+	// comes from the DLL's version resource (KernelVersionOf), never from a
+	// constant here.
+	std::string engine = "AutoHotkey_H";
+	if (mKernelSummary.empty())
+		engine += mReady ? " 就绪" : " 未载入";
+	else
+		engine += " " + mKernelSummary + (mReady ? std::string() : std::string(" (未载入)"));
 	std::string text = "引擎: " + engine;
 	text += "   |   脚本: " + std::to_string((int)mScripts.size());
 	if (mVisible.size() != mScripts.size())
 		text += " (显示 " + std::to_string((int)mVisible.size()) + ")";
 	text += "   |   运行中: " + std::to_string((int)running);
-	text += "   |   " + (mEditPath.empty() ? std::string("文件: 未打开") : std::string("文件: 已打开"));
-	text += "   |   日志";
+	// m107: the host's own CPU/memory/GPU cost. It is appended last on purpose:
+	// at a narrow width the tail is what FLTK clips, and the engine/script facts
+	// are the ones that must survive.
+	if (!mResourceText.empty())
+		text += "   |   " + mResourceText;
 	if (text == mLastStatus)
 		return;
 	mLastStatus = text;
@@ -4751,7 +5131,7 @@ bool DeckWindow::LoadIntoEditor(const std::wstring &aPath)
 	// m083: the editor takes the keyboard focus when a script is loaded.
 	// Without it the caret sits in the file but the keys still go to the old
 	// focus (the filter box), so the user opens a script, types, and nothing
-	// happens. Pecia puts the caret in the file it just opened.
+	// happens. The deck puts the caret in the file it just opened.
 	mEditor->take_focus();
 	SyncEditorActions();
 	SyncConsoleSelection();
@@ -5031,7 +5411,7 @@ void DeckWindow::SetFindBarVisible(bool aVisible)
 }
 
 // m089: the find bar is a toggle. Pressing the menu item (or its key) again
-// takes the bar away. Pecia does the same in cbFind/cbReplace: the bar is
+// takes the bar away. The find/replace callbacks do the same: the bar is
 // hidden when it is already visible, shown otherwise.
 void DeckWindow::ToggleFindBar(bool aFocusReplace)
 {
@@ -5144,7 +5524,7 @@ int DeckWindow::SearchForward(int aStart, const char *aNeedle, int aMatchCase,
 }
 
 // m084: count the matches of the needle in the editing area. The counter in
-// the find bar shows "current/total" (Pecia's format); the positions are kept
+// the find bar shows "current/total" (the same format); the positions are kept
 // so that the index of the selected match is a lookup, not another scan.
 void DeckWindow::UpdateFindMatches()
 {
@@ -5200,7 +5580,7 @@ void DeckWindow::SelectMatchAt(int aIndex)
 
 // m085: the search walks the list of matches, so "下一个" and "上一个" agree
 // with the counter by construction. The wrap switch decides what happens at
-// the ends: on (Pecia's default) the search starts over, off it stops and
+// the ends: on (the default) the search starts over, off it stops and
 // says so.
 void DeckWindow::FindNext()
 {
@@ -5422,9 +5802,9 @@ void DeckWindow::EditRow(int aIndex)
 	LoadIntoEditor(path); // saves the previous file first if it was dirty
 }
 
-// m089: the editor's right-click menu. Pecia's rule (开发指南 §4): the menu is
+// m089: the editor's right-click menu. The rule (开发指南 §4): the menu is
 // assembled from the LIVE menu bar, so a new command shows up in it by itself
-// - no second list to keep in step. The Edit part is Pecia's whitelist (the
+// - no second list to keep in step. The Edit part is the edit whitelist (the
 // everyday actions), the 视图 part is the whole submenu, copied with its
 // shortcuts and its check marks.
 void DeckWindow::ShowEditorContextMenu()
@@ -5464,7 +5844,7 @@ void DeckWindow::ShowEditorContextMenu()
 	if (n > 0)
 		popup[n - 1].flags |= FL_MENU_DIVIDER;
 
-	// ── 视图 ▶（整份复刻）──
+	// ── 视图 ▶（逐项同款）──
 	if (view && view->text && n + 2 < 64)
 	{
 		popup[n++] = {view->text, 0, nullptr, nullptr, FL_SUBMENU};
@@ -5481,7 +5861,7 @@ void DeckWindow::ShowEditorContextMenu()
 
 	// popup() takes WIDGET-RELATIVE coordinates and adds the window offset
 	// itself; the menu bar is passed as the menu button so the popup wears the
-	// same font, colours and hover style (Pecia does the same).
+	// same font, colours and hover style (the same style as the menu bar).
 	const Fl_Menu_Item *picked = popup[0].popup(Fl::event_x(), Fl::event_y(), nullptr, nullptr, mMenu);
 	if (!picked || !picked->callback_)
 		return;
@@ -5523,7 +5903,7 @@ void DeckWindow::ShowContextMenu(int aIndex)
 	// Passing event_x_root() here double-added the window origin, so the menu
 	// landed offset by the window position - invisible while the window sat near
 	// (0,0), obvious as soon as the user moved it.
-	// Pass the theme's menu bar as the menubutton (Pecia does the same): the
+	// Pass the theme's menu bar as the menubutton (the editor menu does this): the
 	// popup then uses the same font, height, colour and hover style as the bar.
 	const Fl_Menu_Item *picked = mContextItems.data()[0].popup(
 		Fl::event_x(), Fl::event_y(), nullptr, nullptr, mMenu);
@@ -5559,6 +5939,24 @@ void DeckWindow::ShowContextMenu(int aIndex)
 // ---------------------------------------------------------------------------
 // m023/m024: start/stop switch, restart, the script's own tray menu, bindings, tray
 // ---------------------------------------------------------------------------
+
+// m108: the window is not a script, so its "show the main window" action gets a
+// reserved entry in hotkeys.txt. Menu commands use "menu.<key>"; this one is
+// "window.show" and has no built-in default.
+const std::string kWindowShowKey = "window.show";
+// Script rows use ids 1..N, so this id cannot collide with one of them.
+// (0xC000..0xFFFF are reserved for DLL hotkeys, so 0x7FFF is safe.)
+constexpr int kShowWindowHotkeyId = 0x7FFF;
+
+// m108: an entry with no binding and no built-in default is not worth a line in
+// hotkeys.txt, so it is removed rather than written empty.
+void RemoveHotkeyEntry(std::vector<HotkeyEntry> &aEntries, const std::string &aName)
+{
+	auto it = std::find_if(aEntries.begin(), aEntries.end(),
+		[&aName](const HotkeyEntry &aEntry) { return aEntry.name == aName; });
+	if (it != aEntries.end())
+		aEntries.erase(it);
+}
 
 std::string DeckWindow::BindingOf(const ScriptRow &aRow) const
 {
@@ -5694,6 +6092,12 @@ void DeckWindow::CommitInlineHotkey(int aIndex, const std::string &aText)
 	bool clearedMenu = false;
 	if (!typed.empty())
 	{
+		// m108: the window's own action is one of the owners too.
+		if (SameShortcut(ShowWindowBinding(), canonical))
+		{
+			previousOwner = "显示主窗口";
+			RemoveHotkeyEntry(mHotkeys, kWindowShowKey);
+		}
 		for (size_t i = 0; i < Commands().size(); ++i)
 		{
 			if (!SameShortcut(MenuCommandBinding((int)i), canonical))
@@ -5705,7 +6109,8 @@ void DeckWindow::CommitInlineHotkey(int aIndex, const std::string &aText)
 		for (size_t i = 0; i < mHotkeys.size(); ++i)
 		{
 			HotkeyEntry &entry = mHotkeys[i];
-			if (entry.name == row.name || entry.name.compare(0, 5, "menu.") == 0)
+			if (entry.name == row.name || entry.name.compare(0, 5, "menu.") == 0 ||
+				entry.name == kWindowShowKey)
 				continue;
 			if (!SameShortcut(entry.hotkey, canonical))
 				continue;
@@ -5746,6 +6151,13 @@ bool DeckWindow::ApplyShortcutRows(const std::vector<std::pair<std::string, std:
 
 	for (const auto &row : rows)
 	{
+		// m108: the window's binding has no built-in default, so an unbound row
+		// removes its entry - writing "window.show=" would only be litter.
+		if (row.first == kWindowShowKey && row.second.empty())
+		{
+			RemoveHotkeyEntry(mHotkeys, row.first);
+			continue;
+		}
 		// m088: a menu command's built-in binding needs no entry in the file,
 		// so a row that is back at its default removes its entry - that is
 		// how "恢复默认" works without writing the defaults down.
@@ -5848,6 +6260,26 @@ void DeckWindow::ShowUpdateDialog()
 	dialog.Run();
 }
 
+void DeckWindow::OpenMcpDocs()
+{
+	// m098: 帮助 > MCP 接入 opens the doc itself - it is the only place the
+	// client config is written down, so there is nothing for a dialog to keep
+	// in sync.
+	const std::wstring path = ExeDirectory() + L"\\docs\\MCP接入.md";
+	if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES)
+	{
+		Append("未找到 docs\\MCP接入.md；发行包里应带有 docs 文件夹。");
+		return;
+	}
+	// m099: hand it to the shell so it opens in whatever the user actually reads
+	// markdown with - forcing Notepad was a guess about their setup. ShellExecute
+	// returning <= 32 means "no handler took it".
+	const HINSTANCE result = ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr,
+		SW_SHOWNORMAL);
+	if ((INT_PTR)result <= 32)
+		Append("没有程序能打开 docs\\MCP接入.md（.md 未关联任何编辑器）。");
+}
+
 // The update replaces the exe and restarts it, so unsaved edits must not
 // disappear with it. An existing file is saved (that is what 保存 does, and
 // the update the user just requested implies closing); a never-saved new
@@ -5879,7 +6311,17 @@ void DeckWindow::LoadHotkeyFile()
 		return;
 	std::string error;
 	if (!LoadHotkeys(mHotkeyPath, mHotkeys, error))
+	{
 		Append("[hotkey] 读取失败: " + error);
+		return;
+	}
+
+	// m106: the dialog prevents these, a hand-edited file does not. Reporting to
+	// the console is the whole fix - the loader must not silently rewrite the
+	// file or drop a binding (m090 keeps normalization in the save path).
+	const std::vector<HotkeyIssue> issues = AuditHotkeys(mHotkeys);
+	for (const HotkeyIssue &issue : issues)
+		Append("[hotkey] " + issue.name + " " + issue.hotkey + "：" + issue.message);
 }
 
 void DeckWindow::RebindHotkeys()
@@ -5889,6 +6331,7 @@ void DeckWindow::RebindHotkeys()
 		return; // no control window: the hotkey half of the deck is unavailable
 	mHooks.UnregisterHotkeys();
 
+	const std::string showKeyText = HotkeyOf(mHotkeys, kWindowShowKey);
 	int bound = 0;
 	for (size_t i = 0; i < mScripts.size(); ++i)
 	{
@@ -5917,8 +6360,88 @@ void DeckWindow::RebindHotkeys()
 		mHotkeyTargets[id] = row.path;
 		++bound;
 	}
+	// m108: the window's own shortcut, after the scripts. Its id is reserved, so
+	// a removed script row can never shift it onto another action.
+	if (!showKeyText.empty())
+	{
+		unsigned int mods = 0;
+		unsigned int virtualKey = 0;
+		std::string canonical;
+		std::string error;
+		if (!ParseAhkHotkey(showKeyText, mods, virtualKey, canonical, error))
+		{
+			Append("[hotkey] 显示主窗口 " + showKeyText + "：" + error);
+		}
+		else
+		{
+			std::string registerError;
+			if (!mHooks.RegisterHotkey(kShowWindowHotkeyId, mods, virtualKey, registerError))
+			{
+				Append("[hotkey] 显示主窗口 " + canonical + " 未生效：" + registerError);
+			}
+			else
+			{
+				++bound;
+			}
+		}
+	}
 	if (bound)
 		Append("[" + UiClock() + "] 全局快捷键已绑定 " + std::to_string(bound) + " 个");
+}
+
+void DeckWindow::RunHousekeeping()
+{
+	if (mHousekeepingDays <= 0)
+		return; // settings.json's housekeeping.max_age_days turned it off
+	FILETIME now = {};
+	GetSystemTimeAsFileTime(&now);
+	const std::uint64_t nowTicks = (static_cast<std::uint64_t>(now.dwHighDateTime) << 32) |
+		static_cast<std::uint64_t>(now.dwLowDateTime);
+	const std::wstring base = ExeDirectory();
+	const wchar_t *kDirs[] = {L".temp", L"Backups", L"Logs"};
+	int removed = 0;
+	for (const wchar_t *name : kDirs)
+	{
+		std::string error;
+		removed += PruneOlderThan(base + L"\\" + name, mHousekeepingDays, nowTicks, error);
+		if (!error.empty())
+			Append("[cleanup] " + Utf8(std::wstring(name)) + "：" + error);
+	}
+	if (removed > 0)
+		Append("[" + UiClock() + "] 已清理 " + std::to_string(removed) + " 个超过 " +
+			std::to_string(mHousekeepingDays) + " 天的旧文件");
+}
+
+void DeckWindow::ShowFromTray()
+{
+	show();
+	// SW_RESTORE also covers the minimised case; a global hotkey is an explicit
+	// user gesture too, so the deck may take the foreground back.
+	if (HWND hwnd = (HWND)fl_xid(this))
+	{
+		ShowWindow(hwnd, SW_RESTORE);
+		SetForegroundWindow(hwnd);
+	}
+	// hide()/show() may have rebuilt the HWND, and every per-handle frame
+	// artefact died with the old one: the rounded-corner opt-in prop, the DWM
+	// non-client opt-out behind the 1px border, the grown outer rect. Detect a
+	// fresh handle and reinstall the whole frame; a plain sync covers restore.
+	if (windowChrome::frameInstalled(this))
+		SyncDeckFrame(this);
+	else
+		InstallFrame();
+	// The tick skipped rendering while hidden; catch up immediately.
+	InvalidateSessions();
+	RefreshList();
+	UpdateStatus();
+	// m114: the pointer that clicked 关闭 never left, so nothing told the caption
+	// to drop its hover tint. Repaint it now against the real cursor position
+	// instead of waiting for the next mouse move.
+	if (mTitleBar)
+	{
+		mTitleBar->RefreshHoverFromCursor();
+		mTitleBar->redraw();
+	}
 }
 
 void DeckWindow::HandleIntent(const NativeHooks::Intent &aIntent)
@@ -5927,6 +6450,14 @@ void DeckWindow::HandleIntent(const NativeHooks::Intent &aIntent)
 	{
 	case NativeHooks::Intent::Kind::Hotkey:
 	{
+		// m108: the window's own shortcut (the tray menu's 主窗口 action). Its id
+		// is only registered when the user bound a key, so a Hotkey intent that
+		// carries it is a real binding.
+		if (aIntent.hotkeyId == kShowWindowHotkeyId)
+		{
+			ShowFromTray();
+			break;
+		}
 		auto target = mHotkeyTargets.find(aIntent.hotkeyId);
 		if (target == mHotkeyTargets.end())
 			return;
@@ -5939,19 +6470,7 @@ void DeckWindow::HandleIntent(const NativeHooks::Intent &aIntent)
 		break;
 	}
 	case NativeHooks::Intent::Kind::TrayShow:
-		show();
-		// The tray click is a real user gesture, so the deck is allowed to take the
-		// foreground back; SW_RESTORE also covers the minimised case.
-		if (HWND hwnd = (HWND)fl_xid(this))
-		{
-			ShowWindow(hwnd, SW_RESTORE);
-			SetForegroundWindow(hwnd);
-		}
-		// The tick skipped rendering while hidden; catch up immediately.
-		InvalidateSessions();
-		RefreshList();
-		UpdateStatus();
-		SyncDeckFrame(this);
+		ShowFromTray();
 		break;
 	case NativeHooks::Intent::Kind::Quit:
 		RequestQuit();
@@ -6036,8 +6555,8 @@ void DeckWindow::ApplyWidgetTheme()
 	mMenu->textcolor(colors.text1);
 	mMenu->selection_color(colors.highlight1);
 	mMenu->check_color(colors.highlight2);
-	mMenu->labelsize(16);
-	mMenu->textsize(16);
+	mMenu->labelsize(TextSize());
+	mMenu->textsize(TextSize());
 	mMenu->setPressColor(colors.highlight2);
 
 	// m031: only the contextual bars still have buttons.
@@ -6047,7 +6566,7 @@ void DeckWindow::ApplyWidgetTheme()
 	// m087: the switch is a button like the others, only its "X" is smaller
 	// so it stays quiet in the corner of the row.
 	if (mFindClose)
-		mFindClose->labelsize(14);
+		mFindClose->labelsize(SubTextSize());
 
 	StyleInput(mFilter);
 	if (auto *search = dynamic_cast<SearchInput *>(mFilter))
@@ -6057,15 +6576,15 @@ void DeckWindow::ApplyWidgetTheme()
 	StyleTextDisplay(mEditor);
 	StyleTextDisplay(mConsole);
 
-	// m086: the switches are drawn by PeciaCheckButton, exactly like the menu
+	// m086: the switches are drawn by DeckCheckButton, exactly like the menu
 	// bar's check mark. All they need from the theme is the text colour and
 	// the font size.
-	for (PeciaCheckButton *check : {mMatchCase, mWrap, mWholeWord})
+	for (DeckCheckButton *check : {mMatchCase, mWrap, mWholeWord})
 	{
 		if (!check)
 			continue;
 		check->labelcolor(colors.text1);
-		check->labelsize(16);
+		check->labelsize(TextSize());
 	}
 
 	// m086: the band the find bar sits on uses the script list's header
@@ -6077,7 +6596,7 @@ void DeckWindow::ApplyWidgetTheme()
 	// the quiet text colour.
 	mFindCount->box(FL_NO_BOX);
 	mFindCount->align(FL_ALIGN_CENTER);
-	mFindCount->labelsize(14);
+	mFindCount->labelsize(SubTextSize());
 	mFindCount->labelcolor(colors.text2);
 
 	mList->box(FL_FLAT_BOX);
@@ -6086,7 +6605,7 @@ void DeckWindow::ApplyWidgetTheme()
 	// m037: the browser still tracks a row for keyboard commands, but it must
 	// not paint a selected band - the row is a set of buttons, not a mode.
 	mList->selection_color(colors.background1);
-	mList->textsize(16);
+	mList->textsize(TextSize());
 	mList->scrollbar.type(FL_VERT_SLIDER);
 	mList->scrollbar.box(FL_FLAT_BOX);
 	mList->scrollbar.color(colors.background1);
@@ -6095,12 +6614,12 @@ void DeckWindow::ApplyWidgetTheme()
 	mStatus->box(FL_FLAT_BOX);
 	mStatus->color(colors.background3);
 	mStatus->labelcolor(colors.text2);
-	mStatus->labelsize(14);
+	mStatus->labelsize(SubTextSize());
 
 	mEditorBar->box(FL_FLAT_BOX);
 	mEditorBar->color(colors.background3);
 
-	// Pecia's tool-window buttons: background2 fill on the grey bar, 1px themed
+	// Tool-window buttons: background2 fill on the grey bar, 1px themed
 	// border, hover/press through the shared HoverButton palette.
 	Fl_Button *consoleButtons[] = {mConsoleSave, mConsoleClose, mConsoleClear, mConsoleRun};
 	for (Fl_Button *button : consoleButtons)
@@ -6111,22 +6630,22 @@ void DeckWindow::ApplyWidgetTheme()
 		button->color(colors.background2);
 		button->selection_color(colors.highlight1);
 		button->labelcolor(colors.text1);
-		button->labelsize(16);
+		button->labelsize(TextSize());
 	}
 
 
 
 	mEditor->textfont(FL_COURIER);
-	mEditor->textsize(16);
-	// Pecia: the gutter shares the editor background and the text colour; the
+	mEditor->textsize(TextSize());
+	// The gutter shares the editor background and the text colour; the
 	// only divider is the 1px dashed rule drawn by EditorBox.
 	mEditor->linenumber_font(FL_COURIER);
-	mEditor->linenumber_size(16);
+	mEditor->linenumber_size(TextSize());
 	mEditor->linenumber_fgcolor(colors.text1);
 	mEditor->linenumber_bgcolor(colors.background1);
 	UpdateLineNumberWidth();
 	mConsole->textfont(FL_HELVETICA);
-	mConsole->textsize(16);
+	mConsole->textsize(TextSize());
 
 	if (auto *editor = dynamic_cast<EditorBox *>(mEditor))
 		editor->StyleScrollbars();
@@ -6149,7 +6668,7 @@ void DeckWindow::UpdateLineNumberWidth()
 		sample[i] = '9';
 	sample[digits] = 0;
 
-	// Same measurement as Pecia's MainWindow::updateLinenumberWidth: the
+	// Same measurement as the shared updateLinenumberWidth rule: the
 	// widest digit in the gutter font, plus 3px padding on each side and 2px.
 	fl_font(mEditor->linenumber_font(), mEditor->linenumber_size());
 	const int width = (int)fl_width(sample) + 8;
@@ -6162,13 +6681,10 @@ void DeckWindow::UpdateLineNumberWidth()
 
 void DeckWindow::ApplyView()
 {
+	// m112: the script list is the deck's spine and always visible, so only the
+	// editor column has a visibility state to apply.
 	for (Fl_Widget *widget : mListWidgets)
-	{
-		if (mShowList)
-			widget->show();
-		else
-			widget->hide();
-	}
+		widget->show();
 	for (Fl_Widget *widget : mEditorWidgets)
 	{
 		if (mShowEditor)
@@ -6202,7 +6718,6 @@ void DeckWindow::SyncViewMenu()
 		else
 			item->flags &= ~FL_MENU_VALUE;
 	};
-	setFlag("视图/脚本列表", mShowList);
 	setFlag("视图/编辑器与控制台", mShowEditor);
 	setFlag("视图/窗口圆角", mRoundedCorners);
 	setFlag("视图/窗口阴影", mWindowShadow);
@@ -6241,7 +6756,7 @@ void DeckWindow::OnFindInput(Fl_Widget *, void *aSelf)
 }
 
 // m088: the shortcut dialog's names. A menu command is "菜单 > 文件 > 新建"
-// (Pecia's shape: the group, then the path), a command that owns a button but
+// (shape: the group, then the path), a command that owns a button but
 // no menu item is "窗口 > 中部条带 > 保存".
 std::string DeckWindow::MenuCommandName(int aIndex) const
 {
@@ -6275,6 +6790,12 @@ std::string DeckWindow::MenuCommandBinding(int aIndex) const
 std::string DeckWindow::MenuCommandDefault(int aIndex) const
 {
 	return AhkFromFltkShortcut(Commands()[(size_t)aIndex].shortcut);
+}
+
+// m108: no built-in default - the binding is whatever the user assigned.
+std::string DeckWindow::ShowWindowBinding() const
+{
+	return HotkeyOf(mHotkeys, kWindowShowKey);
 }
 
 int DeckWindow::ShortcutOf(int aId) const
@@ -6343,7 +6864,7 @@ void DeckWindow::ApplyMenuShortcuts()
 }
 
 // m088: the 编辑 menu's commands. They act on the editor's text, which is
-// what Pecia's Edit menu acts on.
+// what the 编辑 menu acts on.
 void DeckWindow::EditUndo()
 {
 	if (!mEditBuffer || !mEditBuffer->can_undo())
@@ -6406,11 +6927,11 @@ void DeckWindow::EditDelete()
 		return;
 	int start = 0;
 	int end = 0;
-	// m089: Delete is this command's default key now (Pecia's Edit > Delete
+	// m089: Delete is this command's default key now (the 编辑 > Delete
 	// carries FL_Delete too). The editor asks the command table BEFORE its
 	// own key handling, so the command has to do exactly what the editor's
 	// Delete does - otherwise the key would swallow character deletion.
-	// Pecia's cbDelete is the same two-step rule: with a selection remove
+	// The delete command is the same two-step rule: with a selection remove
 	// it, without one delete the character at the cursor.
 	if (mEditBuffer->selection_position(&start, &end) && end > start)
 	{
@@ -6482,26 +7003,13 @@ void DeckWindow::HandleMenu(int aId)
 		SaveSettings();
 		break;
 	}
-	case IdViewList:
 	case IdViewEditor:
 	{
-		// Toggle from our state, not FLTK's mvalue(): a keyboard shortcut or a
-		// menu click can leave mvalue pointing at a different item, which made
-		// the item only ever close.
-		bool list = mShowList;
-		bool editor = mShowEditor;
-		if (aId == IdViewList)
-			list = !list;
-		else
-			editor = !editor;
-		if (!list && !editor)
-		{
-			Append("[ui] 至少保留一个面板");
-			SyncViewMenu();
-			return;
-		}
-		mShowList = list;
-		mShowEditor = editor;
+		// Toggle from our own state, not FLTK's mvalue(): a keyboard shortcut or
+		// a menu click can leave mvalue pointing at a different item, which made
+		// the item only ever close. m112: the script list is always shown, so
+		// this is a plain on/off for the editor column.
+		mShowEditor = !mShowEditor;
 		ApplyView();
 		SyncViewMenu();
 		SaveSettings();
@@ -6533,6 +7041,9 @@ void DeckWindow::HandleMenu(int aId)
 		break;
 	case IdCheckUpdate:
 		ShowUpdateDialog();
+		break;
+	case IdMcpAccess:
+		OpenMcpDocs();
 		break;
 	default:
 		break;
@@ -6600,6 +7111,25 @@ void DeckWindow::OnTick(void *aSelf)
 		self->UpdateFindMatches();
 	self->TrackSessions();
 
+	// m110: edge-triggered working-set trim. TrackSessions reaps finished
+	// sessions; when the count of live ones drops to zero, one 2 s one-shot
+	// timer hands the kernel's now-dead allocations back to the OS. Running
+	// sessions own the pages being trimmed, so the edge (and the callback's own
+	// re-check) is what keeps the trim away from live scripts.
+	bool anyRunning = false;
+	for (const Session &s : self->CachedSessions())
+		if (s.state == SessionState::Running || s.state == SessionState::Stopping)
+		{
+			anyRunning = true;
+			break;
+		}
+	if (self->mHadRunning && !anyRunning && !self->mTrimPending)
+	{
+		self->mTrimPending = true;
+		Fl::add_timeout(2.0, TrimWorkingSetCb, self);
+	}
+	self->mHadRunning = anyRunning;
+
 	// Timed save: the edited file is persisted every 30 s while dirty. The
 	// explicit save-before-switch path uses the same SaveEditorTo.
 	const ULONGLONG now = GetTickCount64();
@@ -6607,6 +7137,15 @@ void DeckWindow::OnTick(void *aSelf)
 	{
 		self->mLastTrayCheck = now;
 		self->mHooks.EnsureTrayIcon();
+	}
+	// m107: the resource numbers move slowly, and the sampler's GPU query wants
+	// a second collection between readings - so this runs on the same 2 s beat
+	// rather than on every 100 ms tick.
+	if (now - self->mLastResourceCheck >= 2000)
+	{
+		self->mLastResourceCheck = now;
+		self->mResourceText = FormatResources(self->mResourceSampler.Sample());
+		self->UpdateStatus();
 	}
 	if (self->mEditDirty && !self->mToolEditPending && !self->mEditPath.empty() &&
 		now - self->mLastAutoSave >= (ULONGLONG)self->mAutoSaveMs)
@@ -6673,6 +7212,20 @@ void DeckWindow::OnTick(void *aSelf)
 	Fl::repeat_timeout(interval, OnTick, aSelf);
 }
 
+// m110: fires 2 s after the last session ended. Re-check first: a script
+// started inside the window owns live pages, and trimming under it would page
+// its working data out for nothing. Resetting mTrimPending here (not only on
+// the success path) keeps the next stop edge able to re-arm the timer.
+void DeckWindow::TrimWorkingSetCb(void *aSelf)
+{
+	auto *self = static_cast<DeckWindow *>(aSelf);
+	self->mTrimPending = false;
+	for (const Session &s : self->CachedSessions())
+		if (s.state == SessionState::Running || s.state == SessionState::Stopping)
+			return;
+	SetProcessWorkingSetSize(GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1);
+}
+
 } // namespace
 
 void DeckWindow::InstallFrame()
@@ -6714,6 +7267,12 @@ std::string DeckWindow::EditorSnapshot()
 	return mEditorSnapshot;
 }
 
+std::wstring DeckWindow::EditorPathSnapshot()
+{
+	std::lock_guard<std::mutex> lock(mSnapshotMutex);
+	return mEditorPathSnapshot;
+}
+
 void DeckWindow::RefreshEditorSnapshot()
 {
 	if (!mEditBuffer)
@@ -6733,6 +7292,7 @@ void DeckWindow::RefreshEditorSnapshot()
 	{
 		std::lock_guard<std::mutex> lock(mSnapshotMutex);
 		mEditorSnapshot.swap(text);
+		mEditorPathSnapshot = mEditPath;
 	}
 	mSnapshotChars = chars;
 	mSnapshotKey = key;
@@ -6773,6 +7333,7 @@ void DeckWindow::StartMcp()
 	policy.roots.push_back(ExeDirectory() + L"\\Scripts");
 	mMcpTools.SetPolicy(policy);
 	mMcpTools.SetEditorSupplier([this] { return EditorSnapshot(); });
+	mMcpTools.SetEditorPathSupplier([this] { return EditorPathSnapshot(); });
 	mMcpTools.SetEditorSink([this](const std::string &aContent, const std::string &aNote) {
 		ToolJob job;
 		job.kind = ToolJob::Kind::Editor;
@@ -6798,17 +7359,47 @@ void DeckWindow::StartMcp()
 
 	mMcpRunning = true;
 	mMcpThread = std::thread([this] {
-		agent::mcp::ServeStdio(mMcpTools, mMcpRunning, [this](const std::string &aLine) {
-			std::string text = aLine;
-			while (!text.empty() && (text.back() == '\n' || text.back() == '\r'))
-				text.pop_back();
-			ToolJob job;
-			job.kind = ToolJob::Kind::Note;
-			job.text = "[mcp] " + text;
-			std::lock_guard<std::mutex> lock(mToolJobMutex);
-			mToolJobs.push_back(std::move(job));
-		});
+		// m094: an exception escaping a thread entry calls std::terminate and
+		// takes the whole host down. MCP is an optional endpoint, so a bad line
+		// from a client must end the loop, not the app.
+		try
+		{
+			agent::mcp::ServeStdio(mMcpTools, mMcpRunning, [this](const std::string &aLine) {
+				std::string text = aLine;
+				while (!text.empty() && (text.back() == '\n' || text.back() == '\r'))
+					text.pop_back();
+				ToolJob job;
+				job.kind = ToolJob::Kind::Note;
+				job.text = "[mcp] " + text;
+				std::lock_guard<std::mutex> lock(mToolJobMutex);
+				mToolJobs.push_back(std::move(job));
+			});
+		}
+		catch (...)
+		{
+			mMcpRunning = false;
+		}
+		// m117: the client owns the other end of stdin. When it lets go (EOF or
+		// a broken frame stream) the deck has no user left to serve: in background
+		// mode it quits instead of lingering invisibly. Fl::awake hops back to the
+		// main thread - RequestQuit is UI state.
+		if (mMcpBackground)
+			Fl::awake([](void *aData) {
+				static_cast<DeckWindow *>(aData)->RequestQuit();
+			}, this);
 	});
+}
+
+void DeckWindow::StartMcpBackground()
+{
+	mMcpBackground = true;
+	StartMcp();
+	if (!mHooks.HasTrayIcon())
+	{
+		Append("[mcp] 托盘不可用：窗口保持可见（隐藏后无法再唤回界面）");
+		return;
+	}
+	HideToTray();
 }
 
 void DeckWindow::StopMcp()
@@ -6843,10 +7434,12 @@ int Run(HINSTANCE, bool aServeMcpStdio)
 	});
 
 	// m064: the MCP client owns this process's stdin/stdout, so the endpoint
-	// starts here - the window is already up, so a tool call arriving in the
-	// first second still has somewhere to apply its editor content.
+	// starts here. m117: with --mcp-stdio the deck then hides to the tray - the
+	// agent drives the same editing area, sessions and log, but no window pops
+	// up on every call. The tray icon (or the bound 显示主窗口 hotkey) brings it
+	// back, and the event loop keeps ticking while hidden.
 	if (aServeMcpStdio)
-		window->StartMcp();
+		window->StartMcpBackground();
 
 	// Test/screenshot hook only: the shortcut table is still opened from 设置.
 	{

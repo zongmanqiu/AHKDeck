@@ -62,7 +62,7 @@ inline std::string HotkeyKeyToken(int key)
 	return std::string();
 }
 
-// Pecia's display form: "Ctrl+Alt+Shift+F7", and "（无）" for an empty
+// Display form: "Ctrl+Alt+Shift+F7", and "（无）" for an empty
 // shortcut. The stored form stays AHK syntax ("^!+F7"); only the visible
 // text is translated.
 inline std::string HotkeyDisplayText(const std::string &aAhk)
@@ -105,7 +105,7 @@ inline std::string HotkeyDisplayText(const std::string &aAhk)
 	return out.empty() ? std::string("（无）") : out;
 }
 
-// Keep the full Pecia spelling visible inside the narrow 130px cell: with a
+// Keep the full spelling visible inside the narrow 130px cell: with a
 // 16px face "Ctrl+Alt+Shift+F9" is wider than the cell, and clipping it at
 // "Ctrl+Alt+Shift+" reads as a bug. Drop a point at a time until it fits.
 inline int HotkeyTextSize(const std::string &aText, int aMaxWidth)
@@ -123,7 +123,7 @@ inline int HotkeyTextSize(const std::string &aText, int aMaxWidth)
 	return size;
 }
 
-// The text shown while recording: same Pecia spelling, built from the live
+// The text shown while recording: same display spelling, built from the live
 // key event instead of an AHK string.
 inline std::string HotkeyRecordText(int key)
 {

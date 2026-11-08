@@ -48,7 +48,7 @@ full.bat                 :: 一键全链路
    [deps.txt](deps.txt) 为准；tar 使用 `_common.bat` 从 `%SystemRoot%\System32` 解析的版本。
 3. **单向补丁同步**：[3_patch.bat](3_patch.bat) 以 `fc /b` 比较后按需复制，避免无条件刷新时间戳。
    内核文件先过 [guard_patch.ps1](guard_patch.ps1) 基线校验；补丁归档是权威来源。
-4. **FLTK 钩子核验**：[check_fltk_patch.ps1](check_fltk_patch.ps1) 从补丁归档提取实际 `pecia*`
+4. **FLTK 钩子核验**：[check_fltk_patch.ps1](check_fltk_patch.ps1) 从补丁归档提取实际 `deck*`
    外部钩子名，在 `fltk.lib` 中检查；缺失强制重编，编完仍缺失则失败。
    这不是完整行为测试，也不应将这些实际符号盲改为其他前缀。
 5. **NMake 构建树**：[4_build.bat](4_build.bat) 检查缓存生成器，避免混用生成器。

@@ -68,9 +68,9 @@ public:
 	{
 		Fl_Text_Display::draw();
 		fl_push_clip(x(), y(), w(), h());
-		DrawPeciaScrollbarCorner(mVScrollBar, mHScrollBar);
-		DrawPeciaScrollbar(mVScrollBar, false);
-		DrawPeciaScrollbar(mHScrollBar, true);
+		DeckDrawScrollbarCorner(mVScrollBar, mHScrollBar);
+		DeckDrawScrollbar(mVScrollBar, false);
+		DeckDrawScrollbar(mHScrollBar, true);
 		fl_pop_clip();
 	}
 };
@@ -122,7 +122,7 @@ UpdateDialog::UpdateDialog(const std::string &aCurrentVersion,
 	mStatus = new Fl_Box(kMargin, y, kWidth - 2 * kMargin, kStatusH);
 	mStatus->box(FL_NO_BOX);
 	mStatus->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
-	mStatus->labelsize(16);
+	mStatus->labelsize(TextSize());
 	mStatus->labelcolor(DangerColour());
 	y += kStatusH + 10;
 
@@ -130,14 +130,14 @@ UpdateDialog::UpdateDialog(const std::string &aCurrentVersion,
 	const int labelW = 64;
 	Fl_Box *sourceLabel = new Fl_Box(FL_NO_BOX, kMargin, y, labelW, kRowH, "更新源");
 	sourceLabel->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
-	sourceLabel->labelsize(16);
+	sourceLabel->labelsize(TextSize());
 	sourceLabel->labelcolor(colors.text1);
 
 	mSource = new Fl_Choice(kMargin + labelW, y, 110, kRowH);
 	mSource->add("Gitee");
 	mSource->add("GitHub");
 	mSource->value(aSource == 1 ? 1 : 0);
-	mSource->textsize(16);
+	mSource->textsize(TextSize());
 	mSource->callback(OnSource, this);
 	StyleChoice(mSource);
 
@@ -145,7 +145,7 @@ UpdateDialog::UpdateDialog(const std::string &aCurrentVersion,
 	mBtnRefresh->color(colors.background2);
 	mBtnRefresh->selection_color(colors.highlight1);
 	mBtnRefresh->labelcolor(colors.text1);
-	mBtnRefresh->labelsize(16);
+	mBtnRefresh->labelsize(TextSize());
 	mBtnRefresh->align(FL_ALIGN_CENTER | FL_ALIGN_INSIDE);
 	mBtnRefresh->fit();
 	mBtnRefresh->position(kMargin + labelW + 110 + kGap * 2, y);
@@ -156,11 +156,11 @@ UpdateDialog::UpdateDialog(const std::string &aCurrentVersion,
 	const int half = (kWidth - 2 * kMargin) / 2;
 	mCurVer = new Fl_Box(FL_NO_BOX, kMargin, y, half, kRowH, nullptr);
 	mCurVer->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
-	mCurVer->labelsize(16);
+	mCurVer->labelsize(TextSize());
 	mCurVer->labelcolor(colors.text1);
 	mMfVer = new Fl_Box(FL_NO_BOX, kMargin + half, y, half, kRowH, nullptr);
 	mMfVer->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
-	mMfVer->labelsize(16);
+	mMfVer->labelsize(TextSize());
 	mMfVer->labelcolor(colors.text1);
 	y += kRowH + 8;
 
@@ -168,7 +168,7 @@ UpdateDialog::UpdateDialog(const std::string &aCurrentVersion,
 	Fl_Box *notesLabel = new Fl_Box(FL_NO_BOX, kMargin, y, kWidth - 2 * kMargin, 20,
 		"更新说明");
 	notesLabel->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
-	notesLabel->labelsize(16);
+	notesLabel->labelsize(TextSize());
 	notesLabel->labelcolor(colors.text1);
 	y += 20 + 4;
 
@@ -177,7 +177,7 @@ UpdateDialog::UpdateDialog(const std::string &aCurrentVersion,
 	// Fl_Text_Display does not own the buffer; it is detached and deleted in
 	// the destructor so its own teardown cannot reach a freed pointer.
 	mNotes->buffer(mNotesBuf);
-	mNotes->textsize(16);
+	mNotes->textsize(TextSize());
 	mNotes->textcolor(colors.text1);
 	mNotes->color(colors.background1);
 	mNotes->wrap_mode(Fl_Text_Display::WRAP_AT_BOUNDS, 0);

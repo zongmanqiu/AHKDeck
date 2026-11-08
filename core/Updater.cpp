@@ -495,8 +495,20 @@ bool HttpDownload(const std::string &aUrl, const std::wstring &aSavePath,
 		long long received = 0;
 		bool good = true;
 		bool readOk = true;
-		if (aProgress)
+		// m094: a 1.7 MB package used to post ~110 cross-thread updates, and a
+		// big one thousands. One emission per 100 ms (plus the final one) keeps
+		// the UI event queue short without making the bar look stuck.
+		unsigned long long lastEmit = 0;
+		auto emitProgress = [&](bool aForce) {
+			if (!aProgress)
+				return;
+			const unsigned long long now = GetTickCount64();
+			if (!aForce && now - lastEmit < 100)
+				return;
+			lastEmit = now;
 			aProgress(received, total);
+		};
+		emitProgress(true);
 		for (;;)
 		{
 			DWORD chunk = 0;
@@ -516,8 +528,7 @@ bool HttpDownload(const std::string &aUrl, const std::wstring &aSavePath,
 				break;
 			}
 			received += (long long)chunk;
-			if (aProgress)
-				aProgress(received, total);
+			emitProgress(false);
 		}
 		CloseHandle(file);
 		WinHttpCloseHandle(request);
@@ -546,6 +557,7 @@ bool HttpDownload(const std::string &aUrl, const std::wstring &aSavePath,
 			DeleteFileW(aSavePath.c_str());
 			return false;
 		}
+		emitProgress(true); // the bar must end at 100%, not at the last tick
 		return true;
 	}
 	aError = "too many redirects";
@@ -673,7 +685,7 @@ bool DownloadFile(const std::string &aUrl, const std::string &aSavePathUtf8,
 	return HttpDownload(aUrl, path, 60000, error, aProgress);
 }
 
-// Generates the updater batch. Modeled on pecia's proven recipe:
+// Generates the updater batch. Proven recipe:
 //   * CRLF line endings - cmd parses LF-only files unreliably;
 //   * UTF-8 BOM + chcp 65001, so Chinese install paths survive;
 //   * every step appends to ahkdeck_update.log, and the log (like the zip) is
@@ -729,6 +741,16 @@ bool WriteUpdateBat(const std::string &aExeDirUtf8,
 	bat += line("timeout /t 3 /nobreak >nul"); // let the file lock settle
 	bat += line("if exist \"!APP!AHKDeck.exe\" (>>\"!LOG!\" echo exe-present) else (>>\"!LOG!\" echo exe-MISSING)");
 
+	// m094: keep a rollback copy of the two things an update replaces. The exe
+	// is the file that makes the app start at all, and Scripts/ is what the
+	// user sees; a half-copied install with a broken exe is a bricked machine.
+	bat += line("echo Backing up the current build...");
+	bat += line(">>\"!LOG!\" echo backup");
+	bat += line("if exist \"!APPD!\\ahkdeck_backup\" rmdir /s /q \"!APPD!\\ahkdeck_backup\" 2>nul");
+	bat += line("mkdir \"!APPD!\\ahkdeck_backup\" 2>nul");
+	bat += line("if exist \"!APP!AHKDeck.exe\" copy /y \"!APP!AHKDeck.exe\" \"!APPD!\\ahkdeck_backup\\AHKDeck.exe\" >nul 2>&1");
+	bat += line("if exist \"!APPD!\\Scripts\" robocopy \"!APPD!\\Scripts\" \"!APPD!\\ahkdeck_backup\\Scripts\" /e /njh /njs /ndl /nc /ns /np /r:1 /w:1 >>\"!LOG!\" 2>&1");
+
 	// Extract, then locate the payload (a zip may wrap everything in one or
 	// two folders).
 	bat += line("echo [2/6] Extracting...");
@@ -766,6 +788,15 @@ bool WriteUpdateBat(const std::string &aExeDirUtf8,
 	bat += line("if exist \"!SRC!\\AHKDeck.exe\" (");
 	bat += line("  copy /y \"!SRC!\\AHKDeck.exe\" \"!APP!AHKDeck.exe\" >>\"!LOG!\" 2>&1");
 	bat += line("  if errorlevel 1 set \"FAIL=1\"");
+	bat += line(")");
+
+	// m094: a failed copy restores what we backed up. Never leave a half-new,
+	// half-old install: the stub exe plus the old Scripts is known to start.
+	bat += line("if \"!FAIL!\"==\"1\" (");
+	bat += line("  echo Rolling back...");
+	bat += line("  >>\"!LOG!\" echo rollback");
+	bat += line("  if exist \"!APPD!\\ahkdeck_backup\\AHKDeck.exe\" copy /y \"!APPD!\\ahkdeck_backup\\AHKDeck.exe\" \"!APP!AHKDeck.exe\" >>\"!LOG!\" 2>&1");
+	bat += line("  if exist \"!APPD!\\ahkdeck_backup\\Scripts\" robocopy \"!APPD!\\ahkdeck_backup\\Scripts\" \"!APPD!\\Scripts\" /e /njh /njs /ndl /nc /ns /np /r:1 /w:1 >>\"!LOG!\" 2>&1");
 	bat += line(")");
 
 	// Clean up ONLY on success: a failed robocopy keeps the package so a retry

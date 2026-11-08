@@ -96,12 +96,13 @@ int main()
 		SetEnvironmentVariableW(L"AHKDECK_SETTINGS", nullptr);
 
 		std::wstring fallback = ahkdeck::DefaultSettingsPath();
-		wchar_t base[MAX_PATH] = {0};
-		DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
-		if (n > 0 && n < MAX_PATH)
-			Check(fallback.find(L"AHKDeck") != std::wstring::npos, "default path is under AHKDeck");
-		else
-			Check(fallback.empty(), "default path is empty without LOCALAPPDATA");
+		wchar_t self[MAX_PATH] = {0};
+		DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
+		std::wstring exeDir(self, n > 0 ? n : 0);
+		const size_t cut = exeDir.find_last_of(L"\\/");
+		if (cut != std::wstring::npos)
+			exeDir.resize(cut);
+		Check(fallback == exeDir + L"\\ui.ini", "default path is portable (next to the exe)");
 	}
 
 	DeleteFileW(path.c_str());

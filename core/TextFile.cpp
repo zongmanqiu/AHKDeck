@@ -27,9 +27,14 @@ bool ReadAllBytes(const std::wstring &aPath, std::string &aOut, std::string &aEr
 	return true;
 }
 
+// m094: every write goes to <path>.tmp, is flushed, and is then renamed over
+// the destination. A power cut halfway through used to leave a truncated
+// settings.json, which the UI then refused to overwrite forever; now the old
+// file either survives intact or is replaced by a complete new one.
 bool WriteAllBytes(const std::wstring &aPath, const std::string &aBytes, std::string &aError)
 {
-	HANDLE file = CreateFileW(aPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+	const std::wstring tempPath = aPath + L".tmp";
+	HANDLE file = CreateFileW(tempPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
 		FILE_ATTRIBUTE_NORMAL, nullptr);
 	if (file == INVALID_HANDLE_VALUE)
 	{
@@ -45,12 +50,24 @@ bool WriteAllBytes(const std::wstring &aPath, const std::string &aBytes, std::st
 		if (!WriteFile(file, aBytes.data() + offset, chunk, &wrote, nullptr) || wrote == 0)
 		{
 			CloseHandle(file);
+			DeleteFileW(tempPath.c_str());
 			aError = "the write failed (disk full or access denied)";
 			return false;
 		}
 		offset += wrote;
 	}
+	FlushFileBuffers(file);
 	CloseHandle(file);
+
+	// Same volume, so the rename is atomic. WRITE_THROUGH makes the metadata
+	// durable before we report success.
+	if (!MoveFileExW(tempPath.c_str(), aPath.c_str(),
+			MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+	{
+		DeleteFileW(tempPath.c_str());
+		aError = "cannot replace the existing file";
+		return false;
+	}
 	return true;
 }
 

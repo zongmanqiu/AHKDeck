@@ -36,10 +36,10 @@ namespace ui
 // changed width when it was ticked. Both states are now drawn by hand with
 // the SAME single 1px border (g_borderColour), so the box keeps its width
 // and only the fill changes.
-class PeciaCheckButton : public Fl_Button
+class DeckCheckButton : public Fl_Button
 {
 public:
-	PeciaCheckButton(int x, int y, int w, int h, const char *label = nullptr)
+	DeckCheckButton(int x, int y, int w, int h, const char *label = nullptr)
 		: Fl_Button(x, y, w, h, label)
 	{
 		type(FL_TOGGLE_BUTTON);
@@ -84,7 +84,7 @@ public:
 	}
 };
 
-// Flat button with the Pecia hover/pressed fill (no 3D bevel).
+// Flat button with the deck hover/pressed fill (no 3D bevel).
 class HoverButton : public Fl_Button
 {
 public:
@@ -116,7 +116,7 @@ public:
 		return Fl_Button::handle(event);
 	}
 
-	// Pecia's one width rule for auto-sized dialog buttons: label + 12px each
+	// One width rule for auto-sized dialog buttons: label + 12px each
 	// side, never narrower than 48px.
 	int fitWidth() const
 	{
@@ -159,10 +159,10 @@ inline void FitButtonRow(std::initializer_list<Fl_Button *> aButtons,
 // the list and the editor had already replaced (m071 A2). Fl_Browser and
 // Fl_Text_Display are handled the same way: let the base draw, then repaint the
 // bar area.
-class PeciaScroll : public Fl_Scroll
+class DeckScroll : public Fl_Scroll
 {
 public:
-	PeciaScroll(int x, int y, int w, int h, const char *label = nullptr)
+	DeckScroll(int x, int y, int w, int h, const char *label = nullptr)
 		: Fl_Scroll(x, y, w, h, label)
 	{
 	}
@@ -171,9 +171,9 @@ public:
 	{
 		Fl_Scroll::draw();
 		fl_push_clip(x(), y(), w(), h());
-		DrawPeciaScrollbarCorner(&scrollbar, &hscrollbar);
-		DrawPeciaScrollbar(&scrollbar, false);
-		DrawPeciaScrollbar(&hscrollbar, true);
+		DeckDrawScrollbarCorner(&scrollbar, &hscrollbar);
+		DeckDrawScrollbar(&scrollbar, false);
+		DeckDrawScrollbar(&hscrollbar, true);
 		fl_pop_clip();
 	}
 };

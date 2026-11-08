@@ -20,6 +20,9 @@ from __future__ import annotations
 import json
 import sys
 
+# m072: never leave __pycache__ in the source tree (AGENTS.md rule 2).
+sys.dont_write_bytecode = True
+
 TOOLS = [
     {"name": "list_scripts", "description": "wrong", "inputSchema": {"type": "object"}},
     {"name": "read_script", "description": "wrong", "inputSchema": {"type": "object"}},

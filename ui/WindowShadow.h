@@ -77,7 +77,7 @@ void detachHwnd(void *nativeHandle);
 // Registered window message used by the broadcast (0 on non-Windows).
 unsigned int shadowMessage();
 
-// Ask the other Pecia processes (Lua console / AI chat) to apply the same
+// Ask the other deck processes (tool windows) to apply the same
 // on/off state.
 void broadcastEnabled(bool on);
 

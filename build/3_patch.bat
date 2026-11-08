@@ -13,7 +13,7 @@ REM                     (whole-file patches guarded by baseline.sha256)
 REM
 REM Conditional copy (content differs only): copy /Y always refreshes the
 REM destination mtime, so a timestamp can never tell "this file was re-patched"
-REM from "this file was touched". That ambiguity once cost pecia the menu
+REM from "this file was touched". That ambiguity once cost us the menu
 REM shadow. Conditional copy keeps mtime meaningful: it changes only when the
 REM bytes change, which is exactly when dependents must rebuild. It also prints
 REM only what changed, so a no-op run is visibly a no-op.
@@ -69,6 +69,13 @@ if exist "%PATCHES%\AutoHotkey_H-v2.0.25\source" (
     )
     for %%f in ("%PATCHES%\AutoHotkey_H-v2.0.25\source\*") do (
         call :sync "%%f" "%THIRDPARTY%\AutoHotkey_H-v2.0.25\source\%%~nxf" "source/%%~nxf"
+    )
+    REM m061: source\lib\file.cpp carries the stdout seam (FileAppend "*").
+    REM Explicit, one level, never a blind tree copy.
+    if exist "%PATCHES%\AutoHotkey_H-v2.0.25\source\lib" (
+        for %%f in ("%PATCHES%\AutoHotkey_H-v2.0.25\source\lib\*") do (
+            call :sync "%%f" "%THIRDPARTY%\AutoHotkey_H-v2.0.25\source\lib\%%~nxf" "source/lib/%%~nxf"
+        )
     )
 )
 

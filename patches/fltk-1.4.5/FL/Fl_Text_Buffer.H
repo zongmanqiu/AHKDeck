@@ -342,7 +342,7 @@ public:
   int redo(int *cp=0);
 
   /**
-   PATCHED by Pecia (FLTK_PATCHES.md Patch 6): begin an undo transaction.
+   PATCHED (FLTK_PATCHES.md Patch 6): begin an undo transaction.
    All buffer modifications between undo_begin() and undo_end() are
    treated as ONE undo/redo step. Nested calls are allowed (reference
    counted).
@@ -350,7 +350,7 @@ public:
   void undo_begin();
 
   /**
-   PATCHED by Pecia (FLTK_PATCHES.md Patch 6): end an undo transaction
+   PATCHED (FLTK_PATCHES.md Patch 6): end an undo transaction
    started with undo_begin().
    */
   void undo_end();
@@ -883,7 +883,7 @@ protected:
                                        a buffer modification operation */
   char mCanUndo;                  /**< if this buffer is used for attributes, it must
                                         not do any undo calls */
-  int mUndoGrouping;              /**< PATCHED by Pecia: undo transaction nesting counter */
+  int mUndoGrouping;              /**< PATCHED: undo transaction nesting counter */
   int mPreferredGapSize;          /**< the default allocation for the text gap is 1024
                                        bytes and should only be increased if frequent
                                        and large changes in buffer size are expected */

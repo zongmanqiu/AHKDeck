@@ -8,7 +8,7 @@
 // inset, and aligning to the window rect would smear the shadow's opaque core
 // over that transparent strip (a flat dark outline, not a gradient).
 //
-// Pecia is the opposite case: our border(0) windows handle WM_NCCALCSIZE and
+// The deck's own windows are the opposite case: our border(0) windows handle WM_NCCALCSIZE and
 // paint the NC_PAD strip themselves (WM_NCPAINT fills it with the window
 // background), so the strip is opaque and the visual edge IS the window rect.
 // Measured: EXTENDED_FRAME_BOUNDS comes back 5px inset on left/right/bottom,
@@ -113,7 +113,7 @@ void ensureShadowClass() {
     s_classReady = (RegisterClassW(&wc) != 0);
 }
 
-// The rect a human calls "the window": for Pecia's self-painted frames that
+// The rect a human calls "the window": for our self-painted frames that
 // is the window rect (see the geometry note above).
 void visualRect(HWND hwnd, RECT *out) {
     GetWindowRect(hwnd, out);
@@ -458,11 +458,11 @@ void broadcastEnabled(bool on) {
 
 }  // namespace windowShadow
 
-// FLTK menu-window hooks (see the Pecia patch in Fl_Menu.cxx). They live here
-// because WindowShadow.cpp is linked into Pecia, PeciaLua, PeciaAIChat and the
+// FLTK menu-window hooks (see the deck patch in Fl_Menu.cxx). They live here
+// because WindowShadow.cpp is linked into the deck executables and the
 // two UI smoke tests; other fltk.lib consumers resolve the stub via
 // /alternatename in Fl_Menu.cxx.
-void peciaMenuShadowShown(Fl_Window *win) {
+void deckMenuShadowShown(Fl_Window *win) {
     if (win && windowShadow::enabled()) {
         // Menus do not go through applyRoundedCorners(), so register the same
         // theme border colour the menu's FL_BORDER_BOX is drawn with. The
@@ -472,6 +472,6 @@ void peciaMenuShadowShown(Fl_Window *win) {
     }
 }
 
-void peciaMenuShadowHidden(Fl_Window *win) {
+void deckMenuShadowHidden(Fl_Window *win) {
     if (win) windowShadow::detach(win);
 }

@@ -66,7 +66,7 @@ int Fl_Scrollbar::handle(int event) {
   int area;
   int X=x(); int Y=y(); int W=w(); int H=h();
 
-  // PATCH (Pecia): no arrow zones. The custom-drawn scrollbars in Pecia's
+  // PATCH: no arrow zones. The custom-drawn scrollbars in the deck's
   // editor/tools paint the FULL widget rect as one track (no arrow buttons,
   // thumb reaching both ends), so the hit test must use the same full rect.
   // Upstream carves an arrow-sized strip (width W) off each end when
@@ -218,14 +218,14 @@ void Fl_Scrollbar::draw() {
     inset = 1;
 
   if (horizontal()) {
-    // PATCH (Pecia): no arrow zones -- see the note in handle(). The whole
+    // PATCH: no arrow zones -- see the note in handle(). The whole
     // widget rect is one slider track, matching the custom drawing and the
     // de-carved hit test. Arrow buttons are never drawn (they are unused
-    // and invisible under Pecia's custom scrollbar overlay).
+    // and invisible under the deck's custom scrollbar overlay).
     (void)ab; (void)inset;
     Fl_Slider::draw(X, Y, W, H);
   } else { // vertical
-    // PATCH (Pecia): no arrow zones -- see the note in handle().
+    // PATCH: no arrow zones -- see the note in handle().
     Fl_Slider::draw(X, Y, W, H);
   }
 }

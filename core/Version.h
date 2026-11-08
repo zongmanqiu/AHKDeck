@@ -1,16 +1,18 @@
-// core/Version.h - single source of truth for the product version.
-// The CMake project() version and this header must agree; test_version.cpp
-// pins the string so a bump that only touches one side fails the build.
+// core/Version.h - the version has ONE source: project(AHKDeck VERSION ...)
+// in CMakeLists.txt. Its three numbers arrive here as compile definitions
+// (AHKDECK_VERSION_MAJOR/MINOR/PATCH, PUBLIC on the core target), so a bump
+// touches CMakeLists.txt only - the .rc and VersionString() follow, and
+// test_version.cpp derives its expectation from these constants.
 
 #pragma once
 
 namespace ahkdeck {
 
-constexpr int kVersionMajor = 0;
-constexpr int kVersionMinor = 1;
-constexpr int kVersionPatch = 0;
+constexpr int kVersionMajor = AHKDECK_VERSION_MAJOR;
+constexpr int kVersionMinor = AHKDECK_VERSION_MINOR;
+constexpr int kVersionPatch = AHKDECK_VERSION_PATCH;
 
-// "0.1.0" - stable pointer, no allocation.
+// "major.minor.patch" - built once, stable pointer, no allocation per call.
 const char* VersionString();
 
 } // namespace ahkdeck

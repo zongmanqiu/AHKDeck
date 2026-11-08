@@ -18,13 +18,14 @@ struct WindowGeometry
 	int w = 0;
 	int h = 0;
 	// m027: frame appearance. Defaults are on; an old ui.ini without these
-	// keys keeps the Pecia look instead of silently turning it off.
+	// keys keeps the deck look instead of silently turning it off.
 	bool rounded = true;
 	bool shadow = true;
 	bool valid = false;
 };
 
-// AHKDECK_SETTINGS override first, then %LOCALAPPDATA%\AHKDeck\ui.ini.
+// AHKDECK_SETTINGS override first, then ui.ini next to the exe (portable: a
+// copied folder carries its settings; %LOCALAPPDATA% did not).
 std::wstring DefaultSettingsPath();
 
 // A missing file is normal (first run): returns true with valid=false.

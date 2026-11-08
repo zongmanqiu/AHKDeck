@@ -1,4 +1,4 @@
-// ui/UpdateDialog.h - "帮助 > 检查更新" (m092), ported from pecia.
+// ui/UpdateDialog.h - "帮助 > 检查更新" (m092).
 //
 // One modal window holds the whole flow: current state, source picker,
 // re-check, changelog, download progress and the update action.

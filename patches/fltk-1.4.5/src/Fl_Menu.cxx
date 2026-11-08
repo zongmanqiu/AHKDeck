@@ -32,27 +32,27 @@
 #include <stdio.h>
 #include "flstring.h"
 
-// Pecia: external popup checkbox fill color (set by Editor before popup())
-// Defined in Pecia's Theme.cpp; FLTK tools (fluid/fltk-options) don't use it.
+// Deck hook: external popup checkbox fill color (set by the editor before popup())
+// Defined in the deck's Theme.cpp; FLTK tools (fluid/fltk-options) don't use it.
 extern Fl_Color g_popupCheckColor;
 
-// PATCHED by Pecia (2026-10-22): theme border colour (core/Theme.cpp = theme
+// PATCHED (2026-10-22): theme border colour (Theme.cpp = theme
 // text1). Used for the menu divider line: one flat 1px solid line instead of
-// the upstream FL_DARK3/FL_LIGHT3 etched pair, so every popup in Pecia (menu
+// the upstream FL_DARK3/FL_LIGHT3 etched pair, so every popup in the deck (menu
 // bar, script bar, editor right-click, dropdowns) shows the same flat line.
 extern Fl_Color g_borderColour;
 
-// PATCHED by Pecia (2026-10-22): every popup menu gets the same outer glow as
-// the app windows. Implemented in ui/WindowShadow.cpp (Pecia/PeciaLua/
-// PeciaAIChat + the UI tests). Other fltk.lib consumers get the no-op fallback
+// PATCHED (2026-10-22): every popup menu gets the same outer glow as
+// the app windows. Implemented in ui/WindowShadow.cpp (deck
+// executables + the UI tests). Other fltk.lib consumers get the no-op fallback
 // below via /alternatename, so the third-party lib stays self-contained.
-extern void peciaMenuShadowShown(Fl_Window *);
-extern void peciaMenuShadowHidden(Fl_Window *);
+extern void deckMenuShadowShown(Fl_Window *);
+extern void deckMenuShadowHidden(Fl_Window *);
 #if defined(_MSC_VER)
-void peciaMenuShadowShownStub(Fl_Window *) {}
-void peciaMenuShadowHiddenStub(Fl_Window *) {}
-#pragma comment(linker, "/alternatename:?peciaMenuShadowShown@@YAXPEAVFl_Window@@@Z=?peciaMenuShadowShownStub@@YAXPEAVFl_Window@@@Z")
-#pragma comment(linker, "/alternatename:?peciaMenuShadowHidden@@YAXPEAVFl_Window@@@Z=?peciaMenuShadowHiddenStub@@YAXPEAVFl_Window@@@Z")
+void deckMenuShadowShownStub(Fl_Window *) {}
+void deckMenuShadowHiddenStub(Fl_Window *) {}
+#pragma comment(linker, "/alternatename:?deckMenuShadowShown@@YAXPEAVFl_Window@@@Z=?deckMenuShadowShownStub@@YAXPEAVFl_Window@@@Z")
+#pragma comment(linker, "/alternatename:?deckMenuShadowHidden@@YAXPEAVFl_Window@@@Z=?deckMenuShadowHiddenStub@@YAXPEAVFl_Window@@@Z")
 #endif
 
 /** Size of the menu starting from this menu item.
@@ -335,7 +335,7 @@ void Fl_Menu_Item::draw(int x, int y, int w, int h, const Fl_Menu_* m,
   if (flags & (FL_MENU_TOGGLE|FL_MENU_RADIO)) {
     int d = (h - FL_NORMAL_SIZE + 1) / 2;
     int W = h - 2 * d;
-    // Pecia patch: checkmark fill uses check_color() (theme highlight2)
+    // Deck patch: checkmark fill uses check_color() (theme highlight2)
     // when set, falling back to selection_color() otherwise.
     // g_popupCheckColor provides a reliable fallback for popup menus
     // where the static 'button' variable may not reflect the correct
@@ -359,7 +359,7 @@ void Fl_Menu_Item::draw(int x, int y, int w, int h, const Fl_Menu_* m,
       x += W;     // no extra gap between the box and the label
       w -= W;
     } else { // FL_MENU_TOGGLE && ! FL_MENU_RADIO
-      // Matches the find bar "Match Case" check box / all Pecia option boxes:
+      // Matches the find bar "Match Case" check box / all deck option boxes:
       //   unchecked = transparent box with only a border (FL_BORDER_FRAME,
       //   no fill);
       //   checked   = the box is filled with the menu's selection (highlight)
@@ -452,7 +452,7 @@ menuwindow::menuwindow(const Fl_Menu_Item* m, int X, int Y, int Wp, int Hp,
       // s is a pointer to the UTF-8 string for the entire shortcut
       // k points only to the key part (minus the modifier keys)
       const char *k, *s = fl_shortcut_label(m->shortcut_, &k);
-      // Pecia patch (2026-08-09, see main/build/FLTK_PATCHES.md):
+      // Patch (2026-08-09, see build/FLTK_PATCHES.md):
       // measurement must use the same threshold as the drawing code, or
       // long key names ("Delete") would be drawn in a too-narrow key
       // column and get truncated ("Del").
@@ -517,7 +517,7 @@ menuwindow::menuwindow(const Fl_Menu_Item* m, int X, int Y, int Wp, int Hp,
 
   if (t) {
     if (menubar_title) {
-      // PATCHED by Pecia (FLTK_PATCHES.md Patch 2): do not create the
+      // PATCHED (FLTK_PATCHES.md Patch 2): do not create the
       // menubar-button "pressed" overlay window. Its label is drawn
       // left-aligned +3px while the custom menu bar (HoverMenuBar)
       // draws it centered -> 2px label shift on click. HoverMenuBar
@@ -538,17 +538,17 @@ menuwindow::~menuwindow() {
   delete title;
 }
 
-// Pecia patch: attach/detach the shared outer glow around every menu popup
+// Deck patch: attach/detach the shared outer glow around every menu popup
 // (menu-bar dropdowns, right-click menus, Fl_Choice dropdowns, submenus).
 // The hidden() hook runs before Fl_Window::hide(), while fl_xid() is still
 // valid, so WindowShadow can destroy its layered companion immediately.
 void menuwindow::show() {
   window_with_items::show();
-  peciaMenuShadowShown(this);
+  deckMenuShadowShown(this);
 }
 
 void menuwindow::hide() {
-  peciaMenuShadowHidden(this);
+  deckMenuShadowHidden(this);
   window_with_items::hide();
 }
 
@@ -616,7 +616,7 @@ void menuwindow::drawentry(const Fl_Menu_Item* m, int n, int eraseit) {
     fl_font(f, m->labelsize_ ? m->labelsize_ :
                    button ? button->textsize() : FL_NORMAL_SIZE);
     const char *k, *s = fl_shortcut_label(m->shortcut_, &k);
-    // Pecia patch (2026-08-09, see .thirdparty/fltk-1.4.5/FLTK_PATCHES.md):
+    // Patch (2026-08-09, see FLTK_PATCHES.md):
     // the stock threshold of 4 chars pushed long key names ("Delete",
     // "Backspace", "Page_Up") into the whole-text-right-aligned branch,
     // so their left edge did not line up with short keys ("F3", "Esc").
@@ -636,9 +636,9 @@ void menuwindow::drawentry(const Fl_Menu_Item* m, int n, int eraseit) {
   }
 
   if (m->flags & FL_MENU_DIVIDER) {
-    // PATCHED by Pecia (2026-10-22): single flat 1px line in the theme border
+    // PATCHED (2026-10-22): single flat 1px line in the theme border
     // colour (g_borderColour) instead of the two-tone DARK3/LIGHT3 etched
-    // pair. One shared draw path = every Pecia popup menu renders the same
+    // pair. One shared draw path = every deck popup menu renders the same
     // flat separator (menu bar, right-click menu, Fl_Choice, script bar).
     fl_color(g_borderColour);
     fl_xyline(BW-1, yy+hh+(Fl::menu_linespacing()-2)/2, W-2*BW+2);
@@ -672,7 +672,7 @@ void menuwindow::draw() {
 }
 
 void menuwindow::set_selected(int n) {
-  // PATCHED by Pecia (see main/build/FLTK_PATCHES.md Patch 5):
+  // PATCHED (see build/FLTK_PATCHES.md Patch 5):
   // FL_DAMAGE_CHILD makes Fl_Double_Window::flush() take the
   // single-buffer path, so highlight changes bypassed the offscreen
   // compositing and flickered. FL_DAMAGE_ALL forces the double-buffer
@@ -1173,7 +1173,7 @@ const Fl_Menu_Item* Fl_Menu_Item::pulldown(
         nX = cw.x() + cw.titlex(pp.item_number);
         nY = cw.y() + cw.h();
         initial_item = 0;
-        // PATCHED by Pecia (FLTK_PATCHES.md Patch 2): clearing 	itle
+        // PATCHED (FLTK_PATCHES.md Patch 2): clearing 	itle
         // prevents the menubar button "pressed" menutitle window from
         // being created (menu_window ctor with menubar_title=1). Its
         // label is drawn left-aligned +3px while the custom menu bar
@@ -1223,7 +1223,7 @@ const Fl_Menu_Item* Fl_Menu_Item::pulldown(
     } else { // !m->submenu():
       while (pp.nummenus > pp.menu_number+1) delete pp.p[--pp.nummenus];
       if (!pp.menu_number && pp.menubar) {
-        // fakemenu DISABLED by Pecia (FLTK_PATCHES.md Patch 2): the fake
+        // fakemenu DISABLED (FLTK_PATCHES.md Patch 2): the fake
         // "menubar button" window (its menutitle draws the label
         // left-aligned +3px while HoverMenuBar draws it centered) shifts
         // the button label on click. HoverMenuBar paints its own pressed

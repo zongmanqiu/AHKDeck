@@ -19,7 +19,7 @@ namespace ui
 namespace
 {
 
-// Pecia light.ini values (8 semantic keys).
+// Light theme values (8 semantic keys).
 const ThemeColors kLight = {
 	fl_rgb_color(0, 0, 0),       // text1
 	fl_rgb_color(140, 140, 140), // text2
@@ -32,7 +32,7 @@ const ThemeColors kLight = {
 };
 
 // FLTK's stock FL_BORDER_BOX hardcodes FL_BLACK; replace it with the themed
-// line colour. Same trick as Pecia's theme_registerBorderBox().
+// line colour (see ThemedBorderBox below).
 void ThemedBorderBox(int x, int y, int w, int h, Fl_Color background)
 {
 	Fl::set_box_color(background);
@@ -79,6 +79,23 @@ Fl_Color MenuBarBackground()
 	return fl_color_average(kLight.background2, kLight.background3, 0.5f);
 }
 
+// m071: one definition per semantic colour, so a widget can no longer invent a
+// second red or a second green.
+Fl_Color AlertRed()
+{
+	return fl_rgb_color(0xC6, 0x28, 0x28);
+}
+
+Fl_Color RunningGreen()
+{
+	return fl_rgb_color(0x2E, 0x7D, 0x32);
+}
+
+Fl_Color CloseHoverRed()
+{
+	return fl_rgb_color(200, 60, 60);
+}
+
 Fl_Color FrameBorderColour()
 {
 	return kLight.text1;
@@ -86,7 +103,7 @@ Fl_Color FrameBorderColour()
 
 void ApplyDeckTheme()
 {
-	// Pecia's stock-widget scheme. Our own widgets paint themselves; this is
+	// The stock-widget scheme. Our own widgets paint themselves; this is
 	// for the ones we do not replace (Fl_Choice popups, file chooser, stock
 	// dialogs), so they share the flat gtk+ look instead of FLTK's 3D default.
 	Fl::scheme("gtk+");
@@ -107,12 +124,12 @@ void ApplyDeckTheme()
 	Fl::set_boxtype(FL_BORDER_BOX, ThemedBorderBox, 1, 1, 2, 2);
 	Fl::set_boxtype(FL_BORDER_FRAME, ThemedBorderFrame, 1, 1, 2, 2);
 
-	// Pecia themes Fl_Tooltip globally (it is static state, not a widget
+	// Fl_Tooltip is themed globally (it is static state, not a widget
 	// property). Without this every tooltip kept FLTK's pale-yellow default.
 	Fl_Tooltip::color(kLight.background3);
 	Fl_Tooltip::textcolor(kLight.text1);
 	Fl_Tooltip::font(FL_HELVETICA);
-	Fl_Tooltip::size(16);
+	Fl_Tooltip::size(TextSize());
 }
 
 void StyleButton(Fl_Button *aButton)
@@ -124,7 +141,7 @@ void StyleButton(Fl_Button *aButton)
 	aButton->color(colors.background3);
 	aButton->selection_color(colors.highlight1);
 	aButton->labelcolor(colors.text1);
-	aButton->labelsize(16);
+	aButton->labelsize(TextSize());
 }
 
 void StyleInput(Fl_Input *aInput)
@@ -137,7 +154,7 @@ void StyleInput(Fl_Input *aInput)
 	aInput->textcolor(colors.text1);
 	aInput->cursor_color(colors.text1);
 	aInput->selection_color(colors.highlight2);
-	aInput->textsize(16);
+	aInput->textsize(TextSize());
 }
 
 void StyleChoice(Fl_Choice *aChoice)
@@ -149,8 +166,8 @@ void StyleChoice(Fl_Choice *aChoice)
 	aChoice->color(colors.background1);
 	aChoice->textcolor(colors.text1);
 	aChoice->selection_color(colors.highlight2);
-	aChoice->labelsize(16);
-	aChoice->textsize(16);
+	aChoice->labelsize(TextSize());
+	aChoice->textsize(TextSize());
 }
 
 void StyleTextDisplay(Fl_Text_Display *aDisplay)
@@ -170,7 +187,7 @@ void StyleTextDisplay(Fl_Text_Display *aDisplay)
 
 namespace
 {
-// Copied from Pecia ui/ThemeWidgets.h. FLTK's own thumb geometry is the
+// FLTK's own thumb geometry is the
 // authority for the hit test; drawing anything else (the old 20px floor) makes
 // the visible thumb larger than the grab area.
 void ThumbGeometry(const Fl_Scrollbar *aBar, int aTrackOrigin, int aTrackLen,
@@ -205,7 +222,7 @@ void ThumbGeometry(const Fl_Scrollbar *aBar, int aTrackOrigin, int aTrackLen,
 }
 } // namespace
 
-void DrawPeciaScrollbar(Fl_Scrollbar *aBar, bool aHorizontal)
+void DeckDrawScrollbar(Fl_Scrollbar *aBar, bool aHorizontal)
 {
 	if (!aBar || !aBar->visible_r())
 		return;
@@ -234,7 +251,7 @@ void DrawPeciaScrollbar(Fl_Scrollbar *aBar, bool aHorizontal)
 		fl_rectf(sx, thumbPos, sw, thumbLen);
 }
 
-void DrawPeciaScrollbarCorner(Fl_Scrollbar *aVertical, Fl_Scrollbar *aHorizontal)
+void DeckDrawScrollbarCorner(Fl_Scrollbar *aVertical, Fl_Scrollbar *aHorizontal)
 {
 	if (!aVertical || !aHorizontal || !aVertical->visible_r() || !aHorizontal->visible_r())
 		return;

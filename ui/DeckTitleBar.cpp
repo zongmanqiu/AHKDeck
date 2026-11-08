@@ -22,7 +22,7 @@ namespace
 constexpr int kButtonW = 32;
 constexpr int kIconMargin = 6;
 constexpr int kIconSz = 18;
-const Fl_Color kCloseHover = fl_rgb_color(200, 60, 60);
+const Fl_Color kCloseHover = CloseHoverRed();
 } // namespace
 
 DeckTitleBar::DeckTitleBar(int x, int y, int w, int h)
@@ -113,6 +113,12 @@ void DeckTitleBar::DrawButton(int bx, int bw, Hit hit) const
 
 void DeckTitleBar::draw()
 {
+	// The pointer decides the tint, not a remembered flag: windows that were
+	// hidden, minimised or moved out from under the mouse never got their
+	// FL_LEAVE, and every repaint after returning would otherwise re-tint the
+	// button the user last clicked.
+	mHover = CursorHit();
+
 	fl_color(Background());
 	fl_rectf(x(), y(), w(), h());
 
@@ -240,6 +246,35 @@ int DeckTitleBar::handle(int event)
 	}
 	default:
 		return Fl_Widget::handle(event);
+	}
+}
+
+DeckTitleBar::Hit DeckTitleBar::CursorHit() const
+{
+	Fl_Window *win = window();
+	if (!win || !win->visible())
+		return Hit::None;
+	HWND hwnd = fl_xid(win);
+	if (!hwnd || !IsWindowVisible(hwnd) || IsIconic(hwnd))
+		return Hit::None;
+	POINT pt = {0, 0};
+	if (!GetCursorPos(&pt))
+		return Hit::None;
+	// Only our own surface counts: with a popup or another app on top the
+	// pointer is over that window, not over this button.
+	if (WindowFromPoint(pt) != hwnd)
+		return Hit::None;
+	ScreenToClient(hwnd, &pt);
+	return HitTest(pt.x - x(), pt.y - y());
+}
+
+void DeckTitleBar::RefreshHoverFromCursor()
+{
+	const Hit hit = CursorHit();
+	if (hit != mHover)
+	{
+		mHover = hit;
+		redraw();
 	}
 }
 

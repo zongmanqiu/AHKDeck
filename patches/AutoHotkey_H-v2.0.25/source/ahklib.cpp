@@ -45,7 +45,9 @@ thread_local IDispatch *lib_ProblemCallback = nullptr;
 #define DECK_JSON_MAX (16 * 1024)
 
 static DeckErrorSinkFn s_DeckErrorSink = nullptr;
+static DeckOutputSinkFn s_DeckOutputSink = nullptr;
 static volatile LONG s_DeckErrorSeq = 0;
+static volatile LONG s_DeckOutputSeq = 0;
 
 bool g_DeckIsolatedScripts = false;
 
@@ -162,6 +164,33 @@ bool DeckNotifyError(LPCTSTR aMessage, LPCTSTR aExtra, Line *aLine, int aErrorTy
 	DeckPut(json, _countof(json), n, "\"}");
 
 	s_DeckErrorSink(json);
+	return true;
+}
+
+// m061: one JSON line per FileAppend-to-"*" call, built on the script thread.
+// The host attributes it to a session by the thread id, exactly as it does for
+// errors. Returning false means "no sink": the caller then follows upstream.
+bool DeckNotifyOutput(LPCTSTR aText)
+{
+	if (!s_DeckOutputSink)
+		return false;
+
+	char text_utf8[8192], ts[32];
+	DeckUtf8(aText ? aText : _T(""), text_utf8, _countof(text_utf8));
+	DeckTimestamp(ts, _countof(ts));
+
+	int seq = (int)InterlockedIncrement(&s_DeckOutputSeq);
+	unsigned thread = (unsigned)GetCurrentThreadId();
+
+	char json[DECK_JSON_MAX];
+	_snprintf_s(json, _countof(json), _TRUNCATE,
+		"{\"ts\":\"%s\",\"thread\":%u,\"seq\":%d,\"kind\":\"stdout\",\"message\":\"",
+		ts, thread, seq);
+	int n = (int)strlen(json);
+	DeckPutEscaped(json, _countof(json), n, text_utf8);
+	DeckPut(json, _countof(json), n, "\"}");
+
+	s_DeckOutputSink(json);
 	return true;
 }
 #endif // CONFIG_DLL
@@ -931,6 +960,12 @@ AHKAPI(void) DeckSetErrorSink(DeckErrorSinkFn aSink)
 {
 #pragma comment(linker,"/export:" __FUNCTION__"=" __FUNCDNAME__)
 	s_DeckErrorSink = aSink;
+}
+
+AHKAPI(void) DeckSetOutputSink(DeckOutputSinkFn aSink)
+{
+#pragma comment(linker,"/export:" __FUNCTION__"=" __FUNCDNAME__)
+	s_DeckOutputSink = aSink;
 }
 
 AHKAPI(void) DeckSetScriptIsolation(bool aEnabled)

@@ -13,6 +13,8 @@
 - 将脚本放入程序旁的 `Scripts/`，在列表中运行、停止、重启或编辑。
 - 内置编辑器提供保存、查找替换；当前编辑脚本的运行回执与内核错误显示在控制台，各会话日志写入程序旁的 `Logs/`。
 - AI 接入使用 MCP stdio：外部客户端负责模型和修正循环，本程序提供脚本工具与可见编辑区，不内建聊天面板。
+- 每次启动会清理程序旁 `.temp/`、`Backups/`、`Logs/` 里超过 30 天的旧文件；天数在 `settings.json` 的
+  `housekeeping.max_age_days`（`0` 关闭），不在界面上暴露。
 - 仅运行可信脚本。工具路径校验不等于脚本执行沙箱；与官方 AHK 的一致性由具体对拍用例验证，不作完全兼容保证。
 
 在解压后的程序目录运行：
@@ -20,8 +22,8 @@
 ```bat
 AHKDeck.exe
 AHKDeck.exe --version
-AHKDeck.exe --run Scripts\示例-报错.ahk
-AHKDeck.exe --journal --run Scripts\示例-报错.ahk
+AHKDeck.exe --run Scripts\鼠标左键双击最小间隔.ahk
+AHKDeck.exe --journal --run Scripts\鼠标左键双击最小间隔.ahk
 AHKDeck.exe --mcp-stdio
 AHKDeck.exe --quit 目标实例PID
 ```

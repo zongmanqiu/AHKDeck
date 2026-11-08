@@ -1,7 +1,7 @@
-# check_fltk_patch.ps1 - verify that every Pecia hook the FLTK patch calls is
+# check_fltk_patch.ps1 - verify that every deck hook the FLTK patch calls is
 # actually present in fltk.lib.
 #
-# Why this exists (2026-10-23): Fl_Menu.cxx calls peciaMenuShadowShown/Hidden and
+# Why this exists (2026-10-23): Fl_Menu.cxx calls deckMenuShadowShown/Hidden and
 # provides an empty fallback via /alternatename. If the library was built from
 # patched sources but later rebuilt from pristine ones (or vice versa), the build
 # stays green, the app runs, and the feature silently disappears - the menu
@@ -9,7 +9,7 @@
 # copies unconditionally, and a copy sets mtime to "now", so "patches newer than
 # lib" is not a reliable signal.
 #
-# So check the OUTPUT instead: extract every `extern ... peciaXxx(...)` hook the
+# So check the OUTPUT instead: extract every `extern ... deckXxx(...)` hook the
 # archived FLTK patch declares, and make sure the string is inside fltk.lib.
 # Patch a new hook in and the check follows automatically.
 #
@@ -35,7 +35,7 @@ if (Test-Path -LiteralPath $PatchDir) {
 }
 foreach ($f in $files) {
     $text = [IO.File]::ReadAllText($f.FullName)
-    foreach ($m in [regex]::Matches($text, 'extern\s+[\w\*\s]+?\b(pecia[A-Za-z0-9_]+)\s*\(')) {
+    foreach ($m in [regex]::Matches($text, 'extern\s+[\w\*\s]+?\b(deck[A-Za-z0-9_]+)\s*\(')) {
         $name = $m.Groups[1].Value
         if (-not $hooks.Contains($name)) { $hooks.Add($name) }
     }

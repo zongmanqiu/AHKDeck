@@ -17,6 +17,7 @@
 
 #include "ui/CaretBlink.h"
 #include "ui/ImeInPlace.h"
+#include "ui/Theme.h"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Input.H>
@@ -70,9 +71,10 @@ public:
         else drawHint();
     }
 
-    // --- m084: the inline hint (Pecia's gray note inside an empty field) ---
+    // --- m084: the inline hint (a gray note inside an empty field) ---
     //
-    // Pecia draws a gray "Find:" / "Replace:" note INSIDE the input, and it
+    // The find/replace inputs draw a gray "Find:" / "Replace:" note INSIDE the
+    // input, and it
     // only shows while the field is empty and not focused. A separate widget
     // on top of the input would swallow clicks; drawing it here cannot.
     void setHint(const char *aText) {
@@ -155,13 +157,13 @@ private:
         if (m_hint.empty()) return;
         const char *val = this->value();
         if (val && *val) return;            // only while the field is empty
-        if (Fl::focus() == this) return;    // Pecia hides it while focused
+        if (Fl::focus() == this) return;    // hidden while focused
         const int X = this->x() + Fl::box_dx(this->box());
         const int Y = this->y() + Fl::box_dy(this->box());
         const int W = this->w() - Fl::box_dw(this->box());
         const int H = this->h() - Fl::box_dh(this->box());
         if (W <= 0 || H <= 0) return;
-        // The hint sits a little smaller than the text, like Pecia's note.
+        // The hint sits a little smaller than the text, like the note does.
         const int size = this->textsize() > 2 ? this->textsize() - 2 : this->textsize();
         fl_font(this->textfont(), size);
         const int lineH = fl_height();
@@ -170,7 +172,7 @@ private:
         // line instead would push the hint half out of the field.
         const int baseline = (H - lineH) / 2 + (lineH - fl_descent());
         fl_push_clip(X, Y, W, H);
-        fl_color(fl_rgb_color(140, 140, 140));
+        fl_color(ahkdeck::ui::DeckColors().text2);
         fl_draw(m_hint.c_str(), X + 1, Y + baseline);
         fl_pop_clip();
     }

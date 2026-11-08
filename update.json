@@ -1,8 +1,8 @@
 {
   "version": "0.1.0",
   "published": "2026-11-07",
-  "notes": "0.1.0 测试版：新增帮助菜单与检查更新（完整自动更新链路）；快捷键唯一契约（冲突时前一个转为空）；关于对话框照搬 pecia；视图菜单未勾选框改为 1px 细线；快捷键设置窗口只对捕获快捷键的单元格做悬停高亮。",
-  "notes_en": "0.1.0 beta: Help menu with Check for updates (full update pipeline); unique hotkey contract (the previous binding is cleared on conflict); About dialog aligned with pecia; 1px hairline for unchecked menu boxes; hover tint only on the shortcut capture cell.",
+  "notes": "0.1.0 测试版：新增帮助菜单与检查更新（完整自动更新链路）；快捷键唯一契约（冲突时前一个转为空）；关于对话框样式统一；视图菜单未勾选框改为 1px 细线；快捷键设置窗口只对捕获快捷键的单元格做悬停高亮。",
+  "notes_en": "0.1.0 beta: Help menu with Check for updates (full update pipeline); unique hotkey contract (the previous binding is cleared on conflict); About dialog style unified; 1px hairline for unchecked menu boxes; hover tint only on the shortcut capture cell.",
   "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.1.0/AHKDeck_0.1.0.zip",
   "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.1.0/AHKDeck_0.1.0.zip"
 }

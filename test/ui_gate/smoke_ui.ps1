@@ -118,7 +118,7 @@ try {
 
     $target = if ($Case -eq "boom") { "ui-boom.ahk" } else { "ui-smoke.ahk" }
     $row = RowOf $target
-    [W]::Click($h, 120, 58 + (($row - 1) * 26) + 10)   # select the probe row (m035: Pecia pitch 26)
+    [W]::Click($h, 120, 58 + (($row - 1) * 26) + 10)   # select the probe row (m035: row pitch 26)
     Start-Sleep -Milliseconds 250
     [W]::Click($h, 30, 58 + (($row - 1) * 26) + 10)   # play glyph = run
     Start-Sleep -Milliseconds 1500

@@ -1,5 +1,5 @@
 // AboutDialog.h - "关于 AHKDeck" dialog: version, author, repository links,
-// license and donation QR codes. Structure mirrored from pecia's AboutDialog.
+// license and donation QR codes.
 #pragma once
 
 namespace ahkdeck

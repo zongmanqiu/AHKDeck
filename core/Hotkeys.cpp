@@ -87,6 +87,27 @@ bool EqualsIgnoreCase(const std::string &aLeft, const char *aRight)
 	return true;
 }
 
+// m117: "F1".."F24" with no modifier is the one bare key the system scope
+// accepts. A function key is a deliberate press, never something typed into a
+// field, so owning it system-wide is what the user asked for; every other bare
+// key (letters, digits, Enter, Esc) would eat typing or navigation everywhere
+// in the session and stays refused.
+bool IsFunctionKeyName(const std::string &aKey)
+{
+	if (aKey.size() < 2 || aKey.size() > 3)
+		return false;
+	if (aKey[0] != 'F' && aKey[0] != 'f')
+		return false;
+	int number = 0;
+	for (size_t i = 1; i < aKey.size(); ++i)
+	{
+		if (aKey[i] < '0' || aKey[i] > '9')
+			return false;
+		number = number * 10 + (aKey[i] - '0');
+	}
+	return number >= 1 && number <= 24;
+}
+
 // The four AHK modifier symbols as Win32 modifier flags.
 unsigned int SymbolModifier(const std::string &aText, size_t aAt)
 {
@@ -240,12 +261,12 @@ bool ParseHotkeyText(const std::string &aText, HotkeyScope aScope, unsigned int 
 		aError = "缺少主键（例：^!d、F6、#+Enter）";
 		return false;
 	}
-	if (mods == 0 && aScope == HotkeyScope::System)
+	if (mods == 0 && aScope == HotkeyScope::System && !IsFunctionKeyName(key))
 	{
 		// v1.3 registered the same bindings as a hotkey string; AHK could get away
 		// with a bare letter only through its own keyboard hook. RegisterHotKey with
 		// no modifier would eat that letter everywhere in the session.
-		aError = "至少要一个修饰键（^ Ctrl、! Alt、+ Shift、# Win）";
+		aError = "至少要一个修饰键（^ Ctrl、! Alt、+ Shift、# Win），或使用功能键（F1-F24）";
 		return false;
 	}
 
@@ -321,11 +342,16 @@ std::wstring DefaultHotkeyPath()
 	if (n > 0 && n < MAX_PATH)
 		return explicitPath;
 
-	wchar_t base[MAX_PATH] = {0};
-	n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
+	wchar_t exe[MAX_PATH] = {0};
+	n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
 	if (n == 0 || n >= MAX_PATH)
 		return std::wstring();
-	return std::wstring(base) + L"\\AHKDeck\\hotkeys.txt";
+	// m094: portable first, same rule as the settings file.
+	std::wstring path(exe, n);
+	const size_t slash = path.find_last_of(L"\\/");
+	if (slash != std::wstring::npos)
+		path.resize(slash);
+	return path + L"\\hotkeys.txt";
 }
 
 bool LoadHotkeys(const std::wstring &aPath, std::vector<HotkeyEntry> &aOut, std::string &aError)
@@ -485,6 +511,50 @@ void MakeShortcutsUnique(std::vector<std::pair<std::string, std::string>> &aRows
 			break;
 		}
 	}
+}
+
+std::vector<HotkeyIssue> AuditHotkeys(const std::vector<HotkeyEntry> &aEntries)
+{
+	std::vector<HotkeyIssue> issues;
+	for (size_t i = 0; i < aEntries.size(); ++i)
+	{
+		const HotkeyEntry &entry = aEntries[i];
+		if (entry.hotkey.empty())
+			continue;
+
+		unsigned int mods = 0;
+		unsigned int virtualKey = 0;
+		std::string canonical;
+		std::string error;
+		if (!ParseAhkHotkey(entry.hotkey, mods, virtualKey, canonical, error))
+		{
+			issues.push_back({entry.name, entry.hotkey, error});
+			continue;
+		}
+
+		// Second pass over the earlier entries only: one conflict is reported
+		// once, on the later row. The later row is the one that silently loses
+		// when Windows refuses the duplicate registration.
+		for (size_t j = 0; j < i; ++j)
+		{
+			const HotkeyEntry &other = aEntries[j];
+			if (other.hotkey.empty())
+				continue;
+			unsigned int otherMods = 0;
+			unsigned int otherKey = 0;
+			std::string otherCanonical;
+			std::string otherError;
+			if (!ParseAhkHotkey(other.hotkey, otherMods, otherKey, otherCanonical, otherError))
+				continue;
+			if (otherKey == virtualKey && (otherMods & 0x00FF) == (mods & 0x00FF))
+			{
+				issues.push_back({entry.name, entry.hotkey,
+					"与前一条 " + other.name + " 相同（" + other.hotkey + "），本条注册会失败"});
+				break;
+			}
+		}
+	}
+	return issues;
 }
 
 } // namespace ahkdeck

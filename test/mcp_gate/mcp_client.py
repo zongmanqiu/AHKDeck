@@ -27,15 +27,28 @@ import sys
 import time
 from pathlib import Path
 
+# m072: importing this file as a module must not leave __pycache__ in the source
+# tree (AGENTS.md rule 2); the source_tree gate now enforces it.
+sys.dont_write_bytecode = True
+
 EXPECTED_TOOLS = {
     "list_scripts",
     "read_script",
     "edit_editor",
+    "check_editor",
+    "validate_editor",
+    "patch_editor",
     "run_editor",
     "run_script",
     "get_session_output",
     "stop_script",
+    "list_sessions",
+    "stop_all",
 }
+
+# m101: the legal write_script success path needs a file inside Scripts; the
+# gate removes it (and the backups it causes) when it is done.
+WRITE_PROBE = "mcp-gate-write-probe.ahk"
 
 # v1 comma syntax on purpose: this is the exact class of mistake m059/m060 kept
 # chasing. The gate's point is that the loop SEES the failure through the
@@ -162,7 +175,7 @@ def probe(client: McpStdio, resident_file: Path, exe_dir: Path,
     listed = client.request("tools/list")
     tools = (listed.get("result") or {}).get("tools") or []
     names = {t.get("name") for t in tools}
-    cell("tools/list count == 7", len(tools) == len(EXPECTED_TOOLS),
+    cell("tools/list count == 12", len(tools) == len(EXPECTED_TOOLS),
          f"got {len(tools)}: {sorted(names)}")
     cell("tools/list names exact", names == EXPECTED_TOOLS,
          f"missing={sorted(EXPECTED_TOOLS - names)} extra={sorted(names - EXPECTED_TOOLS)}")
@@ -184,6 +197,61 @@ def probe(client: McpStdio, resident_file: Path, exe_dir: Path,
          isinstance(run_props.get("timeout_ms"), dict)
          and run_props["timeout_ms"].get("type") == "integer",
          json.dumps(run_props, ensure_ascii=False)[:200])
+    # m101: the descriptions carry the calling order, not just the function.
+    # A model that guesses ids or stops a resident script before reading its
+    # output wastes a session; the text is the only place that can prevent it.
+    descs = {t.get("name"): str(t.get("description") or "") for t in tools}
+    cell("list_scripts description carries the id-first rule",
+         "id" in descs.get("list_scripts", "") and "list_scripts" in descs.get("list_scripts", ""),
+         descs.get("list_scripts", "")[:160])
+    cell("run_script description points at list_scripts",
+         "list_scripts" in descs.get("run_script", ""), descs.get("run_script", "")[:160])
+    cell("get_session_output description points at stop_script",
+         "stop_script" in descs.get("get_session_output", ""),
+         descs.get("get_session_output", "")[:160])
+    cell("edit_editor description says it does not touch disk",
+         "不落盘" in descs.get("edit_editor", ""), descs.get("edit_editor", "")[:160])
+    out_props = schemas.get("get_session_output", {}).get("properties") or {}
+    cell("max_bytes is an optional integer",
+         isinstance(out_props.get("max_bytes"), dict)
+         and out_props["max_bytes"].get("type") == "integer"
+         and "max_bytes" not in (schemas.get("get_session_output", {}).get("required") or []),
+         json.dumps(out_props, ensure_ascii=False)[:200])
+    cell("after_offset is an optional integer",
+         isinstance(out_props.get("after_offset"), dict)
+         and out_props["after_offset"].get("type") == "integer"
+         and "after_offset" not in (schemas.get("get_session_output", {}).get("required") or []),
+         json.dumps(out_props, ensure_ascii=False)[:200])
+    cell("session tools take no required arguments",
+         (schemas.get("list_sessions", {}).get("required") or []) == []
+         and (schemas.get("stop_all", {}).get("required") or []) == [],
+         json.dumps(schemas.get("list_sessions", {}), ensure_ascii=False)[:160])
+    re_props = schemas.get("run_editor", {}).get("properties") or {}
+    cell("args is an optional array of strings",
+         isinstance(re_props.get("args"), dict)
+         and re_props["args"].get("type") == "array"
+         and (re_props["args"].get("items") or {}).get("type") == "string"
+         and "args" not in (schemas.get("run_editor", {}).get("required") or []),
+         json.dumps(re_props, ensure_ascii=False)[:200])
+    cell("check_editor takes no required arguments",
+         "check_editor" in names
+         and (schemas.get("check_editor", {}).get("required") or []) == [],
+         json.dumps(schemas.get("check_editor", {}), ensure_ascii=False)[:160])
+    cell("validate_editor takes no required arguments",
+         "validate_editor" in names
+         and (schemas.get("validate_editor", {}).get("required") or []) == [],
+         json.dumps(schemas.get("validate_editor", {}), ensure_ascii=False)[:160])
+    cell("validate_editor description says it only parses",
+         "不执行" in descs.get("validate_editor", ""),
+         descs.get("validate_editor", "")[:160])
+    patch_edits = (schemas.get("patch_editor", {}).get("properties") or {}).get("edits") or {}
+    patch_items = patch_edits.get("items") or {}
+    cell("patch_editor edits are objects with an op",
+         "patch_editor" in names
+         and patch_edits.get("type") == "array"
+         and ((patch_items.get("properties") or {}).get("op") or {}).get("type") == "string"
+         and patch_items.get("required") == ["op"],
+         json.dumps(patch_edits, ensure_ascii=False)[:200])
 
     # --- 3. protocol errors -----------------------------------------------
     bad = client.request("tools/nope")
@@ -232,6 +300,7 @@ def probe(client: McpStdio, resident_file: Path, exe_dir: Path,
     # --- 5. the closed loop the user asked for ----------------------------
     client.tool("edit_editor", {"content": BROKEN})
     run1, _ = client.tool("run_editor", {"timeout_ms": 6000})
+    broken_session = run1.get("session")
     saw_failure = (run1.get("rc") not in (None, 0)) or run1.get("fatal") is True
     cell("run_editor reports the broken script", saw_failure,
          f"state={run1.get('state')} rc={run1.get('rc')} fatal={run1.get('fatal')}")
@@ -245,12 +314,35 @@ def probe(client: McpStdio, resident_file: Path, exe_dir: Path,
     # payload must not.
     leaks = [m.group(0) for m in re.finditer(r"[A-Za-z]:[\\/][^\"\\s]{0,60}", out1)]
     cell("no drive-letter path in run output", not leaks, str(leaks)[:200])
-    cell("the failing file is still named", "ai-editor.ahk" in out1, out1[:200].replace("\n", " | "))
+    cell("the failing file is still named",
+         "AHKDeck-preview.ahk" in out1 or "mcp-autosave-probe.ahk" in out1,
+         out1[:200].replace("\n", " | "))
+    # m062: a run copy in the script's own folder means A_ScriptDir matches what
+    # the user gets after saving; the tool must say which kind of copy it used.
+    cell("run_editor names its run copy",
+         run1.get("script_dir") in ("real", "sibling", "temp"),
+         f"script_dir={run1.get('script_dir')}")
+    cell("a broken script is a fail verdict", run1.get("verdict") == "fail",
+         f"verdict={run1.get('verdict')}")
+    # m062: errors are objects, not prose - the line number must be a field.
+    errs = run1.get("errors") or []
+    cell("errors carry the failing line as a number",
+         bool(errs) and isinstance(errs[0].get("line"), int) and errs[0]["line"] >= 1,
+         json.dumps(errs[:2], ensure_ascii=False)[:220])
+    # m062 rule 9: every field we add is a new place to leak a machine path. The
+    # kernel names the file as an absolute path, so the tool has to fold it to a
+    # leaf before it reaches a caller (the same rule the older output cell uses).
+    efiles = [str(e.get("file", "")) for e in errs]
+    cell("errors carry no machine path",
+         all(":" not in f and "\\" not in f and "/" not in f for f in efiles),
+         str(efiles)[:200])
 
     client.tool("edit_editor", {"content": FIXED})
     run2, _ = client.tool("run_editor", {"timeout_ms": 8000})
     cell("fixed script passes", run2.get("rc") == 0 and not run2.get("fatal"),
          f"state={run2.get('state')} rc={run2.get('rc')} output={str(run2.get('output'))[:120]}")
+    cell("a fixed script is a pass verdict", run2.get("verdict") == "pass",
+         f"verdict={run2.get('verdict')}")
 
     # --- 5.5 a script with chinese text (m083) ---------------------------
     # A Chinese script is the normal thing to edit here. Replacing the editing
@@ -263,10 +355,256 @@ def probe(client: McpStdio, resident_file: Path, exe_dir: Path,
     cell("a script with chinese text runs", cjk.get("rc") in (None, 0),
          f"rc={cjk.get('rc')} state={cjk.get('state')}")
 
+    # --- 5.6 a write tool says what it changed (m101) ---------------------
+    # "bytes" alone cannot tell a caller what moved; the prefix/suffix summary
+    # is what lets it re-read one line instead of the whole script.
+    base = "#Requires AutoHotkey v2.0\n; line 2\n; line 3\n"
+    first, _ = client.tool("edit_editor", {"content": base})
+    cell("edit_editor returns the change summary",
+         first.get("changed") is True and first.get("lines_after") == 3,
+         json.dumps(first, ensure_ascii=False)[:220])
+    mod = base.replace("; line 2", "; line 2 changed")
+    second, _ = client.tool("edit_editor", {"content": mod})
+    cell("edit_editor reports the line that changed",
+         second.get("changed") is True and second.get("lines_before") == 3
+         and second.get("first_changed_line") == 2 and second.get("last_changed_line") == 2,
+         json.dumps(second, ensure_ascii=False)[:220])
+    again, _ = client.tool("edit_editor", {"content": mod})
+    cell("an identical edit reports changed=false",
+         again.get("changed") is False and again.get("first_changed_line") == 0
+         and again.get("last_changed_line") == 0,
+         json.dumps(again, ensure_ascii=False)[:220])
+
+    # --- 5.7 reading a session has an explicit cut and an explicit size ---
+    # The caller decides how much of the log it can afford; truncated tells it
+    # whether there is older content it has not seen.
+    if broken_session:
+        small, _ = client.tool("get_session_output",
+                               {"session": int(broken_session), "max_bytes": 128})
+        cell("max_bytes caps the tail at 128 bytes",
+             small.get("truncated") is True and small.get("bytes") == 128,
+             f"truncated={small.get('truncated')} bytes={small.get('bytes')}")
+        full, _ = client.tool("get_session_output",
+                              {"session": int(broken_session), "max_bytes": 65536})
+        cell("a full read reports truncated=false",
+             full.get("truncated") is False and (full.get("bytes") or 0) > 0,
+             f"truncated={full.get('truncated')} bytes={full.get('bytes')}")
+        default, _ = client.tool("get_session_output", {"session": int(broken_session)})
+        cell("the default read still returns the error text",
+             default.get("truncated") is False
+             and "space" in str(default.get("output", "")).lower(),
+             str(default.get("output", ""))[:120].replace("\n", " | "))
+    else:
+        cell("get_session_output had a session to read", False, "run_editor returned no session")
+
+    # --- 5.8 run tools take script arguments (m102) ----------------------
+    # A_Args is the only place a script can see them, so the probe writes what
+    # it received next to the temp script and the gate reads it back.
+    args_script = (
+        "#Requires AutoHotkey v2.0\n"
+        'FileAppend(A_Args[1] "`n" A_Args.Length "`n", A_ScriptDir "\\mcp-gate-args.txt")\n'
+    )
+    client.tool("edit_editor", {"content": args_script})
+    ran, _ = client.tool("run_editor",
+                         {"timeout_ms": 6000, "args": ["hello", "two words"]})
+    args_probe = Path(exe_dir) / "Scripts" / "mcp-gate-args.txt"
+    got = ""
+    if args_probe.exists():
+        got = args_probe.read_text(encoding="utf-8", errors="replace").strip()
+    cell("run_editor passes args through A_Args",
+         ran.get("state") == "finished" and got == "hello\n2",
+         f"state={ran.get('state')} probe={got!r}")
+    bad, _ = client.tool("run_editor", {"args": "not-an-array"})
+    cell("non-array args are refused",
+         bad.get("ok") is False and "args" in str(bad.get("error", "")),
+         json.dumps(bad, ensure_ascii=False)[:160])
+    if args_probe.exists():
+        args_probe.unlink()
+
+    # --- 5.85 a script's own stdout reaches the caller (m061) -------------
+    # A GUI host has no stdout handle; the kernel hands FileAppend's "*" target
+    # to the deck as a JSON record instead. Without this the text was invisible.
+    stdout_script = (
+        "#Requires AutoHotkey v2.0\n"
+        'FileAppend("gate-stdout`n", "*")\n'
+    )
+    client.tool("edit_editor", {"content": stdout_script})
+    spoke, _ = client.tool("run_editor", {"timeout_ms": 6000})
+    payload = str(spoke.get("output", ""))
+    cell("FileAppend to stdout becomes a stdout record",
+         spoke.get("verdict") == "pass" and '"kind":"stdout"' in payload
+         and "gate-stdout" in payload,
+         payload[:220].replace("\n", " | "))
+
+    # --- 5.86 an offset cursor reads only what is new (m106) --------------
+    # Tail-reading the same finished session twice sends the same bytes twice;
+    # the cursor is the fix, and it must survive a log that shrank under it.
+    spoke_id = int(spoke["session"])
+    whole, _ = client.tool("get_session_output", {"session": spoke_id, "max_bytes": 65536})
+    cell("an offset read reports where to continue",
+         whole.get("from_offset") == 0
+         and whole.get("next_offset") == whole.get("total_bytes")
+         and int(whole.get("total_bytes", 0)) > 0,
+         f"next={whole.get('next_offset')} total={whole.get('total_bytes')}")
+    nothing, _ = client.tool("get_session_output", {
+        "session": spoke_id, "after_offset": int(whole.get("next_offset", 0))})
+    cell("a second cursor read has nothing new",
+         nothing.get("bytes") == 0 and nothing.get("output") == ""
+         and nothing.get("rewound") is False,
+         f"bytes={nothing.get('bytes')} rewound={nothing.get('rewound')}")
+    rewound, _ = client.tool("get_session_output", {
+        "session": spoke_id, "after_offset": 100000000})
+    cell("a cursor past the end rewinds instead of failing",
+         rewound.get("rewound") is True and rewound.get("from_offset") == 0
+         and str(rewound.get("output", "")) != "",
+         f"rewound={rewound.get('rewound')} from={rewound.get('from_offset')}")
+
+    # --- 5.87 a long-lived session rotates its log (m106) -----------------
+    # The gate runs the child with a 64 KB cap (env). 1200 stdout records are
+    # well past it, so the live file must have a .1 next to it.
+    loud = "#Requires AutoHotkey v2.0\nLoop 1200\n{\n    FileAppend \"ab`n\", \"*\"\n}\n"
+    client.tool("edit_editor", {"content": loud})
+    loud_run, _ = client.tool("run_editor", {"timeout_ms": 20000})
+    loud_out, _ = client.tool("get_session_output", {
+        "session": int(loud_run["session"]), "max_bytes": 65536})
+    cell("a full log is rotated to .1",
+         loud_run.get("verdict") == "pass" and loud_out.get("log_rotated") is True,
+         f"verdict={loud_run.get('verdict')} rotated={loud_out.get('log_rotated')} "
+         f"total={loud_out.get('total_bytes')}")
+
+    # --- 5.9 static check catches v1 syntax before a run (m102) -----------
+    # The first section of this gate already proves a v1 command fails at run
+    # time; check_editor is worth having only if it says so without running.
+    v1_mixed = "#Requires AutoHotkey v2.0\n#NoEnv\nMsgBox, 123\nx := %A_ScriptDir%\n"
+    client.tool("edit_editor", {"content": v1_mixed})
+    lint, lint_err = client.tool("check_editor", {})
+    findings = lint.get("findings") or []
+    rules = [f.get("rule") for f in findings]
+    lines = [f.get("line") for f in findings]
+    cell("check_editor reports v1-only and v1-command",
+         lint_err and lint.get("ok") is False
+         and "v1-only" in rules and "v1-command" in rules
+         and 2 in lines and 3 in lines,
+         json.dumps(lint, ensure_ascii=False)[:220])
+    cell("check_editor flags v1 %var% as a warning",
+         "v1-percent" in rules and (lint.get("counts") or {}).get("warning", 0) >= 1,
+         json.dumps(lint.get("counts"), ensure_ascii=False))
+    clean_v2 = '#Requires AutoHotkey v2.0\nMsgBox("hello")\nx := 5 % 3\n'
+    client.tool("edit_editor", {"content": clean_v2})
+    clean, clean_err = client.tool("check_editor", {})
+    cell("a clean v2 script has no findings",
+         not clean_err and clean.get("ok") is True
+         and (clean.get("counts") or {}).get("total") == 0,
+         json.dumps(clean, ensure_ascii=False)[:200])
+
+    # --- 5.10 targeted patches keep the rest of the script intact (m102)
+    # The probe script reports `b` to a file, so the gate can tell an applied
+    # patch from one that only claimed to be applied.
+    patch_base = (
+        "#Requires AutoHotkey v2.0\n"
+        "b := 2\n"
+        'FileAppend(b "`n", A_ScriptDir "\\mcp-gate-patch.txt")\n'
+    )
+    patch_probe = Path(exe_dir) / "Scripts" / "mcp-gate-patch.txt"
+    if patch_probe.exists():
+        patch_probe.unlink()
+    client.tool("edit_editor", {"content": patch_base})
+    patched, p_err = client.tool("patch_editor", {"edits": [
+        {"op": "replace", "old_text": "b := 2", "new_text": "b := 22"}]})
+    client.tool("run_editor", {"timeout_ms": 6000})
+    value = patch_probe.read_text(encoding="utf-8", errors="replace").strip() \
+        if patch_probe.exists() else ""
+    cell("patch_editor applies a unique replace",
+         not p_err and patched.get("applied") is True and patched.get("changed") is True
+         and patched.get("first_changed_line") == 2 and value == "22",
+         f"applied={patched.get('applied')} value={value!r}")
+
+    if patch_probe.exists():
+        patch_probe.unlink()
+    previewed, _ = client.tool("patch_editor", {"preview": True, "edits": [
+        {"op": "replace", "old_text": "b := 22", "new_text": "b := 999"}]})
+    client.tool("run_editor", {"timeout_ms": 6000})
+    value2 = patch_probe.read_text(encoding="utf-8", errors="replace").strip() \
+        if patch_probe.exists() else ""
+    cell("preview leaves the editor unchanged",
+         previewed.get("applied") is False and previewed.get("changed") is True
+         and value2 == "22",
+         f"applied={previewed.get('applied')} value={value2!r}")
+
+    ambiguous, amb_err = client.tool("patch_editor", {"edits": [
+        {"op": "replace", "old_text": "b", "new_text": "c"}]})
+    cell("an ambiguous old_text is refused",
+         amb_err and "唯一" in str(ambiguous.get("error", "")),
+         json.dumps(ambiguous, ensure_ascii=False)[:160])
+
+    marker2 = Path(exe_dir) / "Scripts" / "mcp-gate-patch2.txt"
+    if marker2.exists():
+        marker2.unlink()
+    inserted, i_err = client.tool("patch_editor", {"edits": [
+        {"op": "insert_after", "line": 1,
+         "new_text": 'FileAppend("inserted`n", A_ScriptDir "\\mcp-gate-patch2.txt")'}]})
+    client.tool("run_editor", {"timeout_ms": 6000})
+    cell("insert_after adds an executable line",
+         not i_err and marker2.exists(), f"exists={marker2.exists()}")
+
+    # --- 5.11 validate-only pass asks the kernel itself (m103) ------------
+    # check_editor reads text; validate_editor runs the kernel's /validate mode.
+    # The fixture would create a file if it ever executed, so "validate ran
+    # nothing" is a fact about the file, not about the tool's wording.
+    validated = Path(exe_dir) / "Scripts" / "mcp-gate-validated.txt"
+    if validated.exists():
+        validated.unlink()
+    proof = (
+        "#Requires AutoHotkey v2.0\n"
+        'FileAppend("ran`n", A_ScriptDir "\\mcp-gate-validated.txt")\n'
+    )
+    client.tool("edit_editor", {"content": proof})
+    good_v, good_v_err = client.tool("validate_editor", {})
+    cell("validate_editor accepts a parseable script",
+         not good_v_err and good_v.get("ok") is True and good_v.get("rc") == 0,
+         json.dumps(good_v, ensure_ascii=False)[:220])
+    cell("validate_editor executes nothing", not validated.exists(),
+         f"marker exists={validated.exists()}")
+
+    client.tool("edit_editor", {"content": BROKEN})
+    bad_v, bad_v_err = client.tool("validate_editor", {})
+    vf = bad_v.get("findings") or []
+    vlines = [f.get("line") for f in vf]
+    cell("validate_editor reports rc=2 and the failing line",
+         bad_v_err and bad_v.get("ok") is False and bad_v.get("rc") == 2 and 2 in vlines,
+         json.dumps(bad_v, ensure_ascii=False)[:260])
+    cell("validate findings keep the kernel's own words",
+         any("comma" in str(f.get("message", "")).lower()
+             or "MsgBox, 123" in str(f.get("extra", "")) for f in vf),
+         json.dumps(vf, ensure_ascii=False)[:240])
+    # Rule 9 over this path: the report names a file, never a machine path.
+    vfiles = [str(f.get("file", "")) for f in vf]
+    cell("validate findings carry no machine path",
+         all(":" not in f and "\\" not in f for f in vfiles),
+         json.dumps(vfiles, ensure_ascii=False)[:200])
+
     # --- 6. the policy boundary still holds over the endpoint -------------
     denied, err = client.tool("write_script", {"name": "..\\evil.ahk", "content": FIXED})
     cell("'..\\evil.ahk' refused", err and bool(denied.get("error")),
          json.dumps(denied, ensure_ascii=False)[:160])
+
+    # The success path of the same tool: a file inside Scripts is legal, and it
+    # must carry the same change summary as edit_editor (m101). The probe file
+    # and the backups it creates are removed by main().
+    created, c_err = client.tool("write_script", {"name": WRITE_PROBE, "content": base})
+    cell("write_script creates a file and reports changed=true",
+         not c_err and created.get("ok") is True and created.get("changed") is True
+         and created.get("lines_after") == 3,
+         json.dumps(created, ensure_ascii=False)[:220])
+    edited, e_err = client.tool("write_script", {"name": WRITE_PROBE, "content": mod})
+    cell("write_script reports the line it changed",
+         not e_err and edited.get("changed") is True
+         and edited.get("first_changed_line") == 2 and edited.get("last_changed_line") == 2,
+         json.dumps(edited, ensure_ascii=False)[:220])
+    same, s_err = client.tool("write_script", {"name": WRITE_PROBE, "content": mod})
+    cell("an identical write reports changed=false",
+         not s_err and same.get("changed") is False and same.get("lines_before") == 3,
+         json.dumps(same, ensure_ascii=False)[:220])
 
     # --- 7. a resident script must not look like a crash ------------------
     client.tool("edit_editor", {"content": RESIDENT})
@@ -274,6 +612,8 @@ def probe(client: McpStdio, resident_file: Path, exe_dir: Path,
     cell("resident script returns state=running with no rc",
          run3.get("state") == "running" and run3.get("rc") is None,
          f"state={run3.get('state')} rc={run3.get('rc')} fatal={run3.get('fatal')}")
+    cell("a resident script is a resident verdict, not a timeout",
+         run3.get("verdict") == "resident", f"verdict={run3.get('verdict')}")
     # "running" is only worth something if the script actually executed, so read
     # the ticks it wrote while we were timing out.
     ticks = 0
@@ -289,6 +629,46 @@ def probe(client: McpStdio, resident_file: Path, exe_dir: Path,
         cell("stop_script stops it", not err and stopped.get("stopped") is True, str(stopped)[:120])
         after, _ = client.tool("get_session_output", {"session": int(session)})
         cell("session readable after stop", after.get("ok") is True, str(after)[:160])
+
+    # --- 7.4 a re-run stops the previous copy of the same script (m062) ---
+    # Two live copies of one script fight over the same hotkeys and window, so
+    # run_editor has to end the old one before it starts the new one. The id
+    # must change (a new thread) and the old entry must no longer be running.
+    client.tool("edit_editor", {"content": RESIDENT})
+    first, _ = client.tool("run_editor", {"timeout_ms": 1500})
+    second, _ = client.tool("run_editor", {"timeout_ms": 1500})
+    cell("a re-run uses a new session",
+         first.get("session") is not None and first.get("session") != second.get("session"),
+         f"first={first.get('session')} second={second.get('session')}")
+    old_session = first.get("session")
+    if old_session:
+        old, _ = client.tool("get_session_output", {"session": int(old_session)})
+        cell("a re-run stops the previous copy", old.get("state") != "running",
+             f"old state={old.get('state')}")
+
+    # --- 7.45 the session table and its one-stop button (m106) -----------
+    # An AI that lost an id must be able to ask for the table instead of
+    # guessing, and must be able to end everything in one call.
+    listed, _ = client.tool("list_sessions", {})
+    all_sessions = listed.get("sessions") or []
+    live = [s for s in all_sessions if s.get("session") == second.get("session")]
+    cell("list_sessions sees the live session",
+         len(live) == 1 and live[0].get("state") == "running",
+         f"count={len(all_sessions)} mine={live}")
+    name = str(live[0].get("name", "")) if live else ""
+    # The engine stores the display name (stem, no extension), so the cell only
+    # pins rule 9: whatever the name is, it must not carry a path.
+    cell("list_sessions names the script by leaf",
+         name != "" and "\\" not in name and "/" not in name and ":" not in name,
+         f"name={name!r}")
+    stopped, _ = client.tool("stop_all", {})
+    cell("stop_all ends every live session",
+         int(stopped.get("stopped", 0)) >= 1 and stopped.get("still_running") == 0,
+         f"stopped={stopped.get('stopped')} still={stopped.get('still_running')}")
+    after, _ = client.tool("get_session_output",
+                           {"session": int(second.get("session", 0) or 0)})
+    cell("stop_all leaves the entry finished", after.get("state") == "finished",
+         f"state={after.get('state')}")
 
     # --- 7.5 cancellation (m081) -------------------------------------------
     # The client gives up on an in-flight run. The endpoint must answer
@@ -325,6 +705,23 @@ def probe(client: McpStdio, resident_file: Path, exe_dir: Path,
          f"{latch_elapsed:.1f}s state={run5.get('state')} rc={run5.get('rc')}")
     if run5.get("session"):
         client.tool("stop_script", {"session": int(run5["session"])})
+
+    # --- 7.6 a script that cannot answer is a timeout (m062) --------------
+    # Resident means "still running and answering Windows messages". Measured
+    # fact: AHK v2's own Loop{} pumps messages, so a tight loop stays resident
+    # (the first fixture here asserted the opposite and was wrong). Only a
+    # thread stuck inside a blocking call cannot answer, so the fixture blocks
+    # in DllCall("Sleep") past the run budget.
+    blocked = (
+        "#Requires AutoHotkey v2.0\n"
+        'DllCall("Sleep", "UInt", 2500)\n'
+    )
+    client.tool("edit_editor", {"content": blocked})
+    stuck, _ = client.tool("run_editor", {"timeout_ms": 1500})
+    cell("a blocked script is a timeout verdict", stuck.get("verdict") == "timeout",
+         f"verdict={stuck.get('verdict')} state={stuck.get('state')}")
+    if stuck.get("session"):
+        client.tool("stop_script", {"session": int(stuck["session"])})
 
 
     # --- 8. the OTHER half of the redaction -------------------------------
@@ -385,25 +782,46 @@ def main() -> int:
         exe_dir = work
         autosave_probe = None
         probe_ahk = None
+        write_probe = None
     else:
-        exe = sys.argv[1]
+        # The redaction cell below builds an absolute #Include path; a relative
+        # exe argument would make that fixture relative too and the cell would
+        # measure nothing. Resolve once, here.
+        exe = str(Path(sys.argv[1]).resolve())
         # m082: the deck must run with a fast timed save and a script already
         # open in the editor, or the autosave cell below has nothing to watch.
         probe_ahk = Path(exe).parent / "Scripts" / "mcp-autosave-probe.ahk"
         probe_ahk.parent.mkdir(parents=True, exist_ok=True)
         probe_ahk.write_text("; autosave probe v1\r\n", encoding="utf-8")
+        write_probe = Path(exe).parent / "Scripts" / WRITE_PROBE
+        if write_probe.exists():
+            write_probe.unlink()
         env = dict(os.environ)
         env["AHKDECK_AUTOSAVE_MS"] = "600"
         env["AHKDECK_OPEN_SCRIPT"] = "mcp-autosave-probe.ahk"
+        # m106: 64 KB is the smallest cap the engine accepts; the rotation cell
+        # writes far past it, so the .1 sidecar is created for real.
+        env["AHKDECK_LOG_CAP"] = "65536"
         client = McpStdio([exe, "--mcp-stdio"], work, env=env)
         autosave_probe = probe_ahk
-        # run_editor executes the editing area from <exe dir>\.temp\ai-editor.ahk
-        # (m062 wants that changed: A_ScriptDir differs from where the user saves).
+        # m062: run_editor now runs from a copy in the script's own folder
+        # (real file, or Scripts\AHKDeck-preview.ahk), so A_ScriptDir is the
+        # directory the user saves into. Probes therefore land next to that
+        # copy, in Scripts, not in .temp.
         exe_dir = Path(exe).parent
-        resident = exe_dir / ".temp" / "mcp-gate-resident.txt"
-        for stale in (resident, exe_dir / ".temp" / "mcp-gate.txt"):
+        probe_dir = exe_dir / "Scripts"
+        resident = probe_dir / "mcp-gate-resident.txt"
+        for stale in (resident, probe_dir / "mcp-gate.txt",
+                      probe_dir / "mcp-gate-patch.txt",
+                      probe_dir / "mcp-gate-patch2.txt",
+                      probe_dir / "mcp-gate-args.txt",
+                      probe_dir / "mcp-gate-validated.txt",
+                      probe_dir / "AHKDeck-preview.ahk",
+                      exe_dir / ".temp" / "validate-editor.ahk"):
             if stale.exists():
                 stale.unlink()
+        for stale in (exe_dir / ".temp").glob("validate-*.out"):
+            stale.unlink()
 
     try:
         probe(client, resident, exe_dir, autosave_probe)
@@ -414,7 +832,13 @@ def main() -> int:
         # Two byproducts, both under <exe dir>\.temp: the resident tick file and
         # the file the FIXED script appends to A_ScriptDir. A gate that leaves
         # files behind is a gate that will be blamed for "the deck made a mess".
-        for leftover in (resident, Path(exe_dir) / ".temp" / "mcp-gate.txt"):
+        for leftover in (resident, Path(exe_dir) / "Scripts" / "mcp-gate.txt",
+                         Path(exe_dir) / "Scripts" / "mcp-gate-patch.txt",
+                         Path(exe_dir) / "Scripts" / "mcp-gate-patch2.txt",
+                         Path(exe_dir) / "Scripts" / "mcp-gate-args.txt",
+                         Path(exe_dir) / "Scripts" / "mcp-gate-validated.txt",
+                         Path(exe_dir) / "Scripts" / "AHKDeck-preview.ahk",
+                         Path(exe_dir) / ".temp" / "validate-editor.ahk"):
             for _attempt in range(20):
                 try:
                     if leftover.exists():
@@ -432,10 +856,45 @@ def main() -> int:
                     break
                 except OSError:
                     time.sleep(0.1)
+        # m101: the write_script success probe, plus the backups each overwrite
+        # forced. Only this probe's own leaf is removed; real user backups stay.
+        if write_probe is not None:
+            for _attempt in range(20):
+                try:
+                    if write_probe.exists():
+                        write_probe.unlink()
+                    break
+                except OSError:
+                    time.sleep(0.1)
+            backups = write_probe.parent.parent / "Backups"
+            try:
+                for hit in backups.glob("*/" + WRITE_PROBE):
+                    hit.unlink()
+                    try:
+                        hit.parent.rmdir()
+                    except OSError:
+                        pass
+            except OSError:
+                pass
         if not selftest:
+            args_left = Path(exe_dir) / ".temp" / "mcp-gate-args.txt"
+            try:
+                if args_left.exists():
+                    args_left.unlink()
+            except OSError:
+                pass
             cell("gate leaves no temp file behind",
-                 not resident.exists() and not (Path(exe_dir) / ".temp" / "mcp-gate.txt").exists(),
+                 not resident.exists()
+                 and not (Path(exe_dir) / ".temp" / "mcp-gate.txt").exists()
+                 and not (Path(exe_dir) / ".temp" / "mcp-gate-patch.txt").exists()
+                 and not (Path(exe_dir) / ".temp" / "mcp-gate-patch2.txt").exists()
+                 and not (Path(exe_dir) / ".temp" / "mcp-gate-validated.txt").exists()
+                 and not (Path(exe_dir) / ".temp" / "validate-editor.ahk").exists()
+                 and not any((Path(exe_dir) / ".temp").glob("validate-*.out"))
+                 and not args_left.exists(),
                  str(resident))
+            cell("the write probe left no file behind", not write_probe.exists(),
+                 str(write_probe))
         try:
             log = client.stderr_path.read_bytes().decode("utf-8", "replace")
             cell("endpoint logged its lifecycle to stderr", "MCP endpoint ready" in log,

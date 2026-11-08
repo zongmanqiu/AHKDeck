@@ -51,11 +51,17 @@ std::wstring DefaultSettingsPath()
 	if (n > 0 && n < MAX_PATH)
 		return explicitPath;
 
-	wchar_t base[MAX_PATH] = {0};
-	n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
+	wchar_t exe[MAX_PATH] = {0};
+	n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
 	if (n == 0 || n >= MAX_PATH)
 		return std::wstring();
-	return std::wstring(base) + L"\\AHKDeck\\ui.ini";
+	// m094: portable first, like every other path the deck owns. A settings file
+	// next to the exe travels with a copied folder; %LOCALAPPDATA% did not.
+	std::wstring path(exe, n);
+	const size_t slash = path.find_last_of(L"\\/");
+	if (slash != std::wstring::npos)
+		path.resize(slash);
+	return path + L"\\ui.ini";
 }
 
 bool LoadUiSettings(const std::wstring &aPath, WindowGeometry &aOut, std::string &aError)

@@ -100,6 +100,18 @@ int main()
 		CheckError(unknown, "无法识别", "Return is not an alias for Enter (the kernel spells it Enter)");
 	}
 
+	// m117: a bare function key is the one modifier-free binding the system
+	// scope accepts, because RegisterHotKey may own an F-key without eating
+	// typing; every other bare key stays refused.
+	const Parsed bareF6 = Parse("F6");
+	Check(bareF6.ok && bareF6.key == 0x75, "bare F6 is a system-wide binding");
+	Check((bareF6.mods & ahkdeck::kHotkeyNoRepeat) != 0, "a system binding never repeats while held");
+	Check(bareF6.canonical == "F6", "bare F6 keeps its canonical spelling");
+	const Parsed bareF24 = Parse("f24");
+	Check(bareF24.ok && bareF24.key == 0x87 && bareF24.canonical == "F24", "bare f24 is F24");
+	CheckError(Parse("F25"), "修饰键", "F25 is outside the supported range");
+	CheckError(Parse("Escape"), "修饰键", "a bare Escape would swallow dialog dismissal");
+
 	// --- rejections name the branch, so the console line is actionable -------
 	{
 		CheckError(Parse("a"), "修饰键", "a bare letter needs a modifier");
@@ -185,6 +197,46 @@ int main()
 			"an emptied menu command keeps its empty entry");
 	}
 
+	// m108: the window's own action ("window.show", the tray menu's 主窗口).
+	// It is an ordinary entry in the file, so it round-trips like a script row and
+	// takes part in the conflict lookup; it just has no built-in default.
+	{
+		const std::wstring windowPath = dir + L"\\window.txt";
+		std::vector<ahkdeck::HotkeyEntry> entries;
+		ahkdeck::SetHotkeyEntry(entries, "window.show", "^!d");
+		std::string error;
+		Check(ahkdeck::SaveHotkeys(windowPath, entries, error), "save the window binding");
+		std::vector<ahkdeck::HotkeyEntry> loaded;
+		Check(ahkdeck::LoadHotkeys(windowPath, loaded, error), "load the window binding");
+		Check(loaded.size() == 1 && ahkdeck::HotkeyOf(loaded, "window.show") == "^!d",
+			"window.show keeps its combo");
+		Check(ahkdeck::AuditHotkeys(loaded).empty(), "the window binding audits clean");
+		Check(ahkdeck::OwnerOfHotkey(loaded, "other.ahk", "^!D") == "window.show",
+			"window.show owns its combo against a script");
+		DeleteFileW(windowPath.c_str());
+	}
+
+	// m106: what a hand-edited file can hold that the dialog prevents. The
+	// audit reports each later duplicate and each unparseable binding, and it
+	// never reports a free combo or an empty row.
+	{
+		std::vector<ahkdeck::HotkeyEntry> entries = {
+			{"one.ahk", "^!a"},
+			{"two.ahk", "^!A"},
+			{"bad.ahk", "not-a-key"},
+			{"free.ahk", ""},
+			{"three.ahk", "^!b"},
+		};
+		const std::vector<ahkdeck::HotkeyIssue> issues = ahkdeck::AuditHotkeys(entries);
+		Check(issues.size() == 2, "audit reports exactly the duplicate and the broken binding");
+		Check(issues[0].name == "two.ahk" && issues[0].message.find("one.ahk") != std::string::npos,
+			"the later duplicate names the earlier owner");
+		Check(issues[1].name == "bad.ahk" && !issues[1].message.empty(),
+			"an unparseable binding carries the parser's reason");
+		Check(ahkdeck::AuditHotkeys({{"only.ahk", "^!x"}}).empty(),
+			"a clean file has no issues");
+	}
+
 	// A name containing '=' could never be read back: say so, do not write a row
 	// that silently loses a binding.
 	{
@@ -223,12 +275,13 @@ int main()
 		SetEnvironmentVariableW(L"AHKDECK_HOTKEYS", nullptr);
 
 		std::wstring fallback = ahkdeck::DefaultHotkeyPath();
-		wchar_t base[MAX_PATH] = {0};
-		DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
-		if (n > 0 && n < MAX_PATH)
-			Check(fallback.find(L"hotkeys.txt") != std::wstring::npos, "default path is hotkeys.txt under AHKDeck");
-		else
-			Check(fallback.empty(), "default path is empty without LOCALAPPDATA");
+		wchar_t self[MAX_PATH] = {0};
+		DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
+		std::wstring exeDir(self, n > 0 ? n : 0);
+		const size_t cut = exeDir.find_last_of(L"\\/");
+		if (cut != std::wstring::npos)
+			exeDir.resize(cut);
+		Check(fallback == exeDir + L"\\hotkeys.txt", "default path is portable (next to the exe)");
 	}
 
 	DeleteFileW(path.c_str());

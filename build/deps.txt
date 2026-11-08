@@ -18,7 +18,7 @@
 #   https://codeload.github.com/<owner>/<repo>/tar.gz/<ref>
 # instead of https://github.com/<owner>/<repo>/archive/<ref>.tar.gz - both
 # serve the same archive, but codeload works through restrictive proxies where
-# the archive/ path returns HTTP 502 (lesson inherited from pecia).
+# the archive/ path returns HTTP 502 (project lesson).
 #
 # Bump policy (m005): pin a commit or a tag, never a floating branch.
 # Set AHKDECK_FORCE_DOWNLOAD=1 to ignore the presence checks and re-fetch
@@ -41,7 +41,7 @@ AutoHotkey_H-v2.0.25=https://codeload.github.com/thqby/AutoHotkey_H/tar.gz/fb9e4
 AutoHotkey-v2.0.25-src=https://codeload.github.com/AutoHotkey/AutoHotkey/tar.gz/refs/tags/v2.0.25|source/script.cpp
 AutoHotkey_2.0.25=https://github.com/AutoHotkey/AutoHotkey/releases/download/v2.0.25/AutoHotkey_2.0.25.zip|AutoHotkey64.exe
 
-# FLTK 1.4.5 - GUI framework (same release pecia ships; our patches/fltk-1.4.5
+# FLTK 1.4.5 - GUI framework (our patches/fltk-1.4.5
 # applies on top). UI final pick is re-confirmed by m009; FLTK stays pinned
 # until then.
 fltk-1.4.5=https://codeload.github.com/fltk/fltk/tar.gz/refs/tags/release-1.4.5|CMakeLists.txt

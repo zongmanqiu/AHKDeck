@@ -234,13 +234,13 @@ try {
     Start-Sleep -Milliseconds 400
     [W]::PressF2($h)                 # m022: open it in the editor
     Start-Sleep -Milliseconds 600
-    # The find/replace bar sits ABOVE the editor now (m084, Pecia's place), so
+    # The find/replace bar sits ABOVE the editor now (m084), so
     # the gate drives it from the keyboard and needs no pixel coordinates:
     # Ctrl+F focuses the needle field, Enter finds and hands the focus back to
     # the editor, Ctrl+H focuses the replacement field, Enter replaces
     # everywhere.
     Write-Output ("[{0}] session A: keyboard find/replace" -f (Get-Date -Format HH:mm:ss))
-    # m089: the find bar is a SWITCH now, and it starts folded (Pecia's
+    # m089: the find bar is a SWITCH now, and it starts folded (the
     # model): the first Ctrl+F brings it up and focuses the needle field,
     # the second takes it away. Ctrl+H is the same switch, so while the bar
     # is up the first Ctrl+H folds it and the second brings it back with the

@@ -35,4 +35,12 @@ extern bool g_DeckIsolatedScripts;
 // upstream severity (FAIL / CRITICAL_ERROR / FAIL_OR_OK) untouched.
 bool DeckNotifyError(LPCTSTR aMessage, LPCTSTR aExtra, Line *aLine, int aErrorType, bool aWarn);
 
+// m061: the second seam. FileAppend's stdout target ("*") has no stdout handle
+// in a GUI host, so upstream would try to open a file literally named "*". With
+// an output sink installed the kernel hands the text to the host as one JSON
+// record instead; without one the file path is untouched and behaviour stays
+// byte-for-byte upstream.
+typedef void (__stdcall *DeckOutputSinkFn)(const char *aUtf8Json);
+bool DeckNotifyOutput(LPCTSTR aText);
+
 #endif // CONFIG_DLL

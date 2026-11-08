@@ -64,7 +64,7 @@ protected:
   Fl_Font textfont_;
   Fl_Fontsize textsize_;
   Fl_Color textcolor_;
-  Fl_Color check_color_ = 0;   // Pecia patch: checkmark fill (0 = use selection_color)
+  Fl_Color check_color_ = 0;   // Deck patch: checkmark fill (0 = use selection_color)
 
   int item_pathname_(char *name, int namelen, const Fl_Menu_Item *finditem,
                      const Fl_Menu_Item *menu=0) const;
@@ -249,9 +249,9 @@ public:
   Fl_Color down_color() const {return selection_color();}
   /** For back compatibility, same as selection_color() */
   void down_color(unsigned c) {selection_color(c);}
-  /** Pecia patch: checkmark/radio fill color when checked (0 = use selection_color()). */
+  /** Deck patch: checkmark/radio fill color when checked (0 = use selection_color()). */
   Fl_Color check_color() const { return check_color_; }
-  /** Pecia patch: set the checkmark/radio fill color. */
+  /** Deck patch: set the checkmark/radio fill color. */
   void check_color(Fl_Color c) { check_color_ = c; }
   void setonly(Fl_Menu_Item* item);
 };

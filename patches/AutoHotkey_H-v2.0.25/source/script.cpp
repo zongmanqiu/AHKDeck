@@ -453,7 +453,7 @@ void Script::DestroyWindows()
 	if (mOnClipboardChange.Count()) // Remove from viewer chain.
 		EnableClipboardListener(false);
 
-	// The following fixes being unable to paste text copied from an error dialog after the
+	// The following fixes being unable to paste text taken from an error dialog after the
 	// program exits (if it wasn't already pasted at least once), and may similarly be of
 	// benefit to scripts which directly or indirectly use OLE for clipboard.
 #ifdef _DEBUG

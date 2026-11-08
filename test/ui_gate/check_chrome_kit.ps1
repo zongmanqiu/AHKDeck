@@ -75,10 +75,10 @@ function Test-Rules($files) {
     }
 
     # R5. Stock Fl_Scroll is the bevelled bar the list and editor replaced
-    # (m071 A2). Dialogs use PeciaScroll.
+    # (m071 A2). Dialogs use DeckScroll.
     foreach ($name in $files.Keys) {
         if ($name -like "*.cpp" -and $files[$name] -match "new\s+Fl_Scroll\s*\(") {
-            $bad += "R5 $name builds a stock Fl_Scroll instead of PeciaScroll"
+            $bad += "R5 $name builds a stock Fl_Scroll instead of DeckScroll"
         }
     }
 
@@ -102,6 +102,34 @@ function Test-Rules($files) {
         $bad += "R6 DeckUI.cpp is missing"
     }
 
+    # R7. Text sizes are one fact each (m071): labelsize/textsize never carry a
+    # literal 16 or 14 again; Theme.h owns kTextSize/kSubTextSize.
+    foreach ($name in $files.Keys) {
+        foreach ($m in [regex]::Matches($files[$name], "(?:labelsize|textsize|linenumber_size)\s*\(\s*(1[46])\s*\)")) {
+            $bad += ("R7 ${name}: literal text size " + $m.Groups[1].Value + " (use TextSize()/SubTextSize())")
+        }
+    }
+
+    # R8. The dialog row step is one fact too: a stacked row is 26 + 2 = 28,
+    # and it must be spoken as RowStep(), not as an addition with a literal.
+    foreach ($name in $files.Keys) {
+        if ($name -like "*.cpp") {
+            foreach ($m in [regex]::Matches($files[$name], "\b(?:y|rowY|top)\s*\+=\s*(?:26|28)\s*;")) {
+                $bad += ("R8 ${name}: literal row step '" + $m.Value + "' (use RowStep())")
+            }
+        }
+    }
+
+    # R9. Colours outside the palette have one home: Theme.cpp. A widget that
+    # writes fl_rgb_color() is a second source for a colour. WindowFrame.cpp is
+    # the one exception: it composites the ring's antialiased pixels, so it must
+    # mix channel values; it reads those channels from the theme colours.
+    foreach ($name in $files.Keys) {
+        if ($name -ne "Theme.cpp" -and $name -ne "WindowFrame.cpp" -and $files[$name] -match "fl_rgb_color\(") {
+            $bad += "R9 $name writes fl_rgb_color() outside Theme.cpp"
+        }
+    }
+
     return $bad
 }
 
@@ -120,6 +148,7 @@ static Fl_Color FrameBorderColour() { return DeckColors().text1; }
 void Build() { Fl_Scroll *s = new Fl_Scroll(0, 0, 10, 10); }
 void Theme() { DwmSetWindowAttribute(h, 1, &v, 4); }
 void Old() { ApplyNativeCaptionTheme(win); }
+void Sizes() { w->labelsize(16); y += 28; fl_color(fl_rgb_color(1, 2, 3)); }
 '@
     $broken["DeckDialog.cpp"] = @'
 void DeckDialog::ShowCentered() { show(); }
@@ -128,7 +157,7 @@ void DeckDialog::hide() { Fl_Double_Window::hide(); }
     $broken["Theme.cpp"] = 'Fl_Color FrameBorderColour() { return kLight.text1; }'
     $hits = Test-Rules $broken
     $missing = @()
-    foreach ($rule in @("R1", "R2", "R3", "R4", "R5", "R6")) {
+    foreach ($rule in @("R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9")) {
         if (-not ($hits | Where-Object { $_ -like ($rule + " *") })) { $missing += $rule }
     }
     if ($missing.Count -gt 0) {
@@ -143,7 +172,7 @@ void DeckDialog::hide() { Fl_Double_Window::hide(); }
         $real | ForEach-Object { Write-Host ("  - " + $_) }
         exit 1
     }
-    Write-Host "chrome-kit: selftest OK (all six rules can go red, real tree clean)"
+    Write-Host "chrome-kit: selftest OK (all nine rules can go red, real tree clean)"
     exit 0
 }
 
@@ -154,5 +183,5 @@ if ($violations.Count -gt 0) {
     Write-Host ("chrome-kit: " + $violations.Count + " violation(s) - dialogs can drift from the main window again")
     exit 1
 }
-Write-Host "chrome-kit: OK (6 rules hold over .main\ui)"
+Write-Host "chrome-kit: OK (9 rules hold over .main\ui)"
 exit 0

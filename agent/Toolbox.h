@@ -50,6 +50,10 @@ public:
 	// The editor buffer the window is showing, as UTF-8. Supplied by the UI so
 	// run_editor/check tools see exactly what the user sees.
 	using EditorSupplier = std::function<std::string()>;
+	// m062: the file backing the editing area, empty for an unnamed buffer.
+	// run_editor needs it so A_ScriptDir and relative #Include match what the
+	// user gets after saving.
+	using EditorPathSupplier = std::function<std::wstring()>;
 	// (content, note) - apply a whole new script to the editing area, unsaved.
 	using EditorSink = std::function<void(const std::string &, const std::string &)>;
 	// A line for the deck's console panel: what the caller did, in its own words.
@@ -60,6 +64,7 @@ public:
 
 	void SetPolicy(const AiScriptPolicy &aPolicy);
 	void SetEditorSupplier(EditorSupplier aSupplier) { mEditor = std::move(aSupplier); }
+	void SetEditorPathSupplier(EditorPathSupplier aSupplier) { mEditorPath = std::move(aSupplier); }
 	void SetEditorSink(EditorSink aSink) { mEditorSink = std::move(aSink); }
 	void SetNoteSink(NoteSink aSink) { mNoteSink = std::move(aSink); }
 	void SetWriteSink(WriteSink aSink) { mWriteSink = std::move(aSink); }
@@ -97,18 +102,27 @@ private:
 	// over wins, or a follow-up run_editor would run last tick's script.
 	std::string EditorText();
 	std::string LiveEditorText() const;
+	// Hands a whole script to the editing area and waits (bounded) until the
+	// window shows it. False when the UI has no editor to write to.
+	bool ApplyEditor(const std::string &aContent, const std::string &aNote);
 
 	std::string ToolListScripts();
 	std::string ToolReadScript(const Json &aArgs);
 	std::string ToolEditEditor(const Json &aArgs);
+	std::string ToolCheckEditor();
+	std::string ToolValidateEditor();
+	std::string ToolPatchEditor(const Json &aArgs);
 	std::string ToolWriteScript(const Json &aArgs);
 	std::string ToolRunEditor(const Json &aArgs);
 	std::string ToolRunScript(const Json &aArgs);
 	std::string ToolGetSessionOutput(const Json &aArgs);
 	std::string ToolStopScript(const Json &aArgs);
+	std::string ToolListSessions();
+	std::string ToolStopAll();
 
 	AiScriptPolicy mPolicy;
 	EditorSupplier mEditor;
+	EditorPathSupplier mEditorPath;
 	EditorSink mEditorSink;
 	NoteSink mNoteSink;
 	WriteSink mWriteSink;

@@ -6,13 +6,13 @@ cmake_minimum_required(VERSION 3.16)
 # localized and emitted as UTF-8, while CMake writes the NMake makefiles in the
 # ANSI code page - the filter never matches, .obj.d files stay empty, and header
 # edits silently leave stale objects behind. CMake's own include scanner is
-# encoding-independent (lesson inherited from pecia, 2026-10-24).
+# encoding-independent (project lesson, 2026-10-24).
 # ----------------------------------------------------------------------------
 if(CMAKE_GENERATOR MATCHES "Makefiles")
     set(CMAKE_DEPENDS_USE_COMPILER FALSE)
 endif()
 
-project(AHKDeck VERSION 0.1.0 LANGUAGES C CXX RC)
+project(AHKDeck VERSION 0.0.1 LANGUAGES C CXX RC)
 
 # Static CRT (/MT): the shipped exe must run with ZERO VC++ redistributable
 # dependencies ("单 exe 即装即用"). CMP0091 NEW lets CMAKE_MSVC_RUNTIME_LIBRARY
@@ -74,11 +74,23 @@ add_library(core STATIC
     core/Json.cpp
     core/AiPolicy.cpp
     core/Updater.cpp
+    core/ResourceStats.cpp
+    core/Housekeeping.cpp
 )
 target_include_directories(core PUBLIC "${CMAKE_SOURCE_DIR}")
+# m094: the version has exactly ONE source - project(AHKDeck VERSION ...) above.
+# core/Version.h derives its constants from these macros and VersionString()
+# builds the text from them, so a bump is a one-line edit and the .rc follows
+# automatically. test_version.cpp no longer hardcodes the number.
+target_compile_definitions(core PUBLIC
+    AHKDECK_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    AHKDECK_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    AHKDECK_VERSION_PATCH=${PROJECT_VERSION_PATCH})
 # m092: the updater speaks WinHTTP. That is networking, not GUI - core still
 # has no window toolkit dependency, so the unit tests link it unchanged.
-target_link_libraries(core PUBLIC winhttp)
+# m107: ResourceStats reads process counters (psapi) and the GPU counter (PDH).
+# Measurement again, not GUI: core's no-window-toolkit rule still holds.
+target_link_libraries(core PUBLIC winhttp psapi pdh)
 if(MSVC)
     target_compile_options(core PRIVATE /W4 /WX)
 endif()
@@ -186,6 +198,18 @@ configure_file("${CMAKE_SOURCE_DIR}/image/ALiPay.svg"
                "${CMAKE_BINARY_DIR}/ALiPay.svg" COPYONLY)
 target_sources(AHKDeck PRIVATE "${CMAKE_BINARY_DIR}/version_info.rc")
 
+# m097/m098: docs\ (the MCP access doc) ships next to the exe. Copying it as
+# part of the build keeps the .build folder - and therefore the release zip -
+# identical to what 帮助 > MCP 接入 opens, with no second place to update.
+# The same rule applies to licenses\: the upstream license texts are part of the
+# distributed product (GPL-2.0 requires the copy to travel with the program).
+add_custom_command(TARGET AHKDeck POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/docs" "$<TARGET_FILE_DIR:AHKDeck>/docs"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/licenses" "$<TARGET_FILE_DIR:AHKDeck>/licenses"
+    COMMENT "Staging docs and licenses next to AHKDeck.exe")
+
 # ----------------------------------------------------------------------------
 # Tests (ctest gate - build/5_test.bat fails on any failing test).
 # Test binaries are intermediates: they go to .temp/bin, never .build.
@@ -280,6 +304,39 @@ add_test(NAME hotkeys COMMAND test_hotkeys)
 set_tests_properties(hotkeys PROPERTIES
     WORKING_DIRECTORY "${AHKDECK_HOTKEY_DIR}")
 
+# m107: the status bar's resource numbers. The CPU percentage is pure arithmetic
+# (two GetProcessTimes readings + the wall clock), so it is unit-tested without
+# a process or a GPU; the Win32 sampling itself is proved by the stats gate
+# against the shipped exe.
+add_executable(test_resources
+    test/test_resources.cpp
+)
+target_link_libraries(test_resources PRIVATE core)
+if(MSVC)
+    target_compile_options(test_resources PRIVATE /W4 /WX)
+endif()
+set_target_properties(test_resources PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${AHKDECK_TEMP_BIN}"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${AHKDECK_TEMP_BIN}"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${AHKDECK_TEMP_BIN}")
+add_test(NAME resources COMMAND test_resources)
+
+# m109: the startup cleanup. The JSON knob and the day arithmetic are pure; the
+# delete pass runs on a throwaway directory under %TEMP%, and the shipped-exe
+# gate proves the deck actually calls it at startup.
+add_executable(test_housekeeping
+    test/test_housekeeping.cpp
+)
+target_link_libraries(test_housekeeping PRIVATE core)
+if(MSVC)
+    target_compile_options(test_housekeeping PRIVATE /W4 /WX)
+endif()
+set_target_properties(test_housekeeping PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${AHKDECK_TEMP_BIN}"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${AHKDECK_TEMP_BIN}"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${AHKDECK_TEMP_BIN}")
+add_test(NAME housekeeping COMMAND test_housekeeping)
+
 # m018: JSON + the AI's file boundary.
 add_executable(test_json
     test/test_json.cpp
@@ -361,6 +418,24 @@ add_test(NAME no_console COMMAND powershell -NoProfile -ExecutionPolicy Bypass
     -Exe "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/AHKDeck.exe"
     -ConsoleSample "${AHKDECK_TEMP_BIN}/session_gate.exe")
 
+# m072: AGENTS.md rule 2 needs a machine reader - the source tree holds
+# hand-written sources only, never a compiler/interpreter artifact. It
+# self-tests against a tree that MUST go red before it is trusted.
+add_test(NAME source_tree COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+    -File "${CMAKE_SOURCE_DIR}/test/shipping_gate/check_source_tree.ps1"
+    -Root "${CMAKE_SOURCE_DIR}")
+add_test(NAME source_tree_selftest COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+    -File "${CMAKE_SOURCE_DIR}/test/shipping_gate/check_source_tree.ps1"
+    -Root "${CMAKE_SOURCE_DIR}" -SelfTest)
+
+# m107: --stats is the machine reader for the status bar's resource numbers -
+# the same FormatResources() the deck draws, taken from the shipped exe. It
+# proves the Win32 sampling runs (psapi + PDH) and that the CLI path can print
+# one JSON line without touching the window.
+add_test(NAME stats COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+    -File "${CMAKE_SOURCE_DIR}/test/shipping_gate/gate_stats.ps1"
+    -Exe "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/AHKDeck.exe")
+
 # ----------------------------------------------------------------------------
 # m064: the MCP endpoint, in two halves.
 #   mcp_selftest - no window, no model. It points the gate's own client at a
@@ -401,7 +476,10 @@ endif()
 # Shipped scripts, plus the menu-bridge include they #Include (m023): a managed
 # script says "#Include AHKDeckBridge.inc" and expects the file next to it, so the
 # include is as much a shipped artifact as the demos.
-file(GLOB AHKDECK_SCRIPTS "${CMAKE_SOURCE_DIR}/scripts/*.ahk" "${CMAKE_SOURCE_DIR}/scripts/*.inc")
+# m094: CONFIGURE_DEPENDS makes a newly added script re-run the configure step
+# on the next build; without it the glob is frozen until someone deletes the
+# cache, which is exactly how .build/Scripts went stale in m020.
+file(GLOB AHKDECK_SCRIPTS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/scripts/*.ahk" "${CMAKE_SOURCE_DIR}/scripts/*.inc")
 list(LENGTH AHKDECK_SCRIPTS AHKDECK_SCRIPT_COUNT)
 if(AHKDECK_SCRIPT_COUNT GREATER 0)
     # An ALL custom target, not POST_BUILD: editing only scripts/ must still

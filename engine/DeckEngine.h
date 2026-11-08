@@ -96,6 +96,18 @@ public:
 	DWORD StartSession(const std::wstring &aScriptPath, const std::vector<std::wstring> &aArgs,
 		std::string &aError);
 
+	// Validates one script file with the kernel's own /validate mode (m103):
+	// the command-line parser runs LoadFromFile and returns before a single
+	// statement executes. Two hard facts decide where this may be called:
+	//   * the kernel exposes no other validate entry (no COM method, no export);
+	//   * once any source file has been loaded, the COM Main refuses with
+	//     ERROR_NOT_SUPPORTED - so this belongs in a FRESH process, which is why
+	//     the deck spawns itself as a short-lived helper (agent/Toolbox).
+	// Returns the kernel exit code (0 = parses, 2 = load failure, 1 = no kernel);
+	// aRecords receives the load errors without log routing (there is no session).
+	int ValidateFile(const std::wstring &aScriptPath, std::string &aError,
+		std::vector<ErrorRecord> &aRecords);
+
 	// Snapshot copies - handles and the kernel stay private. Finished sessions
 	// stay in the table: the UI list and the journal both need their rc.
 	bool GetSession(DWORD aSessionId, Session &aOut) const;
@@ -147,6 +159,8 @@ private:
 	Engine &operator=(const Engine &) = delete;
 
 	static void __stdcall OnError(const char *aJson);
+	// m061: FileAppend's stdout target, same queue and same attribution rules.
+	static void __stdcall OnOutput(const char *aJson);
 	static void __stdcall OnThreadStarted(void *aCtx);
 
 	// Waits until the kernel's report about a failed load has arrived. The
@@ -170,12 +184,17 @@ private:
 		void *ctx = nullptr;     // StartCtx (see DeckEngine.cpp), owned by the entry
 		std::wstring logFull;    // absolute, resolved against mLogRoot
 		std::ofstream log;       // pub.logPath
+		size_t logBytes = 0;     // bytes in log; m106 rotation threshold
 	};
 
 	// All four assume mSessionsMutex is held.
 	DWORD Route(const ErrorRecord &aRecord) const;
 	void StampSession(ErrorRecord &aRecord) const;
 	void WriteLog(const ErrorRecord &aRecord);
+	// m106: one session keeps exactly two files - the live one and .1. Rotating
+	// in place (not per-run files) means a long-running heartbeat cannot grow a
+	// log without bound, while a caller tailing the file still sees whole lines.
+	void RotateLog(Entry &aEntry);
 	void ReapLocked(Entry &aEntry) const;
 
 	HMODULE mModule = nullptr;
@@ -186,12 +205,16 @@ private:
 	// another script's folder. Scripts keep the official cwd behaviour - the host
 	// is the one that has to stop depending on it.
 	std::wstring mLogRoot;
+	// m106: per-session JSONL cap, from AHKDECK_LOG_CAP (the gate sets it small);
+	// 8 MB keeps a heartbeat script's log two-files-small without touching code.
+	size_t mLogCap = 8u * 1024u * 1024u;
 	// DeckNewThread, not the public 3-parameter NewThread: only the 5-parameter
 	// form wires the start callback, which both proves the script loaded and
 	// yields a race-free thread handle.
 	DWORD(__stdcall *mNewThread)(LPWSTR, LPWSTR, LPWSTR, void (*)(void *), void *) = nullptr;
 	BOOL(__stdcall *mAhkReady)(DWORD) = nullptr;
 	void(__stdcall *mSetErrorSink)(void(__stdcall *)(const char *)) = nullptr;
+	void(__stdcall *mSetOutputSink)(void(__stdcall *)(const char *)) = nullptr;
 	void(__stdcall *mSetIsolation)(bool) = nullptr;
 
 	mutable std::mutex mSessionsMutex;

@@ -35,7 +35,10 @@ LRESULT WINAPI DeckFrameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 	{
 		LRESULT ret = nativeSubclass::forward(hwnd, DeckFrameProc, msg, wp, lp);
 		if (auto *tb = static_cast<DeckTitleBar *>(GetPropW(hwnd, kTitleBarProp)))
+		{
 			tb->setMaximized(IsZoomed(hwnd) != 0);
+			tb->RefreshHoverFromCursor();
+		}
 		if (Fl_Window *win = fl_find(hwnd))
 		{
 			windowChrome::refreshRoundedCorners(win);
@@ -48,6 +51,11 @@ LRESULT WINAPI DeckFrameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 	case WM_SHOWWINDOW:
 	{
 		LRESULT ret = nativeSubclass::forward(hwnd, DeckFrameProc, msg, wp, lp);
+		if (msg == WM_SHOWWINDOW)
+		{
+			if (auto *tb = static_cast<DeckTitleBar *>(GetPropW(hwnd, kTitleBarProp)))
+				tb->RefreshHoverFromCursor();
+		}
 		windowShadow::sync(fl_find(hwnd));
 		return ret;
 	}
@@ -84,7 +92,7 @@ LRESULT WINAPI DeckFrameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 			p->rgrc[0].left += WindowFrame::NC_PAD;
 			p->rgrc[0].right -= WindowFrame::NC_PAD;
 			p->rgrc[0].bottom -= WindowFrame::NC_PAD;
-			// Top unchanged: the title bar is client row 0 (Pecia layout).
+			// Top unchanged: the title bar is client row 0 (deck layout).
 			return 0;
 		}
 		break;
@@ -95,7 +103,7 @@ LRESULT WINAPI DeckFrameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		// from the system metrics (a ~5px sizing frame) even though our
 		// WM_NCCALCSIZE only reserved 1px; forwarding left that band drawn
 		// INSIDE the client - the grey ring the user reported as "shadow
-		// inside the window". Pecia's WndProc paints and returns 0 too.
+		// inside the window". The WndProc here paints and returns 0 too.
 		if (Fl_Window *win = fl_find(hwnd))
 			windowChrome::paintNonClientFrame(win, windowChrome::windowBorderColour(win));
 		return 0;
@@ -295,7 +303,7 @@ int DeckClientHeight(Fl_Window *win)
 
 void PaintDeckClientBorder(Fl_Window *win)
 {
-	// The split Pecia uses: WM_NCPAINT draws the left/right/bottom runs and the
+	// The split layout: WM_NCPAINT draws the left/right/bottom runs and the
 	// outer half of the arcs; this draws the top run and the inner half.
 	const Fl_Color pen = ThemeBorderLine();
 	fl_color(pen);

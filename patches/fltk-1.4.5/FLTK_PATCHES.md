@@ -2,7 +2,7 @@
 
 本目录归档 AHKDeck 使用的 FLTK 1.4.5 修改文件，由 [3_patch.bat](../../build/3_patch.bat)
 单向同步到工作区的 `.3rd/fltk-1.4.5/`。上游为 `fltk/fltk` 的 `release-1.4.5`，
-下载来源见 [deps.txt](../../build/deps.txt)。补丁继承自 Pecia；来源注释及实际 `pecia*` 符号保留，
+下载来源见 [deps.txt](../../build/deps.txt)。补丁为本项目自研维护；来源注释与实际 `deck*` 符号一致，
 不代表 AHKDeck 存在原项目的构建目标。升级时以归档源码为准重放并核验修改。
 
 ## Fl_Menu_.H — check_color() 属性 (2026-09-07)
@@ -65,7 +65,7 @@
 
 ## Fl_Text_Display.cxx — 垂直滚动共享上限
 
-可见行数按完整行计算，`PECIA_BLANK_ROWS_PAST_END = 3` 允许末行后保留空白行。
+可见行数按完整行计算，`DECK_BLANK_ROWS_PAST_END = 3` 允许末行后保留空白行。
 `scroll_()` 经 `vscroll_bottom_line()` 计算并保存实际滚动上限，
 `update_v_scrollbar()` 优先复用 `vscroll_applied_limit`，无有效值时才重新计算。
 当前实现不是简单封顶到 `mTopLineNum`，以免在文档中途压缩滚动范围。
@@ -76,7 +76,7 @@
 
 `Fl_Scrollbar::handle()` 与 `draw()` 移除两端箭头区裁剪，使用完整轨道。
 AHKDeck 的 [ui/Theme.cpp](../../ui/Theme.cpp) 使用 `ThumbGeometry()` 计算自绘滑块，
-由实际函数 `DrawPeciaScrollbar()` / `DrawPeciaScrollbarCorner()` 绘制，使可见几何与命中区一致。
+由实际函数 `DeckDrawScrollbar()` / `DeckDrawScrollbarCorner()` 绘制，使可见几何与命中区一致。
 这些来源标识仍是实际符号，不应仅为统一文案而改名。
 
 **修改文件：** `src/Fl_Scrollbar.cxx`
@@ -94,7 +94,7 @@ AHKDeck 的 [ui/Theme.cpp](../../ui/Theme.cpp) 使用 `ThumbGeometry()` 计算�
 
 ## Fl_Menu.cxx — 弹出菜单外发光钩子（2026-10-22）
 
-`menuwindow::show()` / `hide()` 调用实际符号 `peciaMenuShadowShown` / `peciaMenuShadowHidden`。
+`menuwindow::show()` / `hide()` 调用实际符号 `deckMenuShadowShown` / `deckMenuShadowHidden`。
 AHKDeck 的 [ui/WindowShadow.cpp](../../ui/WindowShadow.cpp) 提供实现：启用阴影时注册
 `g_borderColour` 并附着阴影；关闭菜单时先分离阴影，再隐藏菜单窗口。
 
@@ -128,13 +128,13 @@ AHKDeck 的 [ui/WindowShadow.cpp](../../ui/WindowShadow.cpp) 提供实现：启�
 
 ## Fl_Text_Display.cxx — 滚动上限不得把文末推出视口（2026-11-07, m084）
 
-`vscroll_bottom_line()` 原本固定用 `PECIA_BLANK_ROWS_PAST_END = 3` 行空白，
+`vscroll_bottom_line()` 原本固定用 `DECK_BLANK_ROWS_PAST_END = 3` 行空白，
 公式 `nbuf + 2 + blank - nvis` 在**可见行数少于 blank + 1** 时会落到文末之后：
 目标行根本没有文字，其行起点是 -1，`offset_line_starts()` 由此算出负的
 `mFirstChar`，此后每次查询 `position_to_line()` 都命中失败分支，FLTK 每一行
 控制台输出都触发一次 `Fl::error()`（在 m084 之前是一次弹窗）。
 
-现在空白行数随视口收缩：`blank = min(PECIA_BLANK_ROWS_PAST_END, nvis - 1)`，
+现在空白行数随视口收缩：`blank = min(DECK_BLANK_ROWS_PAST_END, nvis - 1)`，
 保证文档最后一行始终留在视口内。可见行数足够时行为与原来完全一致。
 
 **修改文件：** `src/Fl_Text_Display.cxx`
@@ -156,5 +156,5 @@ AHKDeck 的 [ui/WindowShadow.cpp](../../ui/WindowShadow.cpp) 提供实现：启�
 ## 构建核验
 
 [4_build.bat](../../build/4_build.bat) 调用 [check_fltk_patch.ps1](../../build/check_fltk_patch.ps1)，
-从补丁归档提取 `pecia*` 外部钩子名并检查 `fltk.lib`；缺失时重编，重编后仍缺失则失败。
+从补丁归档提取 `deck*` 外部钩子名并检查 `fltk.lib`；缺失时重编，重编后仍缺失则失败。
 此检查只证明钩子名称存在，不替代菜单阴影、滚动及换行的运行时验证。

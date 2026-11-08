@@ -1,4 +1,4 @@
-// ImeInPlace.h - Shared Windows IME in-place composition for Pecia text
+// ImeInPlace.h - Shared Windows IME in-place composition for the deck's text
 // widgets.
 //
 // FLTK does not consume WM_IME_* messages, so by default the IME reverts to

@@ -38,9 +38,11 @@ bool ParseAhkHotkey(const std::string &aText, unsigned int &aMods, unsigned int 
 	std::string &aCanonical, std::string &aError);
 
 // m088: the same spelling, but for a *menu command* shortcut. Those live inside
-// the deck window, so a bare function key ("F3", "Del") is safe there, while
-// the system-wide script hotkeys still need a modifier. A bare letter or digit
-// stays rejected in both scopes: it would eat the key while typing.
+// the deck window, so any named key ("Del", "Enter") is safe there, while the
+// system-wide scope still needs a modifier - except a bare function key
+// (F1-F24): m117 allows that in both scopes, because nobody types an F-key into
+// a text field. A bare letter or digit stays rejected in both: it would eat the
+// key while typing.
 bool ParseMenuShortcut(const std::string &aText, unsigned int &aMods, unsigned int &aVirtualKey,
 	std::string &aCanonical, std::string &aError);
 
@@ -50,7 +52,7 @@ struct HotkeyEntry
 	std::string hotkey; // AHK syntax, empty = unbound
 };
 
-// %LOCALAPPDATA%\AHKDeck\hotkeys.txt, or empty when the variable is missing.
+// hotkeys.txt next to the exe (portable mode, same rule as Settings/Library).
 std::wstring DefaultHotkeyPath();
 
 // Missing file = first run: returns true with an empty list. Later duplicates of
@@ -81,5 +83,17 @@ bool SameShortcut(const std::string &aLeft, const std::string &aRight);
 // rows carry the same combo the later one keeps it and every earlier one is
 // cleared. A hand-edited file is normalized by the save path, not rejected.
 void MakeShortcutsUnique(std::vector<std::pair<std::string, std::string>> &aRows);
+
+// m106: what a hand-edited hotkeys.txt can contain that the dialog prevents.
+// One issue per entry: the text does not parse, or it equals an earlier entry.
+// The loader reports these to the console; it never rewrites the file silently
+// (m090: a hand-edited file is normalized by the save path, not by the loader).
+struct HotkeyIssue
+{
+	std::string name;
+	std::string hotkey;
+	std::string message; // already user-facing: names the reason and the owner
+};
+std::vector<HotkeyIssue> AuditHotkeys(const std::vector<HotkeyEntry> &aEntries);
 
 } // namespace ahkdeck

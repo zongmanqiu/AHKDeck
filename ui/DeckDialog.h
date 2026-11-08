@@ -54,7 +54,7 @@ private:
 	void InstallFrame();
 	void SyncFrame();
 
-	// Pecia's lesson, learned the expensive way: the decorations are applied
+	// Lesson learned the expensive way: the decorations are applied
 	// after ShowWindow already made the window visible, so a dialog that never
 	// gets a mouse message keeps a missing glow and a stale ring. One follow-up
 	// tick after the first frame re-syncs both.

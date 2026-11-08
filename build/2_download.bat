@@ -20,7 +20,7 @@ REM
 REM IMPLEMENTATION NOTE: the per-dependency body runs in a subroutine (call
 REM :one) instead of inline - cmd cannot nest a "for /f" inside another "for /f"
 REM body without losing variables, and the "url|marker" split needs exactly
-REM that (structure inherited from pecia, battle-tested there).
+REM that (battle-tested structure).
 REM ============================================================================
 
 setlocal enabledelayedexpansion

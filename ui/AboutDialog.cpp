@@ -1,4 +1,4 @@
-// AboutDialog.cpp - "关于 AHKDeck" dialog, mirrored from pecia's AboutDialog.
+// AboutDialog.cpp - "关于 AHKDeck" dialog.
 // The whole content area is ONE self-drawn widget (AboutPanel) that paints
 // every text element with fl_draw at explicit local coordinates, so lines
 // cannot drift apart. The repository row is a separate widget with two hit

@@ -1,9 +1,9 @@
 # agent/ — 脚本工具层与 MCP 端（m063／m064）
 
-一句话：**工具的唯一定义处**。谁驱动这 7 个脚本工具都行，实现与清单只有一份。
+一句话：**工具的唯一定义处**。谁驱动这 10 个脚本工具都行，实现与清单只有一份。
 
 ```
-Toolbox     7 个脚本工具 + 中性工具定义（ToolDef）；线程安全；只经 core/AiPolicy 落盘
+Toolbox     10 个脚本工具 + 中性工具定义（ToolDef）；线程安全；只经 core/AiPolicy 落盘
 McpServer   MCP stdio 端：换行分隔 JSON-RPC，stdout 只放协议帧，日志走 stderr
 ```
 
@@ -19,8 +19,8 @@ m065 把那个循环删了：模型、重试、上下文管理交给外部 MCP �
 
 ## 工具面
 
-`list_scripts` / `read_script` / `edit_editor` / `run_editor` / `run_script`
-/ `get_session_output` / `stop_script`
+`list_scripts` / `read_script` / `edit_editor` / `check_editor` / `validate_editor`
+/ `patch_editor` / `run_editor` / `run_script` / `get_session_output` / `stop_script`
 
 - 模型只看脚本 **id**（`S1`…），看不到本机绝对路径（规则 9）。`list_scripts` 每次都重新枚举，
   所以外部 agent 新建的文件下一句就能看见。
@@ -30,8 +30,27 @@ m065 把那个循环删了：模型、重试、上下文管理交给外部 MCP �
   越界路径（`..`、盘符外、非 `.ahk`、设备名、备用数据流）一律拒绝。
 - 常驻脚本：`run_editor`/`run_script` 超时后回 `state:"running"` + 会话号，
   由调用方 `stop_script`。"跑通"的结构化 verdict 归 m062。
+- 写入回执（m101）：`edit_editor` / `write_script` 返回 `changed`、`lines_before`、
+  `lines_after`、`first_changed_line`、`last_changed_line`（公共前缀/后缀逐行比较），
+  调用方只重读改动的那几行即可。
+- 有界输出（m101）：`get_session_output` 可选 `max_bytes`（默认 32768，范围 64–65536），
+  并返回 `truncated` / `bytes`，调用方能分清"没有更多"与"上面还有被截掉的内容"。
+- 静态检查（m102）：`check_editor` 只读编辑区做纯文本扫描（v1 专有命令、v1 命令式写法、
+  `%var%` 引用、未闭合引号），`ok=false` 表示有 error 级问题；不执行、不落盘。
+- 小补丁（m102）：`patch_editor` 支持 `replace` / `insert_after` / `delete`，`old_text`
+  必须唯一命中，否则整批拒绝；`preview=true` 只回变更摘要不改编辑区。
+- 脚本传参（m102）：`run_editor` / `run_script` 可选 `args`（最多 16 个），脚本里用
+  `A_Args` 读取。
+- 语法预检（m103）：`validate_editor` 走内核自己的 `/validate` 模式——只解析、不执行。
+  内核的验证入口只在命令行上有，且同一进程加载过脚本后会拒绝再验（`Line::sSourceFileCount`
+  保护），所以这条路径由宿主把编辑区写成临时脚本、再以 `--validate` 拉起一个短命进程，
+  读回 JSONL 报告。`rc=2` 表示有语法错，`findings` 带行号与内核原话；`ok=true` 即可运行。
 
 ## 接入 MCP 客户端
+
+**面向用户/AI 的接入说明就在发行包里**：`docs\MCP接入.md`（配置示例就在正文里、10 个工具、
+典型提示词、边界、排错）；程序内「帮助 > MCP 接入」用系统默认程序打开它。
+本节是开发者视角的同一份事实，不重复那份文档的内容。
 
 产品本身不需要密钥、不联网；客户端把我们的 exe 当一个 stdio 服务进程拉起。
 配置里的路径请换成你自己机器上的安装目录（文档不写任何人的绝对路径）。

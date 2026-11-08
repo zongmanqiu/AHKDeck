@@ -11,6 +11,7 @@
 | `smoke_editor_find.ps1` | 行号显示、查找选中、**全部替换落盘**、清单行仍在且 deck 不动用户脚本、无弹窗（m083：改成纯键盘驱动；session B 原来按 `y` 要求"移除清单行"，产品里既没有这个键也没有这个菜单项，已改成断言真实契约；m089 起查找栏是开关且默认折叠，Ctrl+H 因此按两次＝收起再展开，删除默认键 `Delete`） |
 | `smoke_ui_detail.ps1` | 双击行运行、关宿主即停（走 `--quit`）、日志按钮回执、窗口几何重启恢复、无弹窗 |
 | `smoke_workbench.ps1` | **m023 工作台四件事**：随包 `AHKDeckBridge.inc` 存在且能被 `--run` 加载、全局快捷键启/停、双击=切换、Ctrl+Shift+M 走菜单桥（坐标原样到达）、重启换会话、快捷键条保存/清除、关闭=隐藏到托盘且脚本仍在跑、`--quit` 才真退出、无弹窗；**m024**：过滤框（过滤后点唯一可见行启动的是那个脚本而不是清单第 1 行）、清空后行号恢复；**m026**：右键一律 deck 菜单（在跑的行也一样，且此时不得出现 `#32768`）、每行「菜单」格弹脚本自己的托盘菜单（含从不定制菜单的脚本的默认菜单）、红绿灯是**像素**判据（在跑＝绿、没跑＝灰） |
+| `show_hotkey.ps1` | **m108 显示主窗口热键**：隔离的 `hotkeys.txt` 写入 `window.show=^!D` → 最小化的窗口按热键恢复；关闭按钮隐藏到托盘后按热键回到窗口并置前；快捷键对话框顶行是「窗口 > 显示主窗口」并有截图。**注意**：隐藏后 `show()` 会重建 HWND（FLTK 把隐藏窗口移出窗口表），所以每次判据都按 pid 重新找窗口，不能拿旧句柄 |
 | `check_choice_labels.ps1` | 文本门禁：`Fl_Choice::add()` 的分隔符必须是 `\|`（用 `\n` 只会得到一个项）。带 `-SelfTest`；扫不到 `add()` 调用即判失败 |
 
 `smoke_workbench.ps1` 还会用产品自己的「复制」按钮把控制台读回来（`Get-DeckConsole`），
@@ -27,6 +28,7 @@ powershell -STA -NoProfile -ExecutionPolicy Bypass -File .main\test\ui_gate\smok
 powershell -STA -NoProfile -ExecutionPolicy Bypass -File .main\test\ui_gate\smoke_ui_detail.ps1
 powershell -STA -NoProfile -ExecutionPolicy Bypass -File .main\test\ui_gate\smoke_ui.ps1 -Case run
 powershell -STA -NoProfile -ExecutionPolicy Bypass -File .main\test\ui_gate\smoke_workbench.ps1
+powershell -STA -NoProfile -ExecutionPolicy Bypass -File .main\test\ui_gate\show_hotkey.ps1
 ```
 
 要点（踩过的坑，见 m015 §5）：输入一律用 `PostMessage`（`WM_CHAR`/鼠标消息）＋ `keybd_event`，

@@ -2,6 +2,10 @@
 
 本产品以 GPL-2.0 分发（见 [LICENSE](LICENSE)），并包含以下第三方组件。以下用相对路径指称仓库内位置。
 
+**上游许可原文随产品分发**，放在程序旁的 `licenses\`（源目录 `licenses/`）：
+`GPL-2.0.txt`（AutoHotkey_H 的 `license.txt` 原样）、`LGPL-2.0-with-FLTK-exception.txt`（FLTK 的
+`COPYING` 原样），说明见 [licenses/README.md](licenses/README.md)。本文件是组件摘要，不替代原文。
+
 ## 1. AutoHotkey_H v2.0.25（进程内脚本引擎）
 
 - 来源：https://github.com/thqby/AutoHotkey_H ，钉定 commit
@@ -20,7 +24,7 @@
 - 落位：源码快照在 `.3rd\fltk-1.4.5\`；构建树在 `.temp\fltk-build\`（中间产物）
 - 补丁：`.main\patches\fltk-1.4.5\`（6 个文件：`FL\Fl_Menu_.H`、`FL\Fl_Text_Buffer.H`、
   `src\Fl_Menu.cxx`、`src\Fl_Scrollbar.cxx`、`src\Fl_Text_Buffer.cxx`、`src\Fl_Text_Display.cxx`），
-  逐条修改记录见 [FLTK 补丁说明](patches/fltk-1.4.5/FLTK_PATCHES.md)。补丁集源自 Pecia，
+  逐条修改记录见 [FLTK 补丁说明](patches/fltk-1.4.5/FLTK_PATCHES.md)。补丁集为本项目自研维护，随源码分发，
   阴影钩子带 `/alternatename` 空桩兜底；颜色全局仍由 AHKDeck 的 `ui/Theme.cpp` 定义，不能据此声称库可独立链接。
 - 修改版 FLTK 本身的源码修改：按 LGPL 第 4 条随本仓库源码公开（即上述补丁归档）。
 

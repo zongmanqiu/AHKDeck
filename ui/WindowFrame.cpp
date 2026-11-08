@@ -219,6 +219,18 @@ void applyRoundedCorners(Fl_Window *win, bool on, unsigned int borderColor) {
 #endif
 }
 
+bool frameInstalled(Fl_Window *win) {
+#if defined(_WIN32)
+    if (!win) return false;
+    HWND hwnd = fl_xid(win);
+    if (!hwnd) return false;
+    return GetPropW(hwnd, kRoundedProp) != nullptr;
+#else
+    (void)win;
+    return false;
+#endif
+}
+
 void refreshRoundedCorners(Fl_Window *win) {
 #if defined(_WIN32)
     if (!win) return;
@@ -312,7 +324,7 @@ bool bandColourAt(Fl_Group *g, int x, int y, unsigned int *colour) {
     return false;
 }
 
-// One painter for every Pecia window (main window and both tool windows).
+// One painter for every deck window (main window and both tool windows).
 //
 // The non-client area is exactly ONE pixel wide (WindowFrame::NC_PAD) and is
 // entirely covered by the border stroked below, so there is NO strip to fill.

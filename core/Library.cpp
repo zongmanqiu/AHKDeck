@@ -67,11 +67,16 @@ std::wstring DefaultLibraryPath()
 	if (n > 0 && n < MAX_PATH)
 		return explicitPath;
 
-	wchar_t base[MAX_PATH] = {0};
-	n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
+	wchar_t exe[MAX_PATH] = {0};
+	n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
 	if (n == 0 || n >= MAX_PATH)
 		return std::wstring();
-	return std::wstring(base) + L"\\AHKDeck\\library.txt";
+	// m094: portable first, same rule as the settings file.
+	std::wstring path(exe, n);
+	const size_t slash = path.find_last_of(L"\\/");
+	if (slash != std::wstring::npos)
+		path.resize(slash);
+	return path + L"\\library.txt";
 }
 
 bool LoadScriptLibrary(const std::wstring &aPath, std::vector<std::wstring> &aOut, std::string &aError)

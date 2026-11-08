@@ -1,6 +1,6 @@
-// DeckFrame.h - installs Pecia's borderless frame on the deck window.
+// DeckFrame.h - installs the borderless frame on the deck window.
 //
-// The visual stack is Pecia's (ui/WindowFrame + ui/WindowShadow): the window is
+// The visual stack lives in ui/WindowFrame + ui/WindowShadow: the window is
 // border(0), a rounded region clips it, a 1px border is hand-painted, and a
 // layered companion window carries the anti-aliased ring and the outer glow.
 // This file only owns the Win32 message plumbing that a borderless top-level

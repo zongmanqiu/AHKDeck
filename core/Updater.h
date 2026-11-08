@@ -1,4 +1,4 @@
-// core/Updater.h - self-update support (m092), ported from pecia.
+// core/Updater.h - self-update support (m092).
 //
 // Flow:
 //   1. CheckUpdate()   fetch the manifest (update.json) from the selected
@@ -13,7 +13,7 @@
 // API: one URL per source instead of two API dialects, and the release notes
 // can be published in more than one language.
 //
-// No package hash, on purpose (pecia's ruling): the manifest and the package
+// No package hash, on purpose: the manifest and the package
 // live in the same repository, so a hash there cannot stop anyone who could
 // swap the package anyway.
 //

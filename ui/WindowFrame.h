@@ -111,6 +111,11 @@ void applyRoundedCorners(Fl_Window *win, bool on, unsigned int borderColor);
 // never had applyRoundedCorners() called.
 void refreshRoundedCorners(Fl_Window *win);
 
+// True when this window's CURRENT hwnd carries the rounded-corner preference
+// prop. A rebuilt hwnd loses it (props die with the handle), which is the
+// reliable signal that the whole custom frame needs reinstalling.
+bool frameInstalled(Fl_Window *win);
+
 // Force a repaint of the non-client band (the 6px strip on left/right/bottom
 // that MainWindow_frame/ToolChrome paint in WM_NCPAINT). Windows never
 // re-sends WM_NCPAINT just because FLTK repainted the client area, so after a
@@ -121,12 +126,12 @@ void refreshFrameBand(Fl_Window *win);
 
 // --- The single frame painter -------------------------------------------
 //
-// Every Pecia window used to carry its own copy of "fill the 6px band by
-// sampling the widget tree, then stroke the 1px border" - one in
-// MainWindow_frame.cpp, one in ToolChrome.cpp, with subtly different colour
-// sampling. That duplication is why border bugs kept coming back one window
-// type at a time (band colour lagging, border missing, border colour stuck
-// after a theme switch). Both now call these two functions and nothing else.
+// Each window type used to carry its own copy of "fill the 6px band by
+// sampling the widget tree, then stroke the 1px border", with subtly
+// different colour sampling. That duplication is why border bugs kept coming
+// back one window type at a time (band colour lagging, border missing,
+// border colour stuck after a theme switch). All of them now call these two
+// functions and nothing else.
 
 // Colour a hand-drawn widget shows at (x, y), in `win`'s client space.
 // Walks the widget tree, asking every BandColourSource on the way down.
@@ -273,7 +278,7 @@ int buildCornerStroke(const Fl_Window *win, unsigned int borderColour,
 // process (open dialogs + main window).
 void reapplyRoundedCorners(bool on);
 
-// Ask other Pecia processes (Lua console / AI chat) to reapply as well.
+// Ask other deck processes (tool windows) to reapply as well.
 void broadcastRoundedCorners(bool on);
 
 // Registered window message used by the broadcast (0 on non-Windows).

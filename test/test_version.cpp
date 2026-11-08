@@ -1,6 +1,8 @@
 // test/test_version.cpp - pins the version contract.
-// If you bump the version, do it in BOTH core/Version.h and CMakeLists.txt;
-// this test fails until the string side matches, which is exactly the point.
+// m094: the numbers now come from CMakeLists.txt's project(VERSION) through
+// compile definitions, so this test no longer hardcodes them: it checks that
+// VersionString() is exactly what the Constants say, which is the only thing
+// that can still drift (a hand-typed string).
 //
 // Style note: asserts go through Expect(), not through a do/while(0) macro -
 // a macro's `if (constant-condition)` trips C4127 under our /W4 /WX gate
@@ -10,6 +12,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace {
 
@@ -31,14 +34,18 @@ int main()
 {
     const char* file = __FILE__;
 
-    Expect(ahkdeck::kVersionMajor == 0, "kVersionMajor == 0", file, __LINE__);
-    Expect(ahkdeck::kVersionMinor == 1, "kVersionMinor == 1", file, __LINE__);
-    Expect(ahkdeck::kVersionPatch == 0, "kVersionPatch == 0", file, __LINE__);
-    Expect(std::strcmp(ahkdeck::VersionString(), "0.1.0") == 0,
-           "VersionString() == \"0.1.0\"", file, __LINE__);
+    Expect(ahkdeck::kVersionMajor >= 0, "kVersionMajor >= 0", file, __LINE__);
+    Expect(ahkdeck::kVersionMinor >= 0, "kVersionMinor >= 0", file, __LINE__);
+    Expect(ahkdeck::kVersionPatch >= 0, "kVersionPatch >= 0", file, __LINE__);
+
+    const std::string expected = std::to_string(ahkdeck::kVersionMajor) + "." +
+                                 std::to_string(ahkdeck::kVersionMinor) + "." +
+                                 std::to_string(ahkdeck::kVersionPatch);
+    Expect(std::strcmp(ahkdeck::VersionString(), expected.c_str()) == 0,
+           "VersionString() == major.minor.patch", file, __LINE__);
 
     if (g_failures == 0) {
-        std::printf("test_version: all checks passed\n");
+        std::printf("test_version: all checks passed (%s)\n", ahkdeck::VersionString());
         return 0;
     }
     std::printf("test_version: %d check(s) failed\n", g_failures);

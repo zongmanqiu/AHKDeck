@@ -15,10 +15,17 @@
 //     AutoHotkey.exe). --journal replaces the human layout with one JSON object
 //     per line (started / kernel records / exited) for machines: AI agents and
 //     scripts tail the stream instead of parsing prose.
-//   * "AHKDeck.exe --mcp-stdio" -> the same deck window, plus an MCP endpoint on
+//   * "AHKDeck.exe --validate <script.ahk>" -> parses the file with the kernel's
+//     own /validate mode and exits before a single statement runs (m103). Output
+//     is JSONL: the kernel's load-error records, then {"ok":...,"rc":...}. This
+//     only works in a fresh process (the kernel refuses a second script once one
+//     is loaded), so the deck's validate_editor tool spawns this mode per call.
+//   * "AHKDeck.exe --mcp-stdio" -> the same deck, plus an MCP endpoint on
 //     stdin/stdout (m064): newline-delimited JSON-RPC exposing the script tools,
 //     so an external agent can write into the editing area, run it, read the
 //     console and iterate - with the scripts still living in this one process.
+//     m117: the window starts hidden to the tray, so frequent tool calls never
+//     put a deck window in front of the user; the tray icon brings it back.
 //   * bare double-click launch -> the FLTK deck window (m014): script list,
 //     run / stop / stop-all, the console panel and the session state column.
 //     No terminal window is ever created (rules-standing.md 13).
@@ -30,6 +37,7 @@
 // License: GPL-2.0 (only), see LICENSE and
 // THIRD-PARTY-NOTICES.md for the embedded third-party components.
 
+#include "core/ResourceStats.h"
 #include "core/Version.h"
 #include "engine/DeckEngine.h"
 #include "ui/DeckUI.h"
@@ -37,6 +45,7 @@
 
 #include <windows.h>
 #include <dbghelp.h>
+#include <tlhelp32.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -61,6 +70,94 @@ std::wstring ExeDirectory()
 	return slash == std::wstring::npos ? dir : dir.substr(0, slash);
 }
 
+struct ModuleRange
+{
+	ULONGLONG base = 0;
+	ULONGLONG size = 0;
+	std::string name;
+};
+
+// Loaded modules, for the stack scan below. Toolhelp is the cheap route; if it
+// fails (a crashing process is not a healthy one) the stack is written as raw
+// addresses and the dmp still carries the module list.
+void CollectModules(std::vector<ModuleRange> &aOut)
+{
+	const HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32,
+		GetCurrentProcessId());
+	if (snap == INVALID_HANDLE_VALUE)
+		return;
+	MODULEENTRY32W entry = {};
+	entry.dwSize = sizeof(entry);
+	if (Module32FirstW(snap, &entry))
+	{
+		do
+		{
+			ModuleRange mod;
+			mod.base = reinterpret_cast<ULONGLONG>(entry.modBaseAddr);
+			mod.size = entry.modBaseSize;
+			char leaf[MAX_PATH] = {0};
+			WideCharToMultiByte(CP_ACP, 0, entry.szModule, -1, leaf, MAX_PATH, nullptr, nullptr);
+			mod.name = leaf;
+			aOut.push_back(mod);
+		} while (Module32NextW(snap, &entry));
+	}
+	CloseHandle(snap);
+}
+
+// "module+0xoffset" when aAddress lands inside a loaded image, else empty.
+std::string DescribeAddress(ULONGLONG aAddress, const std::vector<ModuleRange> &aModules)
+{
+	for (const ModuleRange &mod : aModules)
+	{
+		if (aAddress >= mod.base && aAddress < mod.base + mod.size)
+		{
+			char text[160] = {0};
+			std::snprintf(text, sizeof(text), "%s+0x%llx", mod.name.c_str(),
+				static_cast<unsigned long long>(aAddress - mod.base));
+			return text;
+		}
+	}
+	return std::string();
+}
+
+// Walk the crashing thread's stack from RSP and report every word that points
+// into a loaded image. The dmp has the whole memory but neither WinDbg nor a
+// symbol server here, so the crash report itself has to answer "which code
+// called the bad pointer": those image pointers are the call chain, and with a
+// map/pdb of the same build the offsets turn into function names. The scan is
+// bounded to the committed stack region that holds RSP, so it cannot touch the
+// guard page and cannot fault a second time.
+void AppendStack(std::string &aText, ULONGLONG aRsp,
+	const std::vector<ModuleRange> &aModules)
+{
+	if (aRsp == 0)
+		return;
+	MEMORY_BASIC_INFORMATION mbi = {};
+	if (!VirtualQuery(reinterpret_cast<const void *>(aRsp), &mbi, sizeof(mbi)))
+		return;
+	const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_EXECUTE_READ |
+		PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY;
+	if ((mbi.Protect & readable) == 0)
+		return;
+	const ULONGLONG high = reinterpret_cast<ULONGLONG>(mbi.BaseAddress) + mbi.RegionSize;
+	const ULONGLONG wanted = aRsp + 0x4000;
+	const ULONGLONG stop = high < wanted ? high : wanted;
+	int frames = 0;
+	for (ULONGLONG at = aRsp; at + sizeof(ULONGLONG) <= stop && frames < 64;
+		at += sizeof(ULONGLONG))
+	{
+		const ULONGLONG value = *reinterpret_cast<const ULONGLONG *>(at);
+		const std::string where = DescribeAddress(value, aModules);
+		if (where.empty())
+			continue;
+		char line[192] = {0};
+		std::snprintf(line, sizeof(line), "  #%d  %p  %s\r\n", frames,
+			reinterpret_cast<const void *>(value), where.c_str());
+		aText += line;
+		++frames;
+	}
+}
+
 LONG __stdcall CrashFilter(EXCEPTION_POINTERS *aInfo)
 {
 	const std::wstring logs = ExeDirectory() + L"\\Logs";
@@ -76,9 +173,11 @@ LONG __stdcall CrashFilter(EXCEPTION_POINTERS *aInfo)
 		GetCurrentProcessId());
 
 	const std::wstring base = dumps + L"\\crash-" + stamp;
+	bool dumped = false;
+	ULONG dumpError = 0;
+	ULONGLONG dumpBytes = 0;
 	if (aInfo && aInfo->ExceptionRecord)
 	{
-		const EXCEPTION_RECORD *rec = aInfo->ExceptionRecord;
 		const HANDLE file = CreateFileW((base + L".dmp").c_str(), GENERIC_WRITE, 0, nullptr,
 			CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
 		if (file != INVALID_HANDLE_VALUE)
@@ -87,27 +186,90 @@ LONG __stdcall CrashFilter(EXCEPTION_POINTERS *aInfo)
 			info.ThreadId = GetCurrentThreadId();
 			info.ExceptionPointers = aInfo;
 			info.ClientPointers = FALSE;
-			MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file,
+			dumped = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file,
 				(MINIDUMP_TYPE)(MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules |
 					MiniDumpWithIndirectlyReferencedMemory | MiniDumpScanMemory),
-				&info, nullptr, nullptr);
+				&info, nullptr, nullptr) != FALSE;
+			if (!dumped)
+				dumpError = GetLastError();
+			LARGE_INTEGER size = {};
+			if (GetFileSizeEx(file, &size))
+				dumpBytes = static_cast<ULONGLONG>(size.QuadPart);
 			CloseHandle(file);
 		}
-
-		const HANDLE txt = CreateFileW((base + L".txt").c_str(), GENERIC_WRITE, 0, nullptr,
-			CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-		if (txt != INVALID_HANDLE_VALUE)
+		else
 		{
-			char line[512] = {0};
-			const int n = std::snprintf(line, sizeof(line),
-				"AHKDeck crash\r\npid: %lu\r\nthread: %lu\r\ncode: 0x%08lX\r\naddress: 0x%p\r\nflags: 0x%08lX\r\n",
-				GetCurrentProcessId(), GetCurrentThreadId(),
-				(unsigned long)rec->ExceptionCode, rec->ExceptionAddress,
-				(unsigned long)rec->ExceptionFlags);
-			DWORD written = 0;
-			WriteFile(txt, line, (DWORD)(n > 0 ? n : 0), &written, nullptr);
-			CloseHandle(txt);
+			dumpError = GetLastError();
 		}
+	}
+
+	std::string text;
+	text.reserve(4096);
+	char line[256] = {0};
+	std::snprintf(line, sizeof(line), "AHKDeck crash\r\npid: %lu\r\nthread: %lu\r\n",
+		static_cast<unsigned long>(GetCurrentProcessId()),
+		static_cast<unsigned long>(GetCurrentThreadId()));
+	text += line;
+
+	const EXCEPTION_RECORD *rec = aInfo ? aInfo->ExceptionRecord : nullptr;
+	if (rec)
+	{
+		std::snprintf(line, sizeof(line), "code: 0x%08lX\r\naddress: %p\r\nflags: 0x%08lX\r\n",
+			static_cast<unsigned long>(rec->ExceptionCode), rec->ExceptionAddress,
+			static_cast<unsigned long>(rec->ExceptionFlags));
+		text += line;
+		const DWORD params = rec->NumberParameters;
+		std::snprintf(line, sizeof(line), "params: %lu\r\n",
+			static_cast<unsigned long>(params));
+		text += line;
+		for (DWORD i = 0; i < params && i < EXCEPTION_MAXIMUM_PARAMETERS; ++i)
+		{
+			// Access-violation information[0] is the fault kind: 0 read, 1 write,
+			// 8 execute. An "execute" at address 0 is a call through a null
+			// function pointer, which is worth spelling out. information[1] is the
+			// address the access targeted, so it gets no kind label.
+			const char *kind = "";
+			if (rec->ExceptionCode == 0xC0000005UL && i == 0)
+				kind = rec->ExceptionInformation[i] == 8 ? " (execute)"
+					: rec->ExceptionInformation[i] == 1 ? " (write)" : " (read)";
+			std::snprintf(line, sizeof(line), "info[%lu]: 0x%llX%s\r\n",
+				static_cast<unsigned long>(i),
+				static_cast<unsigned long long>(rec->ExceptionInformation[i]), kind);
+			text += line;
+		}
+	}
+
+	std::snprintf(line, sizeof(line), "dmp: %s (err=%lu, %llu bytes)\r\n",
+		dumped ? "ok" : "failed", static_cast<unsigned long>(dumpError),
+		static_cast<unsigned long long>(dumpBytes));
+	text += line;
+
+	std::vector<ModuleRange> modules;
+	modules.reserve(128);
+	CollectModules(modules);
+	std::snprintf(line, sizeof(line), "modules: %llu\r\nstack:\r\n",
+		static_cast<unsigned long long>(modules.size()));
+	text += line;
+
+#if defined(_M_X64)
+	if (aInfo && aInfo->ContextRecord)
+	{
+		const CONTEXT *ctx = aInfo->ContextRecord;
+		std::snprintf(line, sizeof(line), "rip: %p\r\nrsp: %p\r\n",
+			reinterpret_cast<const void *>(ctx->Rip),
+			reinterpret_cast<const void *>(ctx->Rsp));
+		text += line;
+		AppendStack(text, ctx->Rsp, modules);
+	}
+#endif
+
+	const HANDLE txt = CreateFileW((base + L".txt").c_str(), GENERIC_WRITE, 0, nullptr,
+		CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (txt != INVALID_HANDLE_VALUE)
+	{
+		DWORD written = 0;
+		WriteFile(txt, text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
+		CloseHandle(txt);
 	}
 	return EXCEPTION_EXECUTE_HANDLER;
 }
@@ -349,6 +511,58 @@ int RunScript(bool aJournal, int aArgc, wchar_t **aArgv, int aRunIndex)
 	return (int)rc;
 }
 
+// m103: validate-only pass. The kernel's "/validate" makes LoadFromFile parse
+// the script and return 0 (2 on a load failure) before InitForExecution runs,
+// so nothing executes. Output is JSONL - the kernel's load-error records, then
+// one summary line - because validate_editor reads it back as tool fields.
+int RunValidate(wchar_t *aScriptPath)
+{
+	ahkdeck::Engine &engine = ahkdeck::Engine::Instance();
+	std::string error;
+	std::vector<ahkdeck::ErrorRecord> records;
+	const int rc = engine.ValidateFile(aScriptPath, error, records);
+
+	for (const auto &rec : records)
+		std::printf("%s\n", rec.json.c_str());
+
+	if (rc == 1)
+		std::printf("{\"ok\":false,\"rc\":1,\"error\":%s}\n",
+			JsonString(error.empty() ? "the kernel could not validate" : error).c_str());
+	else
+		std::printf("{\"ok\":%s,\"rc\":%d}\n", rc == 0 ? "true" : "false", rc);
+	std::fflush(stdout);
+	return rc;
+}
+
+// m107: one JSON line with the same numbers the status bar draws. Two samples
+// 300 ms apart turn the CPU counters into a real delta, and the first GPU
+// collect only primes PDH. Nothing here touches the window, so this mode is
+// also the machine reader for the stats gate.
+//
+// pid is in the line on purpose: it lets a reader (or a person with Task
+// Manager open) confirm that these numbers belong to THIS process, not to
+// something the deck started alongside it.
+int RunStats()
+{
+	ahkdeck::ResourceSampler sampler;
+	sampler.Sample();
+	Sleep(300);
+	const ahkdeck::ResourceSample sample = sampler.Sample();
+	std::printf("{\"ok\":true,\"pid\":%lu,\"cpu_percent\":%.1f,\"working_set_bytes\":%llu,"
+		"\"private_working_set_bytes\":%llu,\"private_bytes\":%llu,"
+		"\"threads\":%u,\"handles\":%u,\"gpu_percent\":%.1f,\"text\":%s}\n",
+		(unsigned long)GetCurrentProcessId(),
+		sample.cpuPercent,
+		(unsigned long long)sample.workingSetBytes,
+		(unsigned long long)sample.privateWorkingSetBytes,
+		(unsigned long long)sample.privateBytes,
+		(unsigned)sample.threadCount, (unsigned)sample.handleCount,
+		sample.gpuPercent,
+		JsonString(ahkdeck::FormatResources(sample)).c_str());
+	std::fflush(stdout);
+	return 0;
+}
+
 } // namespace
 
 int main()
@@ -363,6 +577,7 @@ int main()
 	bool journal = false;
 	bool mcpStdio = false;
 	int runIndex = -1;
+	int validateIndex = -1;
 	for (int i = 1; i < argc; ++i)
 	{
 		if (std::wcscmp(argv[i], L"--journal") == 0)
@@ -371,6 +586,8 @@ int main()
 			mcpStdio = true;
 		else if (std::wcscmp(argv[i], L"--run") == 0 && runIndex < 0)
 			runIndex = i;
+		else if (std::wcscmp(argv[i], L"--validate") == 0 && validateIndex < 0)
+			validateIndex = i;
 	}
 
 	// Any switch means "someone typed this in a console": get that console back.
@@ -397,18 +614,28 @@ int main()
 			: "AHKDeck: no running deck\n", signalled);
 		result = signalled ? 0 : 1;
 	}
+	else if (argc > 1 && std::wcscmp(argv[1], L"--stats") == 0)
+	{
+		// m107: the machine reader for the status bar's resource numbers.
+		result = RunStats();
+	}
 	else if (mcpStdio)
 	{
 		// m064: an MCP client (WorkBuddy / Qoder) starts this process and speaks
-		// newline-delimited JSON-RPC on stdin/stdout. This is the deck window with
-		// one extra endpoint, not a proxy: the editing area, the sessions and the
-		// console all belong to this process, so the client's tool calls move the
-		// window the user is watching, and when the client lets go the deck dies
-		// with every script inside it (AGENTS 11a).
+		// newline-delimited JSON-RPC on stdin/stdout. This is the deck with one
+		// extra endpoint, not a proxy: the editing area, the sessions and the
+		// console all belong to this process, and when the client lets go the deck
+		// dies with every script inside it (AGENTS 11a). m117: the window goes
+		// hidden to the tray right after startup, so an agent that calls tools all
+		// day never gets a deck window in the way; the tray icon is the way back.
 		//
 		// The single-instance handshake below is deliberately skipped: the client
 		// needs this very process to stay alive as its server.
 		result = ahkdeck::ui::Run(GetModuleHandleW(nullptr), true);
+	}
+	else if (validateIndex > 0 && validateIndex + 1 < argc)
+	{
+		result = RunValidate(argv[validateIndex + 1]);
 	}
 	else if (runIndex > 0)
 	{
@@ -416,7 +643,7 @@ int main()
 	}
 	else if (argc > 1)
 	{
-		std::printf("usage: AHKDeck.exe [--version | --quit [pid] | --mcp-stdio | [--journal] --run <script.ahk> [args...]]\n");
+		std::printf("usage: AHKDeck.exe [--version | --stats | --quit [pid] | --validate <script.ahk> | --mcp-stdio | [--journal] --run <script.ahk> [args...]]\n");
 		result = 0;
 	}
 	else

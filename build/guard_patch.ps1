@@ -19,10 +19,11 @@ foreach ($line in Get-Content $Baseline) {
 }
 
 $failed = @()
-foreach ($file in Get-ChildItem $PatchDir -File) {
-    $label = 'source/' + $file.Name
+foreach ($file in (Get-ChildItem $PatchDir -Recurse -File)) {
+    $rel = $file.FullName.Substring($PatchDir.Length + 1).Replace('\', '/')
+    $label = 'source/' + $rel
     if (-not $base.ContainsKey($label)) { continue }  # new file, no baseline
-    $dst = Join-Path $DstDir $file.Name
+    $dst = Join-Path $DstDir $rel
     if (-not (Test-Path $dst)) { continue }           # fresh tree
     $dstHash = (Get-FileHash $dst -Algorithm SHA256).Hash.ToLower()
     $patchHash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower()

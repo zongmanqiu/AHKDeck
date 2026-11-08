@@ -105,7 +105,7 @@ public:
   int undocut;             // number of characters deleted there
   int undoinsert;          // number of characters inserted
   int undoyankcut;         // length of valid contents of buffer, even if undocut=0
-  bool group;              // PATCHED by Pecia: event belongs to an undo transaction
+  bool group;              // PATCHED: event belongs to an undo transaction
 
   /*
    Resize the undo buffer to match at least the requested size.
@@ -195,7 +195,7 @@ public:
 
   void lock() { locked_ = true; }
   void unlock() { locked_ = false; }
-  // PATCHED by Pecia (Patch 6): expose the lock state so buffer
+  // PATCHED (Patch 6): expose the lock state so buffer
   // mutations can skip recording undo history while an action applies.
   bool locked() const { return locked_; }
 };
@@ -231,7 +231,7 @@ Fl_Text_Buffer::Fl_Text_Buffer(int requestedSize, int preferredGapSize)
   mPredeleteCbArgs = NULL;
   mCursorPosHint = 0;
   mCanUndo = 1;
-  mUndoGrouping = 0;   // PATCHED by Pecia: undo transaction nesting counter
+  mUndoGrouping = 0;   // PATCHED: undo transaction nesting counter
   mUndo = new Fl_Text_Undo_Action();
   mUndoList = new Fl_Text_Undo_Action_List();
   mRedoList = new Fl_Text_Undo_Action_List();
@@ -616,7 +616,7 @@ int Fl_Text_Buffer::undo(int *cursorPos) {
     return 0;
 
   int ret = 0;
-  // PATCHED by Pecia (see FLTK_PATCHES.md Patch 6): one undo() call
+  // PATCHED (see FLTK_PATCHES.md Patch 6): one undo() call
   // reverts a whole undo transaction (all consecutive events marked
   // `group`), so a script/AI insertion wrapped in undo_begin/undo_end
   // is undone atomically.
@@ -631,7 +631,7 @@ int Fl_Text_Buffer::undo(int *cursorPos) {
     if (ret) {
       // push the generated undo action to the redo list
       mRedoList->push(mUndo);
-      // PATCHED by Pecia (Patch 6): apply_undo no longer pushes
+      // PATCHED (Patch 6): apply_undo no longer pushes
       // intermediate actions into mUndoList, so a single pop yields the
       // previous undo action (was: pop+delete empty action, then pop).
       mUndo = mUndoList->pop();
@@ -658,7 +658,7 @@ int Fl_Text_Buffer::redo(int *cursorPos) {
     return 0;
 
   int ret = 0;
-  // PATCHED by Pecia (see FLTK_PATCHES.md Patch 6): redo restores a
+  // PATCHED (see FLTK_PATCHES.md Patch 6): redo restores a
   // whole undo transaction at once; events generated while redoing keep
   // the transaction's group flag so a subsequent undo() also reverts
   // the whole group. Symmetric to undo(): the history entry that undo()
@@ -685,7 +685,7 @@ int Fl_Text_Buffer::redo(int *cursorPos) {
   return ret;
 }
 
-// PATCHED by Pecia (see FLTK_PATCHES.md Patch 6): begin/end an undo
+// PATCHED (see FLTK_PATCHES.md Patch 6): begin/end an undo
 // transaction - all buffer modifications between the two calls are
 // treated as ONE undo/redo step. Nested calls are allowed (reference
 // counted).
@@ -1461,7 +1461,7 @@ int Fl_Text_Buffer::insert_(int pos, const char *text, int insertedLength)
   update_selections(pos, 0, insertedLength);
 
   if (mCanUndo) {
-    // PATCHED by Pecia (Patch 6): merge events only when their group
+    // PATCHED (Patch 6): merge events only when their group
     // state matches the current transaction state - a transaction must
     // stay atomic: pre-transaction input never merges into it, and
     // post-transaction input never extends it.
@@ -1474,14 +1474,14 @@ int Fl_Text_Buffer::insert_(int pos, const char *text, int insertedLength)
       if (!yankcut) {
         // insert text at a new position, so generate a new undo action
         mRedoList->clear();
-        // PATCHED by Pecia (Patch 6): while an undo/redo action is being
+        // PATCHED (Patch 6): while an undo/redo action is being
         // applied the redo list is locked - intermediate actions must not
         // pollute the undo history (this misaligned undo()'s pops for
         // replace-style actions and silently ate history entries).
         if (!mRedoList->locked()) mUndoList->push(mUndo);
         else delete mUndo;
         mUndo = new Fl_Text_Undo_Action();
-        mUndo->group = (mUndoGrouping > 0);   // PATCHED by Pecia: undo transaction
+        mUndo->group = (mUndoGrouping > 0);   // PATCHED: undo transaction
       } else {
         // we deleted and inserted at the same position, making this a yankcut
       }
@@ -1505,7 +1505,7 @@ void Fl_Text_Buffer::remove_(int start, int end)
 {
   if (start >= end) return;
   if (mCanUndo) {
-    // PATCHED by Pecia (Patch 6): see insert_() - merge only when the
+    // PATCHED (Patch 6): see insert_() - merge only when the
     // group state matches the current transaction state.
     bool mergeOk = (mUndo->group == (mUndoGrouping > 0));
     if (mUndo->undoat == end && mUndo->undocut && mergeOk) {
@@ -1516,12 +1516,12 @@ void Fl_Text_Buffer::remove_(int start, int end)
     } else {
       // remove text at a new position, so generate a new undo action
       mRedoList->clear();
-      // PATCHED by Pecia (Patch 6): see insert_() - no history pollution
+      // PATCHED (Patch 6): see insert_() - no history pollution
       // while an undo/redo action is being applied.
       if (!mRedoList->locked()) mUndoList->push(mUndo);
       else delete mUndo;
       mUndo = new Fl_Text_Undo_Action();
-      mUndo->group = (mUndoGrouping > 0);   // PATCHED by Pecia: undo transaction
+      mUndo->group = (mUndoGrouping > 0);   // PATCHED: undo transaction
       mUndo->undocut = end - start;
       mUndo->undobuffersize(mUndo->undocut);
     }

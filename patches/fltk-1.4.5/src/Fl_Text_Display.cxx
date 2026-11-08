@@ -59,7 +59,7 @@
 
 #define NO_HINT -1
 
-/* PATCH (Pecia): how many blank rows the viewport may scroll past the last
+/* PATCH: how many blank rows the viewport may scroll past the last
  line of the document.
 
  Upstream's limit mNBufferLines + 3 - mNVisibleLines looks like it grants
@@ -79,9 +79,9 @@
  value it can attain is short of the maximum, so the drawn thumb stops short)
  -- that was the original "垂直滑块滑不到底" report. Both now call
  vscroll_bottom_line() so they cannot drift apart. */
-static const int PECIA_BLANK_ROWS_PAST_END = 3;
+static const int DECK_BLANK_ROWS_PAST_END = 3;
 
-/* PATCH (Pecia): the top line that leaves PECIA_BLANK_ROWS_PAST_END blank rows
+/* PATCH: the top line that leaves DECK_BLANK_ROWS_PAST_END blank rows
  below the last line of the document.
 
  mNBufferLines counts newlines, so the document's last line is number
@@ -105,7 +105,7 @@ static int vscroll_bottom_line(int nbuf, int nvis) {
   /* PATCH (AHKDeck m084): the blank rows may not eat the whole viewport.
    *
    * The formula assumes the viewport is taller than the blank area. With
-   * fewer than PECIA_BLANK_ROWS_PAST_END + 1 visible rows it lands PAST the
+   * fewer than DECK_BLANK_ROWS_PAST_END + 1 visible rows it lands PAST the
    * end of the text: the target row carries no text at all, its line start
    * is -1, and FLTK's scroll arithmetic hands position_to_line() a row
    * without a line start. That is what tripped the consistency check on
@@ -114,13 +114,13 @@ static int vscroll_bottom_line(int nbuf, int nvis) {
    *
    * The last line of the text has to stay on screen, so the blank area
    * shrinks with the viewport. */
-  int blank = PECIA_BLANK_ROWS_PAST_END;
+  int blank = DECK_BLANK_ROWS_PAST_END;
   if (blank > nvis - 1) blank = nvis - 1;
   if (blank < 0) blank = 0;
   return nbuf + 2 + blank - nvis;
 }
 
-/* PATCH (Pecia): the limit scroll_() actually applied on its last call, or 0
+/* PATCH: the limit scroll_() actually applied on its last call, or 0
  if it has not run yet. See vscroll_bottom_line() for why this is needed. */
 static int vscroll_applied_limit = 0;
 
@@ -615,7 +615,7 @@ void Fl_Text_Display::recalc_display() {
 
   if (mContinuousWrap && !mWrapMarginPix) {
 
-    /* PATCH (Pecia): floor, not ceil -- see the long note at the second
+    /* PATCH: floor, not ceil -- see the long note at the second
      occurrence below (:591). Both places MUST agree. */
     int nvlines = text_area.h / mMaxsize;
     int nlines = buffer()->count_lines(0,buffer()->length());
@@ -656,7 +656,7 @@ void Fl_Text_Display::recalc_display() {
     /* reallocate and update the line starts array, which may have changed
      size and / or contents.  */
 
-    /* PATCH (Pecia): count only the lines that FULLY fit, i.e. round DOWN.
+    /* PATCH: count only the lines that FULLY fit, i.e. round DOWN.
 
      Upstream uses ceil:  nvlines = (text_area.h + mMaxsize - 1) / mMaxsize
      That declares one more visible row than the viewport can actually show
@@ -803,14 +803,14 @@ void Fl_Text_Display::recalc_display() {
    display more text by scrolling down */
   } else {
 
-   /* PATCH (Pecia): do not pull the view back up once the bottom of the
+   /* PATCH: do not pull the view back up once the bottom of the
     document is already on screen.
 
     Upstream keeps calling scroll_(mTopLineNum-1) for as long as the row above
     the last visible one is empty. That is a "show more text" optimisation for
     the case where trailing blank lines drifted into view, but it also runs at
     the very bottom of a document and there it cancels the blank rows that
-    scroll_() deliberately allows (PECIA_BLANK_ROWS_PAST_END), leaving the last
+    scroll_() deliberately allows (DECK_BLANK_ROWS_PAST_END), leaving the last
     line flush against the bottom edge.
 
     bottom_line is the top line scroll_() is willing to go to. Once mTopLineNum
@@ -2567,7 +2567,7 @@ void Fl_Text_Display::draw_string(int style,
     fl_draw( string, nChars, X, baseline);
     if (styleRec) {
       if (styleRec->attr & ATTR_LINES_MASK) {
-        int pitch = 1;  // Pecia: thin 1px underline for URLs
+        int pitch = 1;  // thin 1px underline for URLs
         int prevAA = fl_antialias();
         fl_antialias(1);
         switch (styleRec->attr & ATTR_LINES_MASK) {
@@ -3230,7 +3230,7 @@ void Fl_Text_Display::scroll(int topLineNum, int horizOffset) {
  */
 int Fl_Text_Display::scroll_(int topLineNum, int horizOffset) {
   /* Limit the requested scroll position to allowable values */
-  /* PATCH (Pecia): one shared bottom limit, recorded for update_v_scrollbar().
+  /* PATCH: one shared bottom limit, recorded for update_v_scrollbar().
      See vscroll_bottom_line() -- mNBufferLines drifts within a single
      display_needs_recalc() pass, so the two must not recompute it. */
   {
@@ -3279,7 +3279,7 @@ void Fl_Text_Display::update_v_scrollbar() {
          mTopLineNum, mNVisibleLines, mNBufferLines);
 #endif // DEBUG
 
-  /* PATCH (Pecia): the scrollbar maximum is the top line scroll_() actually
+  /* PATCH: the scrollbar maximum is the top line scroll_() actually
    permits, so the thumb can reach the end of its own track.
 
    Why this matters: Fl_Slider::scrollvalue(pos, size, first, total) does
@@ -3796,7 +3796,7 @@ void Fl_Text_Display::measure_deleted_lines(int pos, int nDeleted) {
  \param[out] retLineEnd End position of the last line traversed
  \param[out] countLastLineMissingNewLine
  */
-// PECIA PATCH: CJK line-breaking support -------------------------------
+// DECK PATCH: CJK line-breaking support -------------------------------
 // Stock FLTK only breaks at ASCII whitespace. A run of CJK text contains no
 // spaces, so it becomes one giant unbreakable "word" and lands in the
 // break-at-margin fallback, which cuts at whatever character overflows -
@@ -3804,7 +3804,7 @@ void Fl_Text_Display::measure_deleted_lines(int pos, int nDeleted) {
 // The helpers below implement the common CJK line-breaking rules: a break
 // is allowed between two CJK characters, forbidden BEFORE closing
 // punctuation and forbidden AFTER opening punctuation.
-static int pecia_cjk_no_break_before(unsigned int c) {
+static int deck_cjk_no_break_before(unsigned int c) {
   return (c==0x3001 || c==0x3002 || c==0x3005 || c==0x3009 || c==0x300B ||
           c==0x300D || c==0x300F || c==0x3011 || c==0x3015 || c==0x3017 ||
           c==0x3019 || c==0x301B || c==0x301E || c==0x30FB ||
@@ -3814,14 +3814,14 @@ static int pecia_cjk_no_break_before(unsigned int c) {
           c==0x00B7);
 }
 
-static int pecia_cjk_no_break_after(unsigned int c) {
+static int deck_cjk_no_break_after(unsigned int c) {
   return (c==0x3008 || c==0x300A || c==0x300C || c==0x300E || c==0x3010 ||
           c==0x3014 || c==0x3016 || c==0x3018 || c==0x301A || c==0x301D ||
           c==0xFF08 || c==0xFF3B || c==0xFF5B || c==0xFF62 ||
           c==0x2018 || c==0x201C);
 }
 
-static int pecia_cjk_char(unsigned int c) {
+static int deck_cjk_char(unsigned int c) {
   return (c>=0x1100 && c<=0x11FF) ||   // Hangul Jamo
          (c>=0x2E80 && c<=0x9FFF) ||   // CJK radicals .. CJK unified
          (c>=0xA960 && c<=0xA97F) ||   // Hangul Jamo Extended-A
@@ -3833,30 +3833,30 @@ static int pecia_cjk_char(unsigned int c) {
          (c>=0x30000 && c<=0x3FFFD);   // CJK ext E..F
 }
 
-// PECIA PATCH (2026-10-24): extra break opportunities for mixed text.
+// DECK PATCH (2026-10-24): extra break opportunities for mixed text.
 // A Latin/digit run is an unbreakable token, but it may break away from an
 // adjacent CJK glyph (UAX #14 allows it). Without this, "中文English" is one
 // unbreakable run and the line fills badly.
-static int pecia_latin_word_char(unsigned int c) {
+static int deck_latin_word_char(unsigned int c) {
   return (c>='0' && c<='9') || (c>='A' && c<='Z') || (c>='a' && c<='z') ||
          c=='\'' || c=='_';
 }
 
-static int pecia_break_between(unsigned int prev, unsigned int cc) {
+static int deck_break_between(unsigned int prev, unsigned int cc) {
   if (!prev) return 0;
   if (prev=='\t' || prev==' ' || cc=='\t' || cc==' ') return 0;
-  if (!(pecia_cjk_char(prev) || pecia_cjk_char(cc))) return 0;
-  if (pecia_cjk_no_break_after(prev) || pecia_cjk_no_break_before(cc)) return 0;
-  if (pecia_cjk_char(prev) && pecia_cjk_char(cc)) return 1;
-  if (pecia_cjk_char(prev) && pecia_latin_word_char(cc)) return 1;
-  if (pecia_latin_word_char(prev) && pecia_cjk_char(cc)) return 1;
+  if (!(deck_cjk_char(prev) || deck_cjk_char(cc))) return 0;
+  if (deck_cjk_no_break_after(prev) || deck_cjk_no_break_before(cc)) return 0;
+  if (deck_cjk_char(prev) && deck_cjk_char(cc)) return 1;
+  if (deck_cjk_char(prev) && deck_latin_word_char(cc)) return 1;
+  if (deck_latin_word_char(prev) && deck_cjk_char(cc)) return 1;
   return 0;
 }
 
 // Weak break: after a URL/path delimiter. Used only when a single token is
 // wider than the whole line, so normal words (TCP/IP, state-of-the-art) are
 // still kept together by the strong-break rules above.
-static int pecia_weak_break_after(unsigned int c) {
+static int deck_weak_break_after(unsigned int c) {
   return c=='/' || c=='\\' || c=='-' || c=='_' ||
          c=='?' || c=='&' || c=='=' || c=='#';
 }
@@ -3879,7 +3879,7 @@ void Fl_Text_Display::wrapped_line_counter(Fl_Text_Buffer *buf, int startPos,
   if (mWrapMarginPix != 0) {
     wrapMarginPix = mWrapMarginPix;
   } else {
-    /* PECIA PATCH: keep a small drift guard before the right text edge.
+    /* DECK PATCH: keep a small drift guard before the right text edge.
        The old code reserved one full character of slack, but the CJK
        retPos off-by-one used to consume it on the next line, so every
        wrapped CJK line looked one glyph short. The off-by-one is fixed
@@ -3942,8 +3942,8 @@ void Fl_Text_Display::wrapped_line_counter(Fl_Text_Buffer *buf, int startPos,
       foundBreak = false;
       skipBreakChar = 0;
       weakScanPos = -1;
-      b = lineStart;   // PECIA PATCH: fallback uses `b` below (STR #2730)
-      /* PECIA PATCH: scan forward once and remember the last strong break
+      b = lineStart;   // DECK PATCH: fallback uses `b` below (STR #2730)
+      /* DECK PATCH: scan forward once and remember the last strong break
          opportunity: after ASCII whitespace, at a CJK boundary, or at a
          CJK<->Latin/digit boundary. The latest opportunity wins; ties favor
          whitespace. If none exists (e.g. a long Latin word or URL) fall
@@ -3955,10 +3955,10 @@ void Fl_Text_Display::wrapped_line_counter(Fl_Text_Buffer *buf, int startPos,
           unsigned int cc = buf->char_at(q);
           if (cc == '\t' || cc == ' ') {
             lastWs = q;
-          } else if (pecia_break_between(prev, cc)) {
+          } else if (deck_break_between(prev, cc)) {
             lastStrong = q;   // break opportunity BEFORE q
           }
-          if (q < p && pecia_weak_break_after(cc))
+          if (q < p && deck_weak_break_after(cc))
             lastWeak = buf->next_char(q);   // break opportunity AFTER q
           prev = cc;
         }
@@ -3976,7 +3976,7 @@ void Fl_Text_Display::wrapped_line_counter(Fl_Text_Buffer *buf, int startPos,
         }
 
         if (newStart >= 0) {
-          /* PECIA PATCH (oversized-token lookahead): if the token after the
+          /* DECK PATCH (oversized-token lookahead): if the token after the
              break is itself wider than a whole line (URL, long path, long
              run without spaces), moving it down whole leaves the current
              line mostly empty. Start filling the current line inside it. */
@@ -3993,7 +3993,7 @@ void Fl_Text_Display::wrapped_line_counter(Fl_Text_Buffer *buf, int startPos,
             unsigned int cc = buf->char_at(q);
             if (cc == '\n') break;
             if (q > newStart && (cc == ' ' || cc == '\t' ||
-                                 pecia_break_between(prev2, cc))) break;
+                                 deck_break_between(prev2, cc))) break;
             tokenW += measure_proportional_character(buf->address(q), (int)tokenW,
                                                      q+styleBufOffset);
             if (tokenW > wrapMarginPix) { oversized = true; break; }
@@ -4012,7 +4012,7 @@ void Fl_Text_Display::wrapped_line_counter(Fl_Text_Buffer *buf, int startPos,
               if (used + cw > remaining) break;
               used += cw;
               split = buf->next_char(q);
-              if (pecia_weak_break_after(buf->char_at(q))) {
+              if (deck_weak_break_after(buf->char_at(q))) {
                 lastWeak = split;
                 lastWeakUsed = used;
               }
@@ -4051,7 +4051,7 @@ void Fl_Text_Display::wrapped_line_counter(Fl_Text_Buffer *buf, int startPos,
         if (b < lineStart) b = lineStart;
       }
       if (!foundBreak) {
-        /* PECIA PATCH: no strong break in this line. Prefer a URL/path
+        /* DECK PATCH: no strong break in this line. Prefer a URL/path
            delimiter before the margin (break AFTER it) over a raw char cut,
            but only when it costs almost nothing in fill. The candidate was
            collected by the strong-break scan above (char_at only, no width
@@ -4077,7 +4077,7 @@ void Fl_Text_Display::wrapped_line_counter(Fl_Text_Buffer *buf, int startPos,
         }
       }
       if (!foundBreak) { /* no break opportunity, just break at margin */
-        /* PECIA PATCH: break BEFORE the overflowing character instead of
+        /* DECK PATCH: break BEFORE the overflowing character instead of
            after it, so an unbreakable run (long Latin word, path, URL)
            wraps char-by-char and never leaves its last glyph half-clipped
            by the right text edge. Keep the stock guard for the degenerate
@@ -4086,8 +4086,8 @@ void Fl_Text_Display::wrapped_line_counter(Fl_Text_Buffer *buf, int startPos,
            punctuation mark (simple kinsoku guard). */
         int bp = p;
         while (bp > lineStart &&
-               (pecia_cjk_no_break_before(buf->char_at(bp)) ||
-                pecia_cjk_no_break_after(buf->char_at(buf->prev_char(bp))))) {
+               (deck_cjk_no_break_before(buf->char_at(bp)) ||
+                deck_cjk_no_break_after(buf->char_at(buf->prev_char(bp))))) {
           bp = buf->prev_char(bp);
         }
         if (bp > lineStart) {
@@ -4636,7 +4636,7 @@ int Fl_Text_Display::handle(int event) {
       if (Fl_Group::handle(event)) return 1;
 
       if (Fl::event_button() == FL_RIGHT_MOUSE) {
-        // PATCHED by Pecia (see main/build/FLTK_PATCHES.md):
+        // PATCHED (see build/FLTK_PATCHES.md):
         // disable the built-in right-click context menu.
         return 1;
       }

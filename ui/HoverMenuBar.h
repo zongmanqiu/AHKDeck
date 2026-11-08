@@ -87,7 +87,14 @@ public:
 private:
 	void picked_(const Fl_Menu_Item *aItem)
 	{
-		if (aItem)
+		// pulldown() also returns items that only open a submenu (the bar's own
+		// 文件 / 编辑 / ... titles, and submenu parents inside them). Those carry a
+		// NULL callback by design, and Fl_Menu_Item::do_callback() is a bare
+		// `callback_(o, user_data_)` with no null test - the header even says the
+		// caller must check first. Without this guard clicking a bare title ran off
+		// to address 0 (measured 2026-11-08: 0xC0000005, ExceptionAddress 0x0,
+		// ExceptionInformation[0]=8 = execute, stack top HoverMenuBar::handle).
+		if (aItem && aItem->callback())
 			aItem->do_callback(this);
 	}
 

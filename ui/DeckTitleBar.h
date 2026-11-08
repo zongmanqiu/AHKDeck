@@ -1,6 +1,6 @@
 // DeckTitleBar.h - the custom caption bar that replaces the native one.
 //
-// Pecia's frame (WindowFrame/WindowShadow) is built for a border(0) window:
+// The frame (WindowFrame/WindowShadow) is built for a border(0) window:
 // the window has no OS caption, so dragging, maximizing and closing are the
 // app's job. This is the smallest title bar that keeps the deck usable:
 // title text plus minimize / maximize-restore / close, themed with the same
@@ -49,10 +49,21 @@ public:
 	int handle(int event) override;
 	bool bandColourAt(int x, int y, unsigned int *colour) const override;
 
+	// m112: FLTK only sends FL_ENTER/FL_LEAVE when the pointer MOVES. A window
+	// that gets minimized or hidden never receives the matching FL_LEAVE, so a
+	// hovered caption button could stay tinted after the window came back with
+	// the pointer somewhere else. Recompute the hover from the real cursor;
+	// the frame proc calls this on WM_SIZE / WM_SHOWWINDOW.
+	void RefreshHoverFromCursor();
+
 private:
 	enum class Hit { None, Minimize, Maximize, Close };
 
 	Hit HitTest(int mx, int my) const;
+	// m114: the hover state is recomputed from the real pointer every time the
+	// bar paints, so a repaint triggered by show()/restore can never put back a
+	// tint that the pointer no longer justifies.
+	Hit CursorHit() const;
 	void DrawButton(int x, int w, Hit hit) const;
 	Fl_Color Background() const;
 
