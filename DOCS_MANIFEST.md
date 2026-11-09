@@ -13,7 +13,6 @@
 | [engine/README.md](engine/README.md) | 会话 API、内核生命周期和日志；错误路由、退出或日志位置变化时更新 |
 | [agent/README.md](agent/README.md) | 工具接口与 MCP 接入；工具定义、协议或连接生命周期变化时更新 |
 | [ui/README.md](ui/README.md) | 当前交互、控件职责与线程接线；菜单、布局、共享控件变化时更新 |
-| [scripts/README.md](scripts/README.md) | 随包脚本与菜单桥；脚本或分发规则变化时更新 |
 | [build/build_readme.md](build/build_readme.md) | 构建步骤、开关、输出路径；构建脚本变化时更新 |
 | [build/打包清单.md](build/打包清单.md) | 发行包白名单、禁包项与打包步骤；入包文件或压缩工具变化时更新 |
 | [test/ui_gate/README.md](test/ui_gate/README.md) | UI 冒烟入口；测试步骤或参数变化时更新 |

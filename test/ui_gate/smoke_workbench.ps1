@@ -229,6 +229,7 @@ $menuMark = Join-Path $scripts "m023-menu.txt"
 $probeBeat = Join-Path $scripts "m023-beat.ahk"
 $probeMenu = Join-Path $scripts "m023-menu.ahk"
 $probeInclude = Join-Path $scripts "m023-include.ahk"
+$probeInc = Join-Path $scripts "m023-inc.inc"
 $probeTray = Join-Path $scripts "m023-tray.ahk"
 $trayMark = Join-Path $scripts "m023-tray.txt"
 $utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -417,15 +418,16 @@ SetTimer Beat, 200
 
 '@, $utf8)
 
-    # menu: the shape of a bridged script. The recorder stands in for the shipped
-    # bridge's A_TrayMenu.Show() so this gate never pops a visible menu on a shared
-    # desktop; "AHKDeckBridge" in the source is what makes the deck offer the item,
-    # and the shipped include itself is proven by the --run cell below.
+    # menu: a script that records the menu request instead of popping a real menu,
+    # so this gate never paints one on a shared desktop. The deck offers that item
+    # for any RUNNING script (AHK_NOTIFYICON, m123), so the source carries no
+    # marker; the relative #Include cell below covers the kernel side.
     [System.IO.File]::WriteAllText($probeMenu, @'
 #Requires AutoHotkey v2.0
 #SingleInstance Force
 #NoTrayIcon
-; Same protocol as the shipped AHKDeckBridge.inc: OnMessage(0x8001, x, y).
+; Negative control: m023's bridge protocol (0x8001) must stay silent - the deck
+; asks for the menu with AHK_NOTIFYICON instead (m123).
 gMark := A_ScriptDir "\m023-menu.txt"
 if FileExist(gMark)
     FileDelete(gMark)
@@ -447,12 +449,13 @@ SetTimer Keep, 500
 
 '@, $utf8)
 
-    # tray: a bridged script with its own tray menu, so the takeover gesture can be
+    # tray: a script with its own tray menu, so the takeover gesture can be
     # measured against the kernel's real A_TrayMenu.Show() rather than a recorder.
+    # No include: the deck asks for that menu with AHK_NOTIFYICON (0x0404), which
+    # the kernel answers for any script, bridge or not (m123).
     [System.IO.File]::WriteAllText($probeTray, @'
 #Requires AutoHotkey v2.0
 #SingleInstance Force
-#Include AHKDeckBridge.inc
 FileAppend("tray-started`n", A_ScriptDir "\m023-tray.txt", "UTF-8")
 A_TrayMenu.Delete()
 A_TrayMenu.Add("m023-item", (*) => 0)
@@ -468,10 +471,14 @@ SetTimer Keep, 500
 
 '@, $utf8)
 
-    # include: proves the file the deck ships resolves from the Scripts folder.
+    # include: proves a relative #Include resolves from the script's own folder.
+    # The .inc is written here instead of shipped (m123): the deck distributes no
+    # script any more, and what this cell tests is the kernel's path resolution,
+    # not whose file it is.
+    [System.IO.File]::WriteAllText($probeInc, "m023_inc_loaded := 1`r`n", $utf8)
     [System.IO.File]::WriteAllText($probeInclude, @'
 #Requires AutoHotkey v2.0
-#Include AHKDeckBridge.inc
+#Include m023-inc.inc
 ExitApp 0
 
 '@, $utf8)
@@ -479,8 +486,8 @@ ExitApp 0
     # a binding that already exists on disk, in v1.3's own spelling: no '+' anywhere
     [System.IO.File]::WriteAllText($hotkeys, "m023-beat.ahk=^!+F9`r`n", $utf8)
 
-    Check (Test-Path (Join-Path $scripts "AHKDeckBridge.inc")) `
-        "0  the menu bridge include ships next to the scripts"
+    Check (Test-Path $scripts) `
+        "0  the Scripts folder the deck scans exists next to the exe"
 
     # ---- the shipped include must load in the kernel --------------------------
     # An explicit process with a real wait: AHKDeck.exe is a GUI-subsystem image,
@@ -494,7 +501,7 @@ ExitApp 0
     $run = [System.Diagnostics.Process]::Start($runPsi)
     if (-not $run.WaitForExit(20000)) { $run.Kill(); throw "--run of the include probe never finished" }
     $includeRc = $run.ExitCode
-    Check ($includeRc -eq 0) "1  AHKDeck.exe --run loads a script that #Includes AHKDeckBridge.inc (rc=$includeRc)"
+    Check ($includeRc -eq 0) "1  AHKDeck.exe --run loads a script whose relative #Include resolves (rc=$includeRc)"
 
     # ---- launch the deck ------------------------------------------------------
     $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -758,7 +765,7 @@ $filterY = ($wr.Bottom - $wr.Top) - 72
 
 }
 finally {
-    foreach ($path in @($probeBeat, $probeMenu, $probeInclude, $probeTray, $beat, $menuMark, $trayMark, $settings, $library, $hotkeys)) {
+    foreach ($path in @($probeBeat, $probeMenu, $probeInclude, $probeInc, $probeTray, $beat, $menuMark, $trayMark, $settings, $library, $hotkeys)) {
         Remove-Item $path -ErrorAction SilentlyContinue
     }
     foreach ($path in $stashed) {

@@ -1,12 +1,19 @@
 # AHKDeck
 
-**[⬇️ 下载 0.2.0 (Gitee)](https://gitee.com/qiuzongman/AHKDeck/releases/download/0.2.0/AHKDeck_0.2.0.zip)**
- ｜ **[⬇️ 下载 0.2.0 (GitHub)](https://github.com/zongmanqiu/AHKDeck/releases/download/0.2.0/AHKDeck_0.2.0.zip)**
+**[⬇️ 下载 0.2.1 (Gitee)](https://gitee.com/qiuzongman/AHKDeck/releases/download/0.2.1/AHKDeck_0.2.1.zip)**
+ ｜ **[⬇️ 下载 0.2.1 (GitHub)](https://github.com/zongmanqiu/AHKDeck/releases/download/0.2.1/AHKDeck_0.2.1.zip)**
  ｜ [Gitee主仓](https://gitee.com/qiuzongman/AHKDeck)
  ｜ [GitHub镜像](https://github.com/zongmanqiu/AHKDeck)
 
-> Windows x64 的 AHK v2 脚本工作台，使用 C++17、FLTK 与定制 AutoHotkey_H 内核。
-脚本会话在宿主进程内运行；真正退出宿主时一并停止。标题栏关闭通常只是隐藏到托盘，脚本继续运行。
+> 脚本仓库: ｜ [Gitee](https://gitee.com/qiuzongman/ahk-v2-scripts)
+ ｜ [GitHub](https://gitee.com/qiuzongman/ahk-v2-scripts)
+
+## 特点
+- 脚本会话在宿主进程内运行；真正退出宿主时一并停止。
+- 标题栏关闭通常只是隐藏到托盘，脚本继续运行。
+- 支持mcp，可接入AI进行脚本撰写与修改。
+
+## 窗口
 
 ![AHKDeck 主窗口](image/screenshots/main-window.png)
 
@@ -62,6 +69,5 @@ MCP 门禁另外需要 Python；未找到 Python 时 CMake 不注册这些测试
 | [更新历史](HISTORY.md) | 各版本的新增、修复与门禁记录 |
 | [UI 说明](ui/README.md) | 当前交互与共享控件职责 |
 | [引擎说明](engine/README.md) | 会话、错误记录与生命周期 |
-| [脚本说明](scripts/README.md) | 随包脚本与菜单桥 |
 
 许可见 [LICENSE](LICENSE)；第三方组件与分发说明见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。

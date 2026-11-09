@@ -1464,7 +1464,30 @@ public:
 		Fl_Browser::draw();
 		fl_push_clip(x(), y(), w(), h());
 		DeckDrawScrollbar(&scrollbar, false);
+		if (size() == 0)
+			DrawEmptyHint(mOwner->ScriptCount() == 0);
 		fl_pop_clip();
+	}
+
+	// m125: the release ships no scripts, so an empty list is the FIRST-RUN
+	// state, not a failure. A blank pane never said that Scripts\ is where the
+	// files belong; a filter that hides every row is a different sentence, and
+	// the browser cannot tell them apart by size() alone.
+	void DrawEmptyHint(bool aNoScriptsAtAll)
+	{
+		const int left = x();
+		const int width = w();
+		const int midY = y() + h() / 2;
+
+		fl_font(FL_HELVETICA, SubTextSize());
+		fl_color(DeckColors().text2);
+		if (aNoScriptsAtAll)
+		{
+			fl_draw("还没有脚本", left, midY - 24, width, 20, FL_ALIGN_CENTER);
+			fl_draw("把 .ahk 文件放进 Scripts 文件夹", left, midY, width, 20, FL_ALIGN_CENTER);
+		}
+		else
+			fl_draw("没有匹配的脚本", left, midY - 10, width, 20, FL_ALIGN_CENTER);
 	}
 
 	// m032: click a hotkey cell and record the combo right there (the
@@ -4410,8 +4433,14 @@ void DeckWindow::ScanScripts()
 	mScripts.clear();
 	mLastLabels.clear();
 
+	// m125: the release ships an empty Scripts folder, but some extractors drop
+	// empty directories and a user may delete it - then the list stayed empty
+	// forever and 文件 > 打开脚本文件夹 did nothing. Create it on demand.
+	const std::wstring scriptsDir = ExeDirectory() + L"\\Scripts";
+	CreateDirectoryW(scriptsDir.c_str(), nullptr);
+
 	WIN32_FIND_DATAW fd;
-	const std::wstring pattern = ExeDirectory() + L"\\Scripts\\*.ahk";
+	const std::wstring pattern = scriptsDir + L"\\*.ahk";
 	HANDLE find = FindFirstFileW(pattern.c_str(), &fd);
 	if (find == INVALID_HANDLE_VALUE)
 		return;
@@ -4419,7 +4448,7 @@ void DeckWindow::ScanScripts()
 	{
 		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 			continue;
-		AddScript(ExeDirectory() + L"\\Scripts\\" + fd.cFileName);
+		AddScript(scriptsDir + L"\\" + fd.cFileName);
 	} while (FindNextFileW(find, &fd));
 	FindClose(find);
 

@@ -2,7 +2,7 @@
 #
 # The manifest and the rules live in build/打包清单.md. In short: the folder a
 # user unzips must contain exactly what the release advertises - AHKDeck.exe,
-# AutoHotkey64.dll, Scripts\ (samples), docs\ (the MCP access doc), licenses\
+# AutoHotkey64.dll, Scripts\ (empty - the folder the deck scans), docs\ (the MCP access doc), licenses\
 # (upstream license texts), LICENSE, THIRD-PARTY-NOTICES.md. Never: settings.json,
 # hotkeys.txt, Logs\, Backups\, update.cache.json, .temp\, ahkdeck_backup\, the
 # installer bat. Those are per-machine state, not the product.
@@ -35,12 +35,21 @@ if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Path $stage | Out-Null
 
 $items = @("AHKDeck.exe", "AutoHotkey64.dll", "LICENSE", "THIRD-PARTY-NOTICES.md",
-           "docs", "licenses", "Scripts")
+           "docs", "licenses")
 foreach ($item in $items) {
     $src = Join-Path $build $item
     if (-not (Test-Path $src)) { throw "missing release item in .build: $item" }
     Copy-Item $src -Destination $stage -Recurse -Force
 }
+
+# Scripts ships EMPTY (m125). Copying .build\Scripts would put whatever the
+# developer happens to be testing with into the release - the deck scans that
+# folder, so a stray probe script ends up on every user's disk. The folder still
+# has to exist in the zip (some extractors drop empty directories, and the deck
+# recreates it at startup anyway), so it is created here.
+$srcScripts = Join-Path $build "Scripts"
+if (-not (Test-Path $srcScripts)) { throw "missing release item in .build: Scripts" }
+New-Item -ItemType Directory -Path (Join-Path $stage "Scripts") | Out-Null
 
 $sevenZip = $env:AHKDECK_7Z
 if (-not $sevenZip) {

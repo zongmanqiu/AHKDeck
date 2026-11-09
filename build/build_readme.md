@@ -38,7 +38,7 @@ full.bat                 :: 一键全链路
 | CMake 构建树 | `.temp\cmake_build\` |
 | 测试 exe | `.temp\bin\` |
 | 成品 exe 与内核 | `.build\AHKDeck.exe`、`.build\AutoHotkey64.dll` |
-| 随包脚本 | `.build\Scripts\`（CMake `deck_scripts ALL` 目标从 `.main/scripts/` 同步 `*.ahk`、`*.inc`，不依赖 exe 重链接） |
+| 脚本目录 | `.build\Scripts\`（CMake `deck_scripts ALL` 目标只负责创建该目录；脚本由用户自行放入） |
 
 ## 构建约束
 

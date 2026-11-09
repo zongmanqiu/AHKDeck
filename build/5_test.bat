@@ -89,6 +89,24 @@ if !ERRORLEVEL! neq 0 (
     if not "!AHKDECK_CHAINED!"=="1" pause
     exit /b 1
 )
+REM ---- gate: the empty script list must say what to do (m125) ---------------
+REM No sample scripts ship any more, so an empty list is the first-run state. The
+REM hint must separate it from "the filter hid every row" - only ScriptCount()
+REM can tell those apart - and ScanScripts must create the Scripts folder before
+REM scanning, or an extractor that drops empty directories wins.
+echo   checking empty-list hint and Scripts recovery (m125)...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%MAIN_DIR%\test\ui_gate\check_empty_state.ps1" -SelfTest
+if !ERRORLEVEL! neq 0 (
+    echo   [ERROR] the empty-state gate cannot catch its own bad sample
+    if not "!AHKDECK_CHAINED!"=="1" pause
+    exit /b 1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%MAIN_DIR%\test\ui_gate\check_empty_state.ps1" -Root "%PROJECT_ROOT%"
+if !ERRORLEVEL! neq 0 (
+    echo   [ERROR] the empty-list hint or the Scripts recovery is gone
+    if not "!AHKDECK_CHAINED!"=="1" pause
+    exit /b 1
+)
 echo.
 
 if not exist "%BUILD_DIR%\CMakeCache.txt" (

@@ -56,8 +56,9 @@
   - [session_gate.cpp](../../test/session_gate/session_gate.cpp)：多会话、错误归属、退出码、定时器错误及脚本窗口测试；
     [gate_journal.ps1](../../test/session_gate/gate_journal.ps1)：JSONL journal 检查。
     两者由 [CMakeLists.txt](../../CMakeLists.txt) 注册到 CTest。
-  - [smoke_workbench.ps1](../../test/ui_gate/smoke_workbench.ps1) 第 0/1 格检查随包
-    `AHKDeckBridge.inc` 存在及 `--run` 加载相对 `#Include` 成功；这是手动 UI 冒烟入口，不由默认流水线运行。
+  - [smoke_workbench.ps1](../../test/ui_gate/smoke_workbench.ps1) 第 0/1 格检查 `Scripts\` 目录
+    存在及 `--run` 加载相对 `#Include` 成功（m123 起 `.inc` 由门禁自己写在探针旁，不再随包）；
+    这是手动 UI 冒烟入口，不由默认流水线运行。
   - [gate_deck_pair.ps1](../../test/kernel_gate/gate_deck_pair.ps1) 比较官方解释器与成品的退出码和输出。
     此入口不在 CTest 中，且依赖未随源码归档的临时语料；缺少语料时不能直接复现，不能当作默认构建门禁。
   上述是测试入口与覆盖范围，不是本次文档修改的运行结果。

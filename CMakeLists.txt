@@ -12,7 +12,7 @@ if(CMAKE_GENERATOR MATCHES "Makefiles")
     set(CMAKE_DEPENDS_USE_COMPILER FALSE)
 endif()
 
-project(AHKDeck VERSION 0.2.0 LANGUAGES C CXX RC)
+project(AHKDeck VERSION 0.2.1 LANGUAGES C CXX RC)
 
 # Static CRT (/MT): the shipped exe must run with ZERO VC++ redistributable
 # dependencies ("单 exe 即装即用"). CMP0091 NEW lets CMAKE_MSVC_RUNTIME_LIBRARY
@@ -476,27 +476,17 @@ else()
 endif()
 
 # ----------------------------------------------------------------------------
-# Shipped scripts distribution (project AGENTS.md rule: scripts are copied to
-# .build/Scripts once written). *.ahk under scripts/ rides along with every
-# build; other files there are not distributed.
+# Scripts folder in the release.
+# m123: the deck ships no scripts and no menu bridge any more. Scripts live in
+# their own repository and the user drops them into Scripts\ next to the exe;
+# the gear cell pops the script's own tray menu with AHK_NOTIFYICON (0x0404),
+# which needs no cooperation from the script, so a shipped include has nothing
+# left to do. The one build duty that survives is creating the folder the deck
+# scans - 6_package.ps1 refuses to package a build without .build\Scripts.
+# The target keeps the deck_scripts name: 4_build.bat and the packaging list
+# still report it by that name.
 # ----------------------------------------------------------------------------
-# Shipped scripts, plus the menu-bridge include they #Include (m023): a managed
-# script says "#Include AHKDeckBridge.inc" and expects the file next to it, so the
-# include is as much a shipped artifact as the demos.
-# m094: CONFIGURE_DEPENDS makes a newly added script re-run the configure step
-# on the next build; without it the glob is frozen until someone deletes the
-# cache, which is exactly how .build/Scripts went stale in m020.
-file(GLOB AHKDECK_SCRIPTS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/scripts/*.ahk" "${CMAKE_SOURCE_DIR}/scripts/*.inc")
-list(LENGTH AHKDECK_SCRIPTS AHKDECK_SCRIPT_COUNT)
-if(AHKDECK_SCRIPT_COUNT GREATER 0)
-    # An ALL custom target, not POST_BUILD: editing only scripts/ must still
-    # refresh .build/Scripts even when no C++ file changed and the exe target is
-    # already up to date (m020 found the stale copy this way).
-    add_custom_target(deck_scripts ALL
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/Scripts"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${AHKDECK_SCRIPTS}
-            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/Scripts"
-        COMMENT "Copying scripts/ -> .build/Scripts")
-endif()
+add_custom_target(deck_scripts ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/Scripts"
+    COMMENT "Ensuring .build/Scripts exists")

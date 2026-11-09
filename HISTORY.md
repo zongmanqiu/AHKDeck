@@ -5,6 +5,31 @@
 
 ---
 
+## 0.2.1（2026-11-10）
+
+**变更**
+
+- 不再随包示例脚本与菜单桥 `AHKDeckBridge.inc`：`Scripts\` 随包为空，脚本改由独立仓库
+  （`ahk-v2-scripts`）维护。`CMakeLists.txt` 的 `deck_scripts` 目标从"复制脚本"改为
+  "无条件创建 `.build\Scripts`"，发行包白名单不变。
+- 脚本右键的齿轮格改走 AHK 原生的 `AHK_NOTIFYICON`（`0x0404` + `WM_RBUTTONUP`）：脚本不需要
+  `OnMessage`、不需要带任何 include 文件，就能弹出自己的托盘菜单；旧的 `0x8001` 桥接协议降级为
+  负向控制（门禁断言它不再被投递）。
+- 打包不再复制 `.build\Scripts`，包内 `Scripts\` 由 `6_package.ps1` 现建为空目录：原来整个目录
+  照搬，开发机上正在试的脚本会跟着发到每个用户那里。
+
+**新增**
+
+- 脚本列表为空时直接说清楚：`还没有脚本` / `把 .ahk 文件放进 Scripts 文件夹`；筛选后没有匹配
+  项时另显示 `没有匹配的脚本`（`ScriptBrowser::DrawEmptyHint`，正文色 `text2`）。
+- `Scripts\` 缺失时在扫描前自动重建（`ScanScripts`）。解压工具丢掉空目录也不会让列表永远为空，
+  `文件 > 打开脚本文件夹` 不再无声失败。
+
+**门禁**
+
+- `smoke_workbench.ps1`：第 0 格改为断言 `Scripts\` 目录存在；第 1 格用门禁自写的
+  `m023-inc.inc` 验证相对 `#Include` 仍从脚本所在目录解析；托盘探针不再 `#Include` 桥接文件。
+
 ## 0.2.0（2026-11-08）
 
 **新增**

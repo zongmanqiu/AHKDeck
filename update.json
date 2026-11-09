@@ -1,8 +1,8 @@
 {
-  "version": "0.2.0",
-  "published": "2026-11-08",
-  "notes": "0.2.0 测试版：MCP stdio 不再弹窗，启动即隐入托盘（stdin 结束自动退出）；新增会话卫生工具与脚本列表常驻、双分隔条可拖拽并记忆占比；修复标题栏/分隔条悬停残留、分屏顶部边框缺口、托盘唤回后窗口框架退化，以及点击菜单栏标题秒退；崩溃转储补 dmp 状态、异常地址与调用链；快捷键默认只保留记事本那 13 条（复制/剪切/新建等），全局行名称常红并允许裸 F1-F24；状态栏显示 CPU/内存/GPU；随包附第三方许可原件与 MCP 接入文档。",
-  "notes_en": "0.2.0 beta: MCP stdio now runs without popping a window (hides to tray, exits on stdin EOF); session hygiene tools, always-visible script list and two draggable splitters with remembered ratios; fixed stale hover on title bar/splitters, the split-view top border gap, window frame degradation after tray restore, and the menu-bar title click crash; crash reports now carry dmp status, fault address and a call chain; default shortcuts reduced to the 13 Notepad keys (copy/cut/new ...), global rows always red and bare F1-F24 allowed; status bar shows CPU/memory/GPU; upstream license texts and the MCP access doc ship with the package.",
-  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.2.0/AHKDeck_0.2.0.zip",
-  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.2.0/AHKDeck_0.2.0.zip"
+  "version": "0.2.1",
+  "published": "2026-11-10",
+  "notes": "0.2.1：不再随包任何示例脚本与菜单桥 include，Scripts 目录随包为空，脚本改由独立仓库维护；右键齿轮改用 AHK 原生托盘消息，脚本无需任何配合即可弹出自己的菜单；脚本列表为空时直接提示把 .ahk 放进 Scripts，筛选无匹配另有一句提示；Scripts 目录缺失时启动自动重建，解压工具丢掉空目录也能用，「打开脚本文件夹」不再失效。",
+  "notes_en": "0.2.1: no sample scripts or menu-bridge include ship any more - Scripts is an empty folder and scripts live in their own repository; the gear cell now asks for a script's menu with AHK's native tray message, so scripts need no cooperation at all; an empty list says where .ahk files belong, and a filter that hides everything says so separately; a missing Scripts folder is recreated at startup, so an extractor that drops empty directories cannot break the list or File > Open scripts folder.",
+  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.2.1/AHKDeck_0.2.1.zip",
+  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.2.1/AHKDeck_0.2.1.zip"
 }

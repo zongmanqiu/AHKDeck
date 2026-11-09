@@ -235,7 +235,7 @@ echo.
 echo   AHKDeck.exe       : %OUTPUT_DIR%\AHKDeck.exe
 echo   kernel DLL       : !KERNEL_SHIPPED!
 echo   fltk.lib          : %FLTK_BUILD_DIR%\lib\fltk.lib
-echo   scripts copied    : %OUTPUT_DIR%\Scripts\ by the deck_scripts target (CMakeLists.txt)
+echo   Scripts folder    : %OUTPUT_DIR%\Scripts\ ensured by the deck_scripts target (CMakeLists.txt)
 echo.
 
 cd /d "%SCRIPT_DIR%."
