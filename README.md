@@ -8,6 +8,8 @@
 > Windows x64 的 AHK v2 脚本工作台，使用 C++17、FLTK 与定制 AutoHotkey_H 内核。
 脚本会话在宿主进程内运行；真正退出宿主时一并停止。标题栏关闭通常只是隐藏到托盘，脚本继续运行。
 
+![AHKDeck 主窗口](image/screenshots/main-window.png)
+
 ## 使用
 
 - 将脚本放入程序旁的 `Scripts/`，在列表中运行、停止、重启或编辑。
