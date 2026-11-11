@@ -108,6 +108,18 @@ std::wstring LeafOf(const std::wstring &aPath)
 	return p == std::wstring::npos ? aPath : aPath.substr(p + 1);
 }
 
+// m132: the list and the tray menu show a script by its name without the ".ahk"
+// suffix. The row's name keeps the suffix - hotkeys.txt is keyed by it and the
+// file itself is still a file - so this is a display-only transform.
+std::string DisplayNameOf(const std::string &aName)
+{
+	static const char kSuffix[] = ".ahk";
+	const size_t n = sizeof(kSuffix) - 1;
+	if (aName.size() > n && _stricmp(aName.c_str() + aName.size() - n, kSuffix) == 0)
+		return aName.substr(0, aName.size() - n);
+	return aName;
+}
+
 bool SamePathI(const std::wstring &aLeft, const std::wstring &aRight)
 {
 	if (aLeft.size() != aRight.size())
@@ -1778,7 +1790,7 @@ protected:
 		{
 			int nx = 0, nw = 0;
 			mOwner->NameCellRect(X, nx, nw);
-			const std::string name = mOwner->ScriptNameAt(mOwner->IndexOfLine(line));
+			const std::string name = DisplayNameOf(mOwner->ScriptNameAt(mOwner->IndexOfLine(line)));
 			fl_font(textfont(), textsize());
 			const int tw = (int)fl_width(name.c_str());
 			const int bw = tw + 6 < nw - 4 ? tw + 6 : nw - 4;
@@ -1796,7 +1808,7 @@ protected:
 		{
 			int nx = 0, nw = 0;
 			mOwner->NameCellRect(X, nx, nw);
-			const std::string name = mOwner->ScriptNameAt(mOwner->IndexOfLine(line));
+			const std::string name = DisplayNameOf(mOwner->ScriptNameAt(mOwner->IndexOfLine(line)));
 			fl_font(textfont(), textsize());
 			const int avail = nw - 6;
 			const int starW = editingDirty ? (int)fl_width(" *") : 0;
@@ -3655,6 +3667,27 @@ DeckWindow::DeckWindow(Engine &aEngine)
 		}
 		else
 		{
+			// m131: the tray menu's 运行中 submenu asks who is running at the
+			// moment of each right-click. Same thread as this window and the
+			// engine, so IsRunning's GetSession is safe to call in there.
+			// m132: it also asks for each script's live tray menu, which the tray
+			// menu mirrors in as a real submenu, and for the window that a picked
+			// command id has to be posted back to.
+			mHooks.SetRunningMenuProvider([this]() -> std::vector<NativeHooks::RunningScript> {
+				std::vector<NativeHooks::RunningScript> running;
+				for (const ScriptRow &row : mScripts)
+				{
+					if (!IsRunning(row))
+						continue;
+					NativeHooks::RunningScript entry;
+					entry.path = row.path;
+					entry.name = DisplayNameOf(row.name);
+					entry.menu = mEngine.TrayMenu(row.session);
+					entry.window = mEngine.FindScriptWindow(row.session);
+					running.push_back(std::move(entry));
+				}
+				return running;
+			});
 			std::string trayError;
 			if (!mHooks.AddTrayIcon("AHKDeck", trayError))
 				Append("[deck] " + trayError + "：关闭按钮按原样退出，不隐藏");
@@ -4699,7 +4732,7 @@ void DeckWindow::RefreshList()
 		// Status and gear are drawn, not written: an empty first field for the
 		// traffic light, an empty second for the gear button.
 		std::string label = "\t\t";
-		label += row.name;
+		label += DisplayNameOf(row.name);
 		label += "\t";
 		const std::string binding = BindingOf(row);
 		label += HotkeyDisplayText(binding);
@@ -6501,6 +6534,17 @@ void DeckWindow::HandleIntent(const NativeHooks::Intent &aIntent)
 	case NativeHooks::Intent::Kind::TrayShow:
 		ShowFromTray();
 		break;
+	case NativeHooks::Intent::Kind::TrayMenu:
+	{
+		// m131: a script picked in the tray menu's 运行中 submenu. The submenu was
+		// built from a live snapshot, but the script may have exited since the
+		// click: FindScript misses rows that a rescan removed, and OpenScriptMenu
+		// reports its "not running" guard line for rows whose session is gone.
+		const int index = FindScript(aIntent.scriptPath);
+		if (index >= 0)
+			OpenScriptMenu(index);
+		break;
+	}
 	case NativeHooks::Intent::Kind::Quit:
 		RequestQuit();
 		hide();

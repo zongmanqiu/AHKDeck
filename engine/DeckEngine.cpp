@@ -418,6 +418,9 @@ bool Engine::Load(std::string &aError)
 	// this export the console cannot see what a script prints.
 	mSetOutputSink = reinterpret_cast<decltype(mSetOutputSink)>(GetProcAddress(mModule, "DeckSetOutputSink"));
 	mSetIsolation = reinterpret_cast<decltype(mSetIsolation)>(GetProcAddress(mModule, "DeckSetScriptIsolation"));
+	// m132: optional. Without it the tray menu still works, it just shows a
+	// script's menu in a second popup instead of as a real submenu.
+	mTrayMenu = reinterpret_cast<decltype(mTrayMenu)>(GetProcAddress(mModule, "DeckTrayMenu"));
 
 	if (!mNewThread || !mSetErrorSink || !mSetOutputSink || !mSetIsolation)
 	{
@@ -991,6 +994,26 @@ HWND Engine::FindScriptWindow(DWORD aSessionId) const
 	search.processId = GetCurrentProcessId();
 	EnumThreadWindows(threadId, EnumScriptWindow, reinterpret_cast<LPARAM>(&search));
 	return search.found;
+}
+
+// m132: the script thread's live tray menu, so the deck's tray menu can show it
+// as a real submenu. Read-only: the handle belongs to the script thread and the
+// kernel destroys it when the script exits.
+HMENU Engine::TrayMenu(DWORD aSessionId) const
+{
+	if (!mTrayMenu)
+		return nullptr;
+	DWORD threadId = 0;
+	{
+		std::lock_guard<std::mutex> lock(mSessionsMutex);
+		auto it = mSessions.find(aSessionId);
+		if (it == mSessions.end() || !it->second.started)
+			return nullptr;
+		if (it->second.pub.state == SessionState::Finished)
+			return nullptr;
+		threadId = it->second.pub.threadId;
+	}
+	return static_cast<HMENU>(mTrayMenu(threadId));
 }
 
 bool Engine::StopSession(DWORD aSessionId)

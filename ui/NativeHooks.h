@@ -20,7 +20,9 @@
 #include <windows.h>
 
 #include <deque>
+#include <functional>
 #include <string>
+#include <vector>
 
 namespace ahkdeck
 {
@@ -30,21 +32,43 @@ namespace ui
 class NativeHooks
 {
 public:
+	// m131: one entry of the tray menu's 运行中 submenu. The menu shows the UTF-8
+	// leaf name (without the ".ahk" suffix, m132); the full path is the identity
+	// the deck resolves a fallback pick by.
+	struct RunningScript
+	{
+		std::wstring path;
+		std::string name;  // UTF-8 leaf, display only
+		// m132: the script's own tray menu, copied into a real submenu, and the
+		// window the picked command id is posted back to. Both may be null (script
+		// gone, or kernel without DeckTrayMenu); the entry then falls back to
+		// "open that script's menu in a second popup" like m131 did.
+		HMENU menu = nullptr;
+		HWND window = nullptr;
+	};
+
 	struct Intent
 	{
 		enum class Kind
 		{
 			Hotkey,   // a registered start/stop hotkey fired
 			TrayShow, // the tray icon was clicked: bring the window back
-			TrayMenu, // the tray icon was right-clicked: pop its menu
+			TrayMenu, // m131: a script was picked in the tray menu's 运行中 submenu
 			Quit      // "--quit" arrived from another process
 		} kind = Kind::TrayShow;
 		int hotkeyId = 0;
+		std::wstring scriptPath; // TrayMenu only: the picked script, by full path
 	};
 
 	// Creates the control window. On failure aError says which Win32 call gave up.
 	bool Create(HINSTANCE aInstance, std::string &aError);
 	void Destroy();
+
+	// m131: the deck answers "who is running right now" when the tray menu is
+	// about to open. The control window lives on the UI thread, so the provider
+	// may read the deck and the engine directly - asked fresh per right-click,
+	// no snapshot to go stale, no lock.
+	void SetRunningMenuProvider(std::function<std::vector<RunningScript>()> aProvider);
 
 	HWND Window() const { return mWindow; }
 
@@ -85,6 +109,7 @@ private:
 	std::wstring mTrayTip;
 	std::deque<int> mHotkeyIds;
 	std::deque<Intent> mIntents;
+	std::function<std::vector<RunningScript>()> mRunningMenuProvider;
 };
 
 } // namespace ui

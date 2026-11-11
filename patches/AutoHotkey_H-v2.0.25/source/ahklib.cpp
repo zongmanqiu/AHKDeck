@@ -974,6 +974,33 @@ AHKAPI(void) DeckSetScriptIsolation(bool aEnabled)
 	g_DeckIsolatedScripts = aEnabled;
 }
 
+// m132: the host nests a running script's own tray menu inside its own popup, so
+// the tray menu can show the script's menu the way a real submenu does. The
+// handle stays owned by the script thread: the host only reads it (menu queries
+// are safe from another thread) and never destroys it. Unknown thread ids, or a
+// script whose handle has not been created yet, yield NULL and the host keeps
+// its old "open that script's menu itself" fallback.
+AHKAPI(void *) DeckTrayMenu(DWORD aThreadId)
+{
+#pragma comment(linker,"/export:" __FUNCTION__"=" __FUNCDNAME__)
+	if (!aThreadId)
+		return nullptr;
+	for (int i = 0; i < MAX_AHK_THREADS; ++i)
+		if (g_ahkThreads[i].ThreadID == aThreadId && g_ahkThreads[i].Script)
+		{
+			UserMenu *menu = g_ahkThreads[i].Script->mTrayMenu;
+			if (!menu)
+				return nullptr;
+			// The handle is created lazily (items only live in the linked list
+			// until the menu is first shown), so materialise it here. Idempotent,
+			// and it only reads the item list.
+			if (!menu->mMenu && menu->CreateHandle() != OK)
+				return nullptr;
+			return menu->mMenu;
+		}
+	return nullptr;
+}
+
 // The 5-parameter NewThread lives in exports.cpp but is not exported: the public
 // 3-parameter export drops the callback, and without it a host cannot learn the
 // thread id (upstream returns data[4], which stays NULL in that case).

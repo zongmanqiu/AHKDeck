@@ -121,6 +121,12 @@ public:
 	// now that every session lives in one process.
 	HWND FindScriptWindow(DWORD aSessionId) const;
 
+	// m132: the session's live tray menu, so the deck's tray menu can nest the
+	// script's own menu as a real submenu. Read-only - the handle belongs to the
+	// script thread. nullptr when the session is unknown, finished, or the
+	// kernel in use has no DeckTrayMenu export.
+	HMENU TrayMenu(DWORD aSessionId) const;
+
 	// Blocks until the session's kernel thread exits; writes its official exit
 	// code (load failure = 2, same as AutoHotkey.exe) into aExitCode once it has
 	// finished. Returns false while still running, or when aSessionId is unknown.
@@ -216,6 +222,7 @@ private:
 	void(__stdcall *mSetErrorSink)(void(__stdcall *)(const char *)) = nullptr;
 	void(__stdcall *mSetOutputSink)(void(__stdcall *)(const char *)) = nullptr;
 	void(__stdcall *mSetIsolation)(bool) = nullptr;
+	void *(__stdcall *mTrayMenu)(DWORD) = nullptr; // m132, optional: DeckTrayMenu
 
 	mutable std::mutex mSessionsMutex;
 	std::map<DWORD, Entry> mSessions;    // key = session id, ascending

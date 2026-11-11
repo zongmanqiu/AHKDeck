@@ -12,6 +12,7 @@
 | `smoke_ui_detail.ps1` | 双击行运行、关宿主即停（走 `--quit`）、日志按钮回执、窗口几何重启恢复、无弹窗 |
 | `smoke_workbench.ps1` | **m023 工作台四件事**：`Scripts\` 目录存在且 `--run` 能加载相对 `#Include`（`.inc` 由门禁写在探针旁）、全局快捷键启/停、双击=切换、Ctrl+Shift+M 走菜单桥（坐标原样到达）、重启换会话、快捷键条保存/清除、关闭=隐藏到托盘且脚本仍在跑、`--quit` 才真退出、无弹窗；**m024**：过滤框（过滤后点唯一可见行启动的是那个脚本而不是清单第 1 行）、清空后行号恢复；**m026**：右键一律 deck 菜单（在跑的行也一样，且此时不得出现 `#32768`）、每行「菜单」格弹脚本自己的托盘菜单（含从不定制菜单的脚本的默认菜单）、红绿灯是**像素**判据（在跑＝绿、没跑＝灰） |
 | `show_hotkey.ps1` | **m108 显示主窗口热键**：隔离的 `hotkeys.txt` 写入 `window.show=^!D` → 最小化的窗口按热键恢复；关闭按钮隐藏到托盘后按热键回到窗口并置前；快捷键对话框顶行是「窗口 > 显示主窗口」并有截图。**注意**：隐藏后 `show()` 会重建 HWND（FLTK 把隐藏窗口移出窗口表），所以每次判据都按 pid 重新找窗口，不能拿旧句柄 |
+| `tray_running_menu.ps1` | **m131/m132/m133 托盘「运行中」子菜单**：m132 起每个运行中脚本在「运行中」里是**真子菜单镜像**（悬停即向右展开脚本自己的菜单；宿主只读复制并重编号，选中按原始 id 回投 `WM_COMMAND`；读不到菜单的脚本退回 m131 两段弹出）。m133 起，无勾选/无位图的菜单不再预留左侧勾选列（`MNS_NOCHECK`，带勾或图标的层保持标准列），B 臂按顶层菜单截图的首个文字列断言（≤22 px）。三臂——A 空态菜单打开（「运行中」灰化由截图人工判定，m079 先例）；B 探针运行时托盘→运行中→脚本项 `RIGHT` 展开脚本**自己的**菜单且菜单项真实执行（marker 判据）；C 探针在菜单打开后被杀，选中残留行不得弹菜单、不得崩（"没在运行"守卫兜底）。探针用 `A_TrayMenu.Delete()`+单项 `TRAYMENU-PROBE`，启动判据是 deck 进程的 `AutoHotkey` 类窗口（内核无常驻窗口，marker/hwnd 方案都不如它）。**自动化配方**（多次失败换来的）：先 `HideMain` 还原真实托盘形态；`FocusControl` 显示 16×16 控制窗口并用 `AttachThreadInput` 接管前台——**队列连接保持到整个菜单交互结束**；`keybd_event` 必带**扫描码**；菜单打开后**第一个键被吞**（先发牺牲 SHIFT 垫底）且约 400ms 内的键也在窗口内（静置 600ms）；借用焦点下子菜单**不会**靠 hover 定时器自展，须发 **RIGHT** 显式展开；选中判定用 `IsWindow(top)==false`（下一个菜单可能在两次轮询间出现，count==0 不可靠）；UIA 客户端一加载菜单就会秒死，禁止引入 |
 | `check_choice_labels.ps1` | 文本门禁：`Fl_Choice::add()` 的分隔符必须是 `\|`（用 `\n` 只会得到一个项）。带 `-SelfTest`；扫不到 `add()` 调用即判失败 |
 | `check_empty_state.ps1` | **m125 空列表提示**：文本门禁，四条规则——`ScriptBrowser::draw` 必须在 `size() == 0` 时调 `DrawEmptyHint(mOwner->ScriptCount() == 0)`（`size()` 分不清"没有脚本"和"被筛掉"）、两句文案（`还没有脚本` / `没有匹配的脚本`）都在、`ScanScripts` 扫描前建 `Scripts\`。带 `-SelfTest`（好样本干净、三个坏样本各被一条规则抓住）；扫不到 `DrawEmptyHint` 即判失败 |
 
@@ -30,6 +31,7 @@ powershell -STA -NoProfile -ExecutionPolicy Bypass -File .main\test\ui_gate\smok
 powershell -STA -NoProfile -ExecutionPolicy Bypass -File .main\test\ui_gate\smoke_ui.ps1 -Case run
 powershell -STA -NoProfile -ExecutionPolicy Bypass -File .main\test\ui_gate\smoke_workbench.ps1
 powershell -STA -NoProfile -ExecutionPolicy Bypass -File .main\test\ui_gate\show_hotkey.ps1
+powershell -STA -NoProfile -ExecutionPolicy Bypass -File .main\test\ui_gate\tray_running_menu.ps1
 ```
 
 要点（踩过的坑，见 m015 §5）：输入一律用 `PostMessage`（`WM_CHAR`/鼠标消息）＋ `keybd_event`，

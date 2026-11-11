@@ -1,8 +1,8 @@
 {
-  "version": "0.2.1",
-  "published": "2026-11-10",
-  "notes": "0.2.1：不再随包任何示例脚本与菜单桥 include，Scripts 目录随包为空，脚本改由独立仓库维护；右键齿轮改用 AHK 原生托盘消息，脚本无需任何配合即可弹出自己的菜单；脚本列表为空时直接提示把 .ahk 放进 Scripts，筛选无匹配另有一句提示；Scripts 目录缺失时启动自动重建，解压工具丢掉空目录也能用，「打开脚本文件夹」不再失效。",
-  "notes_en": "0.2.1: no sample scripts or menu-bridge include ship any more - Scripts is an empty folder and scripts live in their own repository; the gear cell now asks for a script's menu with AHK's native tray message, so scripts need no cooperation at all; an empty list says where .ahk files belong, and a filter that hides everything says so separately; a missing Scripts folder is recreated at startup, so an extractor that drops empty directories cannot break the list or File > Open scripts folder.",
-  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.2.1/AHKDeck_0.2.1.zip",
-  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.2.1/AHKDeck_0.2.1.zip"
+  "version": "0.2.2",
+  "published": "2026-11-11",
+  "notes": "0.2.2：托盘右键「运行中」里的每个脚本现在是真子菜单，悬停即可向右展开脚本自己的托盘菜单，选中项直接执行；脚本列表与托盘里的脚本名不再带 .ahk 后缀；托盘各级菜单去掉了左侧预留的勾选列空白，含勾选或图标的菜单仍保持标准对齐。",
+  "notes_en": "0.2.2: each running script in the tray menu's Running submenu is now a real nested submenu - hovering opens the script's own tray menu to the side and picking an item runs it; script names in the list and the tray drop the .ahk suffix; menus no longer reserve a blank check-mark column on the left, while menus that actually show checks or icons keep the standard alignment.",
+  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.2.2/AHKDeck_0.2.2.zip",
+  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.2.2/AHKDeck_0.2.2.zip"
 }

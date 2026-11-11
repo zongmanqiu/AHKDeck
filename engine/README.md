@@ -7,11 +7,12 @@
 
 | 面 | 说明 |
 |---|---|
-| `Load/Unload/IsLoaded` | 默认载入宿主 exe 旁的 `AutoHotkey64.dll`，可由 `AHKDECK_KERNEL` 指定；必须具备 `DeckNewThread`、`DeckSetErrorSink`、`DeckSetScriptIsolation` 三个导出，否则报错；正常 `Unload` 停止会话但保留内核映射 |
+| `Load/Unload/IsLoaded` | 默认载入宿主 exe 旁的 `AutoHotkey64.dll`，可由 `AHKDECK_KERNEL` 指定；必须具备 `DeckNewThread`、`DeckSetErrorSink`、`DeckSetScriptIsolation` 三个导出，否则报错；`DeckTrayMenu` 是可选导出（m132），缺失时托盘「运行中」退回两段弹出；正常 `Unload` 停止会话但保留内核映射 |
 | `StartSession(path,args,&err)` | 起一个会话，返回自增 `id`；读不到文件／解析失败也照样给会话（`finished` + rc=2，同官方 `CRITICAL_ERROR`） |
 | `GetSession/Sessions/StateName` | 状态快照（`running/stopping/finished`）；读取时**惰性回收**已死的线程，所以轮询 `Sessions()` 的 UI 不会读到假"运行中" |
 | `WaitSession/StopSession/StopAll` | 通过具有 `THREAD_QUERY_INFORMATION` 权限的句柄读取退出码；显式停止发送 `WM_QUIT`，并对脚本主窗口发送有超时的 `WM_CLOSE`，处理模态循环情形 |
 | `FindScriptWindow` | 按会话线程、宿主进程及 `AutoHotkey` 窗口类查找脚本主窗口；不是脚本的 `AutoHotkeyGUI` 窗口 |
+| `TrayMenu(sessionId)` | 取会话线程的托盘菜单 HMENU（内核惰性建菜单）；会话未启动/已结束返回空。只读，宿主复制后不改写脚本的菜单 |
 | `LogRoot` | 返回 `Load()` 固定的日志根供内部文件访问使用 |
 | `PopRecord(rec, timeoutMs)` | 消费记录、归属会话、补 `"session":<id>` 并写入 JSONL，逐行 flush；参数是记录引用与超时值 |
 

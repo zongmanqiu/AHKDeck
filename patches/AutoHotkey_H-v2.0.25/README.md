@@ -11,7 +11,7 @@
 |---|---|
 | [source/ahkversion.h](source/ahkversion.h) | 解释器与资源版本默认值固定为 2.0.25 |
 | [source/deck_sink.h](source/deck_sink.h) | 错误汇回调类型、通知函数及隔离开关声明 |
-| [source/ahklib.cpp](source/ahklib.cpp) | `DeckNotifyError` 生成 UTF-8 JSON；`LibNotifyProblem` 优先接汇；导出 `DeckSetErrorSink`、`DeckSetScriptIsolation`、`DeckNewThread` |
+| [source/ahklib.cpp](source/ahklib.cpp) | `DeckNotifyError` 生成 UTF-8 JSON；`LibNotifyProblem` 优先接汇；导出 `DeckSetErrorSink`、`DeckSetScriptIsolation`、`DeckNewThread`、`DeckTrayMenu` |
 | [source/error.cpp](source/error.cpp) | 未处理异常提取字段后接汇；`ScriptWarning` 先检查关闭警告，再通知错误汇 |
 | [source/AutoHotkey.cpp](source/AutoHotkey.cpp) | 隔离模式下以真实 filespec 作为线程脚本身份，不用合成资源名覆盖 |
 | [source/script.cpp](source/script.cpp) | 隔离次线程的脚本目录继承；正文加载的主脚本设置加载期工作目录 |
@@ -22,6 +22,9 @@
 未处理异常在接汇后，对 `FAIL_OR_OK` 返回继续，其余失败返回 `FAIL`；宿主消费致命记录时停止对应会话。
 `DeckNewThread` 暴露带启动回调和上下文的五参数入口，让宿主在线程存活时取得线程 ID 和句柄。
 `DeckSetScriptIsolation` 控制脚本文件身份与目录继承，不提供进程资源隔离。
+`DeckTrayMenu(threadId)`（m132）按线程 ID 返回脚本线程 `Script::mTrayMenu` 的 `HMENU`，
+`mMenu` 为空时先 `CreateHandle()`；只读，宿主复制成嵌套子菜单后不改写脚本自己的菜单对象。
+缺失该导出的旧 DLL 仍可运行：宿主读不到菜单时，托盘「运行中」退回两段弹出。
 宿主接入见 [DeckEngine.cpp](../../engine/DeckEngine.cpp)，接口与边界见 [engine/README.md](../../engine/README.md)。
 
 ## 补丁 1：`source\ahkversion.h` —— 版本串落为 v2.0.25
