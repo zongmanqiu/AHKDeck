@@ -2,11 +2,13 @@
 #include "ui/ScriptDownloadDialog.h"
 
 #include "ui/DeckTitleBar.h"
+#include "ui/ScriptInfoDialog.h"
 #include "ui/SourceChoice.h"
 #include "ui/Theme.h"
 #include "ui/ThemeWidgets.h"
 
 #include "core/ScriptCatalog.h"
+#include "core/ScriptHeader.h"
 #include "core/Updater.h"
 
 #include <windows.h>
@@ -278,75 +280,6 @@ private:
 	std::string mEmptyText;
 	int mTop = 0;
 	int mHover = -1;
-};
-
-// The 「!」 detail window. Owned, centred and modal like every other deck
-// dialog; every field comes from the manifest, not from the local file.
-class ScriptInfoDialog : public DeckDialog
-{
-public:
-	explicit ScriptInfoDialog(const CatalogEntry &aEntry)
-		: DeckDialog(480, DeckTitleBar::kHeight + 350, "脚本详情")
-	{
-		const ThemeColors &colors = DeckColors();
-		char size[32];
-		std::snprintf(size, sizeof(size), "%.1f KB", aEntry.sizeKb);
-		struct Field
-		{
-			const char *label;
-			std::string value;
-			int h;
-		};
-		const std::vector<Field> fields = {
-			{"名称", aEntry.name, 24},
-			{"版本", aEntry.version, 24},
-			{"日期", aEntry.date, 24},
-			{"作者", aEntry.author, 24},
-			{"许可", aEntry.license, 24},
-			{"大小", size, 24},
-			{"说明", aEntry.description, 48},
-			{"运行环境", aEntry.requires, 24},
-			{"宿主要求", aEntry.host, 24},
-			{"入口", aEntry.entry, 24},
-		};
-
-		begin();
-		int y = ContentTop() + kMargin;
-		for (const Field &field : fields)
-		{
-			const std::string text = std::string(field.label) + "："
-				+ (field.value.empty() ? std::string("（无）") : field.value);
-			Fl_Box *box = new Fl_Box(FL_NO_BOX, kMargin, y,
-				480 - 2 * kMargin, field.h, nullptr);
-			box->copy_label(text.c_str());
-			box->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
-			box->labelsize(SubTextSize());
-			box->labelcolor(colors.text1);
-			y += field.h + 2;
-		}
-		mBtnClose = new HoverButton(0, 0, 0, kControlH, "关闭");
-		mBtnClose->color(colors.background2);
-		mBtnClose->labelcolor(colors.text1);
-		mBtnClose->labelsize(TextSize());
-		mBtnClose->callback(OnClose, this);
-		FitButtonRow({ mBtnClose }, 480, y + kControlH / 2, kMargin, kGap);
-		end();
-	}
-
-	void Run()
-	{
-		ShowCentered();
-		while (shown())
-			Fl::wait();
-	}
-
-private:
-	static void OnClose(Fl_Widget *, void *aData)
-	{
-		static_cast<ScriptInfoDialog *>(aData)->hide();
-	}
-
-	HoverButton *mBtnClose = nullptr;
 };
 
 // One Fl::awake hop. `alive` is cleared on close, so a late worker drops its
@@ -779,9 +712,23 @@ void ScriptDownloadDialog::OnRowInfo(int aIndex) const
 {
 	if (aIndex < 0 || (size_t)aIndex >= mView.size())
 		return;
-	ScriptInfoDialog dialog(mView[(size_t)aIndex].entry);
-	dialog.SetFrameOptions(true, true);
-	dialog.Run();
+	// m151: the chrome is shared with the row menu's 信息 window; this caller
+	// simply feeds it the manifest row instead of the local file's header.
+	const CatalogEntry &entry = mView[(size_t)aIndex].entry;
+	std::vector<InfoGroup> groups(1);
+	groups[0] = {
+		{ "名称", entry.name, false, false },
+		{ "版本", entry.version, false, false },
+		{ "日期", entry.date, false, false },
+		{ "作者", entry.author, false, false },
+		{ "许可", entry.license, false, false },
+		{ "大小", FormatScriptSize((long long)(entry.sizeKb * 1024.0)), false, false },
+		{ "说明", entry.description, true, false },
+		{ "运行环境", entry.requires, true, false },
+		{ "宿主要求", entry.host, true, false },
+		{ "入口", entry.entry, true, false },
+	};
+	ShowInfoDialog("脚本详情", groups, true, true);
 }
 
 void ScriptDownloadDialog::RequestClose()

@@ -10,6 +10,7 @@
 #include "ui/HoverMenuBar.h"
 #include "ui/ImeInPlace.h"
 #include "ui/ScriptDownloadDialog.h"
+#include "ui/ScriptInfoDialog.h"
 #include "ui/UpdateDialog.h"
 #include "ui/WindowFrame.h"
 #include "ui/WindowShadow.h"
@@ -21,6 +22,7 @@
 #include "core/Json.h"
 #include "core/ResourceStats.h"
 #include "core/ScriptCatalog.h"
+#include "core/ScriptHeader.h"
 #include "core/Settings.h"
 #include "core/TextFile.h"
 #include "core/Version.h"
@@ -857,6 +859,10 @@ public:
 	void ShowUpdateDialog();
 	// m146: File > 获取脚本… - the official script downloader.
 	void ShowScriptDownloadDialog();
+	// m151: the row menu's 信息 window - read-only, built from the script's own
+	// header block plus the facts only the disk knows. Public for the same
+	// reason the two above are: the screenshot hook opens it without a gesture.
+	void ShowScriptInfo(int aIndex);
 	// m097/m098: Help > MCP 接入 - opens docs\MCP接入.md next to the exe.
 	// A dialog would only be a second copy of what that file already says.
 	void OpenMcpDocs();
@@ -5985,6 +5991,10 @@ void DeckWindow::ShowContextMenu(int aIndex)
 	add("编辑", 3);
 	add("快捷键…", 4);
 	add("重命名", 5);
+	// m153: no divider above 信息 after all. FL_MENU_DIVIDER on 重命名 drew a
+	// rule that made a five-item menu read as two unrelated halves; Explorer's
+	// 属性 sits in the same list without one.
+	add("信息", 6);
 	const Fl_Menu_Item end = { nullptr };
 	mContextItems.push_back(end);
 
@@ -6021,15 +6031,124 @@ void DeckWindow::ShowContextMenu(int aIndex)
 	case 5: // 重命名
 		RenameSelected();
 		break;
+	case 6: // 信息
+		ShowScriptInfo(aIndex);
+		break;
 	default:
 		break;
 	}
 }
 
+namespace
+{
+
+// 1204 -> "1,204". Local to this file; the info window is the only caller.
+std::string GroupedDigits(long long aValue)
+{
+	const std::string raw = std::to_string(aValue);
+	std::string out;
+	int count = 0;
+	for (size_t i = raw.size(); i-- > 0;)
+	{
+		out.insert(out.begin(), raw[i]);
+		if (++count % 3 == 0 && i > 0)
+			out.insert(out.begin(), ',');
+	}
+	return out;
+}
+
+} // namespace
+
+void DeckWindow::ShowScriptInfo(int aIndex)
+{
+	if (aIndex < 0 || (size_t)aIndex >= mScripts.size())
+		return;
+	const ScriptRow &row = mScripts[(size_t)aIndex];
+
+	ScriptInspection scan;
+	InspectScript(row.path, scan);
+
+	// Display order is fixed here, not inherited from the file: three scripts
+	// that list their keys in different orders must still read the same way.
+	// Keys this build does not know are appended after the known ones, so a
+	// future @tag is never silently dropped.
+	struct Known
+	{
+		const char *key;
+		const char *label;
+		bool wrap;
+	};
+	static const Known kKnown[] = {
+		{ "name", "名称", false },
+		{ "version", "版本", false },
+		{ "date", "日期", false },
+		{ "author", "作者", false },
+		{ "license", "许可", false },
+		{ "description", "说明", true },
+		{ "requires", "运行环境", true },
+		{ "host", "宿主要求", true },
+		{ "entry", "入口", true },
+		{ "homepageURL", "主页", true },
+	};
+	// @namespace is deliberately not shown: it is the userscript-era identifier
+	// and every script in the repository gives it the same value as
+	// @homepageURL, so printing both would put the same URL on two rows.
+
+	std::vector<InfoGroup> groups;
+	InfoGroup header;
+	if (scan.headerFound)
+	{
+		for (const Known &known : kKnown)
+		{
+			const std::string value = scan.Get(known.key);
+			if (value.empty())
+				continue;
+			const bool isUrl = std::strcmp(known.key, "homepageURL") == 0;
+			header.push_back({ known.label, value, known.wrap, isUrl });
+		}
+		for (const ScriptHeaderField &field : scan.fields)
+		{
+			if (_stricmp(field.key.c_str(), "namespace") == 0)
+				continue;
+			bool known = false;
+			for (const Known &entry : kKnown)
+			{
+				if (_stricmp(field.key.c_str(), entry.key) == 0)
+				{
+					known = true;
+					break;
+				}
+			}
+			if (!known && !field.value.empty())
+				header.push_back({ field.key, field.value, true, false });
+		}
+	}
+	else
+	{
+		header.push_back({ "说明",
+			"这个脚本开头没有 ==UserScript== 信息块，下面只有磁盘上的文件信息。",
+			true, false });
+	}
+	groups.push_back(header);
+
+	// The disk layer, which every .ahk has - this is what keeps a header-less
+	// script from opening an empty window.
+	InfoGroup file;
+	file.push_back({ "文件大小", FormatScriptSize(scan.sizeBytes), false, false });
+	file.push_back({ "修改时间", scan.modified, false, false });
+	if (scan.lineCount >= 0)
+		file.push_back({ "行数", GroupedDigits(scan.lineCount) + " 行", false, false });
+	// Relative on purpose: the deck never shows a local absolute path. row.name
+	// is the leaf FileName, suffix included (the list strips it for display).
+	file.push_back({ "位置", "Scripts\\" + row.name, false, true });
+	groups.push_back(file);
+
+	ShowInfoDialog("脚本信息", groups, mRoundedCorners, mWindowShadow);
+}
+
 // ---------------------------------------------------------------------------
 // m023/m024: start/stop switch, restart, the script's own tray menu, bindings, tray
 // ---------------------------------------------------------------------------
-
 // m108: the window is not a script, so its "show the main window" action gets a
 // reserved entry in hotkeys.txt. Menu commands use "menu.<key>"; this one is
 // "window.show" and has no built-in default.
@@ -7612,6 +7731,15 @@ int Run(HINSTANCE, bool aServeMcpStdio)
 		if (GetEnvironmentVariableA("AHKDECK_OPEN_SCRIPT_DOWNLOAD", openDownload,
 			sizeof(openDownload)) > 0)
 			window->ShowScriptDownloadDialog();
+	}
+
+	// m151 screenshot hook only: open the row menu's 信息 window without a
+	// gesture. The value is the row index (0 when the variable is just "1").
+	{
+		char openInfo[8] = {0};
+		if (GetEnvironmentVariableA("AHKDECK_OPEN_SCRIPT_INFO", openInfo,
+			sizeof(openInfo)) > 0)
+			window->ShowScriptInfo(std::atoi(openInfo));
 	}
 
 	// m082 gate hook (test-only): put a Scripts file into the editing area

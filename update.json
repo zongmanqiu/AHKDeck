@@ -1,8 +1,8 @@
 {
-  "version": "0.3.0",
-  "published": "2026-11-11",
-  "notes": "0.3.0：新增官方脚本下载器（脚本 > 获取脚本…），可浏览、搜索并下载或升级官方脚本，安装走临时文件与原子替换，失败自动还原，运行中的脚本先停止再替换；菜单按对象重新分组，文件 > 打开收纳日志与配置位置，脚本菜单三组两分隔线，视图不再重复「隐藏到托盘」；Gitee/GitHub 下拉改为自绘扁平样式。",
-  "notes_en": "0.3.0: adds the official script downloader (Scripts > Get Scripts...) to browse, search, download and upgrade official scripts - installs go through a temp file and an atomic replace with rollback on failure, and running scripts are stopped first; menus are regrouped by object, File > Open collects the log and config locations, the Scripts menu has three bands with two dividers, and View no longer duplicates Hide to Tray; the Gitee/GitHub dropdown is now a flat custom-drawn control.",
-  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.3.0/AHKDeck_0.3.0.zip",
-  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.3.0/AHKDeck_0.3.0.zip"
+  "version": "0.3.1",
+  "published": "2026-11-12",
+  "notes": "0.3.1：脚本列表右键新增「信息」，只读窗显示脚本头部自述（名称 / 版本 / 作者 / 许可 / 说明 / 主页等）与磁盘事实（大小 / 修改时间 / 行数 / 位置），下载框的「!」与它共用同一版式；修好中文长说明在 FLTK 下不断行、顶到窗口边框的问题，并去掉只读值旁的插入点符号；信息窗限高为屏幕工作区的一半，超出改为竖向滚动、滚动条紧贴右边框。",
+  "notes_en": "0.3.1: right-click a script row and pick Info for a read-only window showing the ==UserScript== header (name, version, author, license, description, homepage) plus on-disk facts (size, modified time, lines, location); the downloader's \"!\" button reuses the same layout. Chinese descriptions now wrap by glyph width instead of hitting the window frame, the stray caret on read-only values is gone, and the window caps at half the screen work area and scrolls instead, with the scrollbar flush to the right border.",
+  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.3.1/AHKDeck_0.3.1.zip",
+  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.3.1/AHKDeck_0.3.1.zip"
 }

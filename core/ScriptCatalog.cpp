@@ -2,6 +2,7 @@
 #include "core/ScriptCatalog.h"
 
 #include "core/Json.h"
+#include "core/ScriptHeader.h"
 #include "core/TextFile.h"
 #include "core/Updater.h"
 
@@ -28,19 +29,6 @@ std::wstring Utf8ToWideLocal(const std::string &aText)
 	MultiByteToWideChar(CP_UTF8, 0, aText.c_str(), (int)aText.size(),
 		out.data(), n);
 	return out;
-}
-
-std::string TrimLocal(const std::string &aText)
-{
-	size_t first = 0;
-	while (first < aText.size() && (aText[first] == ' ' || aText[first] == '\t'
-		|| aText[first] == '\r'))
-		++first;
-	size_t last = aText.size();
-	while (last > first && (aText[last - 1] == ' ' || aText[last - 1] == '\t'
-		|| aText[last - 1] == '\r'))
-		--last;
-	return aText.substr(first, last - first);
 }
 
 bool IsHttpsUrl(const std::string &aUrl)
@@ -167,32 +155,10 @@ CatalogResult ParseScriptCatalog(const std::string &aText)
 
 std::string LocalScriptVersion(const std::wstring &aPath)
 {
-	TextDocument doc;
-	std::string error;
-	if (!ReadTextDocument(aPath, doc, error))
-		return std::string();
-
-	size_t pos = 0;
-	for (int lineNo = 0; lineNo < 40; ++lineNo)
-	{
-		const size_t end = doc.utf8.find('\n', pos);
-		const std::string line = doc.utf8.substr(pos,
-			end == std::string::npos ? std::string::npos : end - pos);
-		if (line.find("==/UserScript==") != std::string::npos)
-			break;
-		const std::string trimmed = TrimLocal(line);
-		if (trimmed.compare(0, 10, "; @version") == 0)
-		{
-			const size_t sep = trimmed.find_last_of(" \t");
-			if (sep != std::string::npos)
-				return TrimLocal(trimmed.substr(sep + 1));
-			return std::string();
-		}
-		if (end == std::string::npos)
-			break;
-		pos = end + 1;
-	}
-	return std::string();
+	// m151: one parser for the header block, shared with the info dialog. The
+	// hand-rolled version this replaced took the text after the LAST blank,
+	// which happened to work only because @version never contains a space.
+	return ReadScriptVersion(aPath);
 }
 
 ScriptInstallState ClassifyInstall(const CatalogEntry &aEntry,

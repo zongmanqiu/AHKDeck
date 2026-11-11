@@ -12,7 +12,7 @@ if(CMAKE_GENERATOR MATCHES "Makefiles")
     set(CMAKE_DEPENDS_USE_COMPILER FALSE)
 endif()
 
-project(AHKDeck VERSION 0.3.0 LANGUAGES C CXX RC)
+project(AHKDeck VERSION 0.3.1 LANGUAGES C CXX RC)
 
 # Static CRT (/MT): the shipped exe must run with ZERO VC++ redistributable
 # dependencies ("单 exe 即装即用"). CMP0091 NEW lets CMAKE_MSVC_RUNTIME_LIBRARY
@@ -75,6 +75,7 @@ add_library(core STATIC
     core/AiPolicy.cpp
     core/Updater.cpp
     core/ScriptCatalog.cpp
+    core/ScriptHeader.cpp
     core/ResourceStats.cpp
     core/Housekeeping.cpp
 )
@@ -153,6 +154,7 @@ add_library(deckui STATIC
     ui/AboutDialog.cpp
     ui/UpdateDialog.cpp
     ui/ScriptDownloadDialog.cpp
+    ui/ScriptInfoDialog.cpp
     ui/SourceChoice.cpp
     ui/WindowFrame.cpp
     ui/WindowShadow.cpp
@@ -389,6 +391,20 @@ set_target_properties(test_aipolicy PROPERTIES
 add_test(NAME aipolicy COMMAND test_aipolicy)
 set_tests_properties(aipolicy PROPERTIES
     WORKING_DIRECTORY "${AHKDECK_POLICY_DIR}")
+
+# m151: the ==UserScript== block parser behind the row menu's 信息 window.
+add_executable(test_scriptheader
+    test/test_scriptheader.cpp
+)
+target_link_libraries(test_scriptheader PRIVATE core)
+if(MSVC)
+    target_compile_options(test_scriptheader PRIVATE /W4 /WX)
+endif()
+set_target_properties(test_scriptheader PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${AHKDECK_TEMP_BIN}"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${AHKDECK_TEMP_BIN}"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${AHKDECK_TEMP_BIN}")
+add_test(NAME scriptheader COMMAND test_scriptheader)
 
 
 # ----------------------------------------------------------------------------
