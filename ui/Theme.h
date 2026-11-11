@@ -51,6 +51,13 @@ Fl_Color AlertRed();     // the one "failed / stopped" red
 Fl_Color RunningGreen(); // the one "running" green
 Fl_Color CloseHoverRed(); // the title bar's close-button hover
 
+// m146: the script downloader's three action tones. A widget that invented
+// its own blue/orange would be a second source for the same decision, so they
+// live with the rest of the semantic colours.
+Fl_Color DownloadBlue();
+Fl_Color UpgradeAmber();
+Fl_Color IdleGrey();
+
 // The 1px outer ring of every deck window, main or dialog. It lives here
 // because the ring is one element; a window that picked its own border tone is
 // the difference between two chrome looks.
@@ -61,7 +68,6 @@ void ApplyDeckTheme();
 
 void StyleButton(Fl_Button *aButton);
 void StyleInput(Fl_Input *aInput);
-void StyleChoice(Fl_Choice *aChoice);
 void StyleTextDisplay(Fl_Text_Display *aDisplay);
 
 // The deck's flat two-rectangle scrollbar: track + thumb, no FLTK grooves or

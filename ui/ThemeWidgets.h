@@ -2,6 +2,9 @@
 
 #include "ui/Theme.h"
 
+#include <FL/Fl_Choice.H>
+#include <FL/Fl_Menu_Item.H>
+#include <FL/Fl_Rect.H>
 #include <FL/fl_draw.H>
 #include <initializer_list>
 
@@ -175,6 +178,68 @@ public:
 		DeckDrawScrollbar(&scrollbar, false);
 		DeckDrawScrollbar(&hscrollbar, true);
 		fl_pop_clip();
+	}
+};
+
+// m148: pecia's dropdown (see .ex/pecia/ui/ThemeWidgets.h:280). A stock
+// Fl_Choice hardcodes its own box type, so under an FLTK scheme it paints a
+// raised grey button next to our flat inputs. This one draws a rectangular
+// FL_BORDER_BOX, a 1px divider and a themed choice arrow itself; the selected
+// item is drawn with Fl_Menu_Item::draw so shortcuts/highlighting still work.
+// The source of the arrow colour is labelcolor(), the divider uses the same
+// g_borderColour as every other flat frame in the deck.
+class SettingsChoice : public Fl_Choice
+{
+public:
+	SettingsChoice(int aX, int aY, int aW, int aH, const char *aLabel = nullptr)
+		: Fl_Choice(aX, aY, aW, aH, aLabel)
+	{
+	}
+
+	void draw() override
+	{
+		const int dx = Fl::box_dx(box());
+		const int dy = Fl::box_dy(box());
+		draw_box(box(), color());
+
+		const int arrowW = 20;
+		const int arrowH = h() - 2 * dy;
+		const int arrowX = x() + w() - arrowW - dx;
+		const int arrowY = y() + dy;
+		const bool active = active_r();
+		const Fl_Color arrowColor = active ? labelcolor() : fl_inactive(labelcolor());
+
+		fl_color(g_borderColour);
+		fl_yxline(arrowX, y() + dy, y() + h() - dy);
+
+		Fl_Rect arrowRect(arrowX, arrowY, arrowW, arrowH);
+		arrowRect.inset(2, 0, 2, 0);
+		fl_draw_arrow(arrowRect, FL_ARROW_CHOICE, FL_ORIENT_NONE, arrowColor);
+
+		const int takenW = arrowW + 2 * dx;
+		if (mvalue())
+		{
+			Fl_Menu_Item item = *mvalue();
+			if (active)
+				item.activate();
+			else
+				item.deactivate();
+			const int xx = x() + dx, yy = y() + dy + 1;
+			const int ww = w() - takenW, hh = arrowH - 2;
+			fl_push_clip(xx, yy, ww, hh);
+			fl_draw_shortcut = 2;
+			// pecia passes Fl::focus() == this as `selected`. The deck runs an
+			// FLTK scheme, where stock Fl_Choice draws a plain label plus a
+			// focus frame instead; passing selected=1 here would fill the whole
+			// field with the bright selection colour on a freshly opened
+			// dialog. Keep pecia's flat frame/arrow, keep the deck's calm focus.
+			item.draw(xx, yy, ww, hh, this, false);
+			fl_draw_shortcut = 0;
+			if (Fl::focus() == this)
+				draw_focus(box(), xx, yy, ww, hh);
+			fl_pop_clip();
+		}
+		draw_label();
 	}
 };
 

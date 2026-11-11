@@ -2,6 +2,7 @@
 #include "ui/UpdateDialog.h"
 
 #include "ui/DeckTitleBar.h"
+#include "ui/SourceChoice.h"
 #include "ui/Theme.h"
 #include "ui/ThemeWidgets.h"
 
@@ -133,13 +134,10 @@ UpdateDialog::UpdateDialog(const std::string &aCurrentVersion,
 	sourceLabel->labelsize(TextSize());
 	sourceLabel->labelcolor(colors.text1);
 
-	mSource = new Fl_Choice(kMargin + labelW, y, 110, kRowH);
-	mSource->add("Gitee");
-	mSource->add("GitHub");
-	mSource->value(aSource == 1 ? 1 : 0);
-	mSource->textsize(TextSize());
-	mSource->callback(OnSource, this);
-	StyleChoice(mSource);
+	// m147: the mirror list and its styling live in SourceChoice.h now, shared
+	// with the script-download dialog.
+	mSource = MakeSourceChoice(kMargin + labelW, y, 110, kRowH,
+		aSource, OnSource, this);
 
 	mBtnRefresh = new HoverButton(0, y, 0, kRowH, "联网检查");
 	mBtnRefresh->color(colors.background2);
@@ -252,6 +250,9 @@ void UpdateDialog::SetBusy(bool aBusy)
 	// are what actually block a second concurrent worker.
 	mBtnRefresh->labelcolor(aBusy ? dim : normal);
 	mSource->textcolor(aBusy ? dim : normal);
+	// m148: SettingsChoice draws its arrow with labelcolor(), so dim that too
+	// or the arrow stays dark while the text goes grey during a check.
+	mSource->labelcolor(aBusy ? dim : normal);
 	mBtnRefresh->redraw();
 	mSource->redraw();
 	if (aBusy)

@@ -9,6 +9,7 @@
 #include "ui/HotkeyCapture.h"
 #include "ui/HoverMenuBar.h"
 #include "ui/ImeInPlace.h"
+#include "ui/ScriptDownloadDialog.h"
 #include "ui/UpdateDialog.h"
 #include "ui/WindowFrame.h"
 #include "ui/WindowShadow.h"
@@ -19,6 +20,7 @@
 #include "core/Hotkeys.h"
 #include "core/Json.h"
 #include "core/ResourceStats.h"
+#include "core/ScriptCatalog.h"
 #include "core/Settings.h"
 #include "core/TextFile.h"
 #include "core/Version.h"
@@ -853,6 +855,8 @@ public:
 	void ShowShortcutDialog();
 	// m092: Help > About / Check for Updates.
 	void ShowUpdateDialog();
+	// m146: File > 获取脚本… - the official script downloader.
+	void ShowScriptDownloadDialog();
 	// m097/m098: Help > MCP 接入 - opens docs\MCP接入.md next to the exe.
 	// A dialog would only be a second copy of what that file already says.
 	void OpenMcpDocs();
@@ -1024,7 +1028,9 @@ private:
 		IdFindNext,
 		IdFindPrev,
 		IdCloseScriptEdit,
-		IdRunOrStopEdit
+		IdRunOrStopEdit,
+		// m146: appended last so every existing command id keeps its value.
+		IdScriptDownload
 	};
 
 	void HandleMenu(int aId);
@@ -3130,9 +3136,12 @@ const std::vector<DeckWindow::CommandSpec> &DeckWindow::Commands()
 		// them under 文件 instead of "窗口 > 中部条带".
 		{IdSave, "save", "文件/保存", "菜单", "保存", FL_CTRL + 's', 0, false},
 		{IdCloseScriptEdit, "closeScript", "文件/关闭脚本", "菜单", "关闭脚本", 0, 0, false},
-		{IdRescan, "rescan", "文件/重新扫描", "菜单", "重新扫描", 0, 0, false},
-		{IdOpenScriptsFolder, "openScriptsFolder", "文件/打开脚本文件夹", "菜单", "打开脚本文件夹", 0, 0, false},
-		{IdHideTray, "hideTray", "文件/隐藏到托盘", "菜单", "隐藏到托盘", 0, 0, false},
+		// m149: the sub-menu verb is 打开, so the items are just the places
+		// (日志文件夹 / 配置文件) instead of repeating 打开 twice. The script
+		// folder is NOT here - its object is the script library, so it sits
+		// with the other library actions under 脚本.
+		{IdLogs, "logs", "文件/打开/日志文件夹", "菜单", "日志文件夹", 0, 0, false},
+		{IdOpenConfigFile, "openConfig", "文件/打开/配置文件", "菜单", "配置文件", 0, 0, false},
 		{IdQuit, "quit", "文件/退出", "菜单", "退出", 0, 0, false},
 		{IdEditUndo, "undo", "编辑/撤销", "菜单", "撤销", FL_CTRL + 'z', 0, true},
 		{IdEditRedo, "redo", "编辑/重做", "菜单", "重做", FL_CTRL + 'y', 0, true},
@@ -3148,16 +3157,35 @@ const std::vector<DeckWindow::CommandSpec> &DeckWindow::Commands()
 		{IdViewEditor, "viewEditor", "视图/编辑器与控制台", "菜单", "编辑器与控制台", 0, FL_MENU_TOGGLE, false},
 		{IdToggleRounded, "rounded", "视图/窗口圆角", "菜单", "窗口圆角", 0, FL_MENU_TOGGLE, false},
 		{IdToggleShadow, "shadow", "视图/窗口阴影", "菜单", "窗口阴影", 0, FL_MENU_TOGGLE, false},
+		// m149: no menu item. The close button already hides to the tray, and
+		// the tray icon brings the window back, so a 视图 row only duplicated
+		// that gesture. Keep the command (and menu.hideTray) so existing
+		// user-bound hotkeys and the shortcut dialog still work; an empty path
+		// is the table's established way to own a key without a menu row.
+		{IdHideTray, "hideTray", "", "窗口 > 托盘", "隐藏到托盘", 0, 0, false},
+		// m149: three groups, two divider lines. The first five act on ONE
+		// script; 全部停止/全部运行 act on the whole set and get their own band
+		// in the middle; the last three maintain the script library.
+		// FL_MENU_DIVIDER draws BELOW its item (Fl_Menu_Item.H:36), so the
+		// lines belong on the last row of each band, not on the first row of
+		// the next one.
 		{IdRun, "run", "脚本/运行", "菜单", "运行", 0, 0, false},
 		{IdStop, "stop", "脚本/停止", "菜单", "停止", 0, 0, false},
 		{IdRestart, "restart", "脚本/重启", "菜单", "重启", 0, 0, false},
-		{IdStopAll, "stopAll", "脚本/全部停止", "菜单", "全部停止", 0, 0, false},
-		{IdRunAll, "runAll", "脚本/全部运行", "菜单", "全部运行", 0, 0, false},
 		{IdEditSelected, "editSelected", "脚本/编辑", "菜单", "编辑", 0, 0, false},
-		{IdNotepad, "notepad", "脚本/用记事本打开", "菜单", "用记事本打开", 0, 0, false},
+		{IdNotepad, "notepad", "脚本/用记事本打开", "菜单", "用记事本打开", 0, FL_MENU_DIVIDER, false},
+		{IdStopAll, "stopAll", "脚本/全部停止", "菜单", "全部停止", 0, 0, false},
+		{IdRunAll, "runAll", "脚本/全部运行", "菜单", "全部运行", 0, FL_MENU_DIVIDER, false},
+		// m147: grouping is by the object acted upon, not by whether the action
+		// happens to write a file. 检查更新 also writes one (the zip replaces
+		// the exe) and still belongs to 帮助 by convention, so these three
+		// script-library actions belong to 脚本.
+		// m148: a second-level 库维护 sub-menu made the three regular actions one
+		// extra click away. They are flat again, without hiding them.
+		{IdRescan, "rescan", "脚本/重新扫描", "菜单", "重新扫描", 0, 0, false},
+		{IdScriptDownload, "scriptDownload", "脚本/获取脚本…", "菜单", "获取脚本…", 0, 0, false},
+		{IdOpenScriptsFolder, "openScriptsFolder", "脚本/打开脚本文件夹", "菜单", "打开脚本文件夹", 0, 0, false},
 		{IdHotkeyEdit, "hotkeyEdit", "设置/快捷键…", "菜单", "快捷键…", 0, 0, false},
-		{IdLogs, "logs", "设置/打开日志文件夹", "菜单", "打开日志文件夹", 0, 0, false},
-		{IdOpenConfigFile, "openConfig", "设置/打开配置文件", "菜单", "打开配置文件", 0, 0, false},
 		// m092: the About box and the updater live in their own 帮助 group,
 		// after 设置. The key menu.about is unchanged, so existing rebinds
 		// keep working.
@@ -6322,6 +6350,54 @@ void DeckWindow::ShowUpdateDialog()
 	dialog.Run();
 }
 
+// m146: File > 获取脚本…. The dialog is deliberately a DeckWindow member so
+// it can reach the private rescan/stop abilities without a second public API.
+// Everything the dialog needs is injected here as a callback.
+void DeckWindow::ShowScriptDownloadDialog()
+{
+	Json node = JsonObjectMember(mConfigRoot, "scripts");
+	const std::string gitee = node.Has("manifestGitee")
+		? node["manifestGitee"].AsString() : std::string(kDefaultCatalogUrlGitee);
+	const std::string github = node.Has("manifestGithub")
+		? node["manifestGithub"].AsString() : std::string(kDefaultCatalogUrlGithub);
+	const int source = node["source"].AsInt(0) == 1 ? 1 : 0;
+
+	ScriptDownloadCallbacks callbacks;
+	callbacks.saveSource = [this](int aSource) {
+		Json scripts = JsonObjectMember(mConfigRoot, "scripts");
+		scripts.Set("source", Json((double)(aSource == 1 ? 1 : 0)));
+		mConfigRoot.Set("scripts", scripts);
+		std::string error;
+		if (!SaveSettings(&error))
+			Append("[settings] 脚本来源未能写入: " + error);
+	};
+	callbacks.refreshScripts = [this]() { RefreshFromDisk(); };
+	callbacks.stopScript = [this](const std::string &aName) {
+		const std::string leaf = aName + ".ahk";
+		for (const ScriptRow &row : mScripts)
+		{
+			if (_stricmp(row.name.c_str(), leaf.c_str()) != 0)
+				continue;
+			if (!row.session)
+				return true; // present but not running: nothing to stop
+			if (!mEngine.StopSession(row.session))
+				return false;
+			InvalidateSessions();
+			RefreshList();
+			// The in-process engine releases the file asynchronously; give it a
+			// moment so the downloader's atomic swap can actually take the name.
+			Sleep(300);
+			return true;
+		}
+		return true; // a brand-new download has no running session
+	};
+	callbacks.log = [this](const std::string &aLine) { Append(aLine); };
+
+	ScriptDownloadDialog dialog(gitee, github, source, callbacks);
+	dialog.SetFrameOptions(mRoundedCorners, mWindowShadow);
+	dialog.Run();
+}
+
 void DeckWindow::OpenMcpDocs()
 {
 	// m098: 帮助 > MCP 接入 opens the doc itself - it is the only place the
@@ -7098,6 +7174,7 @@ void DeckWindow::HandleMenu(int aId)
 	case IdRunAll: RunEverything(); break;
 	case IdEditSelected: EditSelected(); break;
 	case IdRescan: RefreshFromDisk(); break;
+	case IdScriptDownload: ShowScriptDownloadDialog(); break;
 	case IdOpenScriptsFolder: OpenScriptsFolder(); break;
 	case IdOpenConfigFile:
 	{
@@ -7527,6 +7604,14 @@ int Run(HINSTANCE, bool aServeMcpStdio)
 		char openUpdate[8] = {0};
 		if (GetEnvironmentVariableA("AHKDECK_OPEN_UPDATE", openUpdate, sizeof(openUpdate)) > 0)
 			window->ShowUpdateDialog();
+	}
+
+	// m146 screenshot hook only: open 文件 > 获取脚本… without a gesture.
+	{
+		char openDownload[8] = {0};
+		if (GetEnvironmentVariableA("AHKDECK_OPEN_SCRIPT_DOWNLOAD", openDownload,
+			sizeof(openDownload)) > 0)
+			window->ShowScriptDownloadDialog();
 	}
 
 	// m082 gate hook (test-only): put a Scripts file into the editing area

@@ -580,6 +580,12 @@ void WriteCacheManifest(const std::string &aRawJson)
 // Public API
 // ---------------------------------------------------------------------------
 
+bool FetchText(const std::string &aUrl, int aTimeoutMs, std::string &aOut,
+	std::string &aError)
+{
+	return HttpGetBody(aUrl, aTimeoutMs, aOut, aError);
+}
+
 std::string GetExeDirUtf8()
 {
 	wchar_t exe[MAX_PATH] = {0};

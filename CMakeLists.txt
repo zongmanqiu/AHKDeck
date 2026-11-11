@@ -12,7 +12,7 @@ if(CMAKE_GENERATOR MATCHES "Makefiles")
     set(CMAKE_DEPENDS_USE_COMPILER FALSE)
 endif()
 
-project(AHKDeck VERSION 0.2.2 LANGUAGES C CXX RC)
+project(AHKDeck VERSION 0.3.0 LANGUAGES C CXX RC)
 
 # Static CRT (/MT): the shipped exe must run with ZERO VC++ redistributable
 # dependencies ("单 exe 即装即用"). CMP0091 NEW lets CMAKE_MSVC_RUNTIME_LIBRARY
@@ -74,6 +74,7 @@ add_library(core STATIC
     core/Json.cpp
     core/AiPolicy.cpp
     core/Updater.cpp
+    core/ScriptCatalog.cpp
     core/ResourceStats.cpp
     core/Housekeeping.cpp
 )
@@ -151,6 +152,8 @@ add_library(deckui STATIC
     ui/DeckDialog.cpp
     ui/AboutDialog.cpp
     ui/UpdateDialog.cpp
+    ui/ScriptDownloadDialog.cpp
+    ui/SourceChoice.cpp
     ui/WindowFrame.cpp
     ui/WindowShadow.cpp
     ui/ImeInPlace.cpp
@@ -216,6 +219,18 @@ add_custom_command(TARGET AHKDeck POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_SOURCE_DIR}/THIRD-PARTY-NOTICES.md" "$<TARGET_FILE_DIR:AHKDeck>/THIRD-PARTY-NOTICES.md"
     COMMENT "Staging docs, licenses and notices next to AHKDeck.exe")
+
+# m146: the downloader is local-first, so a catalog copy must ship with the
+# exe. The script repository is the single source of truth; the build only
+# copies it, never invents or edits it. Missing repo (a standalone .main
+# checkout) simply leaves the dialog asking for a manual 刷新.
+set(AHKDECK_SCRIPT_CATALOG "${CMAKE_SOURCE_DIR}/../.ahk-v2-scripts/scripts.json")
+if(EXISTS "${AHKDECK_SCRIPT_CATALOG}")
+    add_custom_command(TARGET AHKDeck POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${AHKDECK_SCRIPT_CATALOG}" "$<TARGET_FILE_DIR:AHKDeck>/docs/scripts.json"
+        COMMENT "Staging the official script catalog next to AHKDeck.exe")
+endif()
 
 # ----------------------------------------------------------------------------
 # Tests (ctest gate - build/5_test.bat fails on any failing test).

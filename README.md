@@ -1,12 +1,14 @@
 # AHKDeck
 
-**[⬇️ 下载 0.2.2 (Gitee)](https://gitee.com/qiuzongman/AHKDeck/releases/download/0.2.2/AHKDeck_0.2.2.zip)**
- ｜ **[⬇️ 下载 0.2.2 (GitHub)](https://github.com/zongmanqiu/AHKDeck/releases/download/0.2.2/AHKDeck_0.2.2.zip)**
- ｜ [Gitee主仓](https://gitee.com/qiuzongman/AHKDeck)
- ｜ [GitHub镜像](https://github.com/zongmanqiu/AHKDeck)
+**[⬇️ 下载 0.3.0 (Gitee)](https://gitee.com/qiuzongman/AHKDeck/releases/download/0.3.0/AHKDeck_0.3.0.zip)**
+ ｜ **[⬇️ 下载 0.3.0 (GitHub)](https://github.com/zongmanqiu/AHKDeck/releases/download/0.3.0/AHKDeck_0.3.0.zip)**
 
-> 脚本仓库: ｜ [Gitee](https://gitee.com/qiuzongman/ahk-v2-scripts)
- ｜ [GitHub](https://gitee.com/qiuzongman/ahk-v2-scripts)
+
+> AHKDeck: [Gitee](https://gitee.com/qiuzongman/AHKDeck)
+ ｜ [GitHub](https://github.com/zongmanqiu/AHKDeck)
+
+> 脚本仓库: [Gitee](https://gitee.com/qiuzongman/ahk-v2-scripts)
+ ｜ [GitHub](https://github.com/zongmanqiu/ahk-v2-scripts)
 
 ## 特点
 - 脚本会话在宿主进程内运行；真正退出宿主时一并停止。
@@ -20,6 +22,8 @@
 ## 使用
 
 - 将脚本放入程序旁的 `Scripts/`，在列表中运行、停止、重启或编辑。
+- 「脚本 > 获取脚本…」从官方脚本仓库下载或升级脚本，安装到程序旁的 `Scripts/`；
+  打开时读随包清单，只有点「刷新」才联网。
 - 内置编辑器提供保存、查找替换；当前编辑脚本的运行回执与内核错误显示在控制台，各会话日志写入程序旁的 `Logs/`。
 - AI 接入使用 MCP stdio：外部客户端负责模型和修正循环，本程序提供脚本工具与可见编辑区，不内建聊天面板。
 - 每次启动会清理程序旁 `.temp/`、`Backups/`、`Logs/` 里超过 30 天的旧文件；天数在 `settings.json` 的

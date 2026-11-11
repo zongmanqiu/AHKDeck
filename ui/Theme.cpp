@@ -96,6 +96,23 @@ Fl_Color CloseHoverRed()
 	return fl_rgb_color(200, 60, 60);
 }
 
+// m146: 下载 (blue) / 升级 (amber) / 已下载 (grey). Grey is a button fill, not
+// text, so it is deliberately lighter than text2.
+Fl_Color DownloadBlue()
+{
+	return fl_rgb_color(0x18, 0x5F, 0xA5);
+}
+
+Fl_Color UpgradeAmber()
+{
+	return fl_rgb_color(0xBA, 0x75, 0x17);
+}
+
+Fl_Color IdleGrey()
+{
+	return fl_rgb_color(0xF1, 0xEF, 0xE8);
+}
+
 Fl_Color FrameBorderColour()
 {
 	return kLight.text1;
@@ -155,19 +172,6 @@ void StyleInput(Fl_Input *aInput)
 	aInput->cursor_color(colors.text1);
 	aInput->selection_color(colors.highlight2);
 	aInput->textsize(TextSize());
-}
-
-void StyleChoice(Fl_Choice *aChoice)
-{
-	if (!aChoice)
-		return;
-	const ThemeColors &colors = DeckColors();
-	aChoice->box(FL_BORDER_BOX);
-	aChoice->color(colors.background1);
-	aChoice->textcolor(colors.text1);
-	aChoice->selection_color(colors.highlight2);
-	aChoice->labelsize(TextSize());
-	aChoice->textsize(TextSize());
 }
 
 void StyleTextDisplay(Fl_Text_Display *aDisplay)

@@ -105,6 +105,13 @@ bool WriteUpdateBat(const std::string &aExeDirUtf8,
 // process immediately afterwards so the bat can replace the exe.
 void LaunchUpdater(const std::string &aBatPathUtf8);
 
+// m146: the script downloader needs the updater's WinHTTP GET for a plain
+// text document (scripts.json). The implementation already existed as an
+// internal helper; exporting it keeps one HTTP stack for the whole app.
+// Synchronous and blocking - call from a worker thread.
+bool FetchText(const std::string &aUrl, int aTimeoutMs, std::string &aOut,
+	std::string &aError);
+
 // Directory of the running executable, UTF-8, with a trailing backslash.
 std::string GetExeDirUtf8();
 
