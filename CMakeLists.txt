@@ -12,7 +12,7 @@ if(CMAKE_GENERATOR MATCHES "Makefiles")
     set(CMAKE_DEPENDS_USE_COMPILER FALSE)
 endif()
 
-project(AHKDeck VERSION 0.3.1 LANGUAGES C CXX RC)
+project(AHKDeck VERSION 0.3.2 LANGUAGES C CXX RC)
 
 # Static CRT (/MT): the shipped exe must run with ZERO VC++ redistributable
 # dependencies ("单 exe 即装即用"). CMP0091 NEW lets CMAKE_MSVC_RUNTIME_LIBRARY
@@ -405,6 +405,21 @@ set_target_properties(test_scriptheader PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_DEBUG "${AHKDECK_TEMP_BIN}"
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${AHKDECK_TEMP_BIN}")
 add_test(NAME scriptheader COMMAND test_scriptheader)
+
+# m160: the download verification (name + version only, per the user's rule)
+# and the catalog rows the verifier depends on. Writes into %TEMP%.
+add_executable(test_scriptcatalog
+    test/test_scriptcatalog.cpp
+)
+target_link_libraries(test_scriptcatalog PRIVATE core)
+if(MSVC)
+    target_compile_options(test_scriptcatalog PRIVATE /W4 /WX)
+endif()
+set_target_properties(test_scriptcatalog PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${AHKDECK_TEMP_BIN}"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${AHKDECK_TEMP_BIN}"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${AHKDECK_TEMP_BIN}")
+add_test(NAME scriptcatalog COMMAND test_scriptcatalog)
 
 
 # ----------------------------------------------------------------------------

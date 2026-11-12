@@ -8,7 +8,6 @@
 
 #include <windows.h>
 
-#include <cmath>
 #include <cstddef>
 #include <utility>
 
@@ -41,17 +40,6 @@ bool IsHttpsUrl(const std::string &aUrl)
 			return false;
 	}
 	return true;
-}
-
-long long FileSizeBytes(const std::wstring &aPath)
-{
-	WIN32_FILE_ATTRIBUTE_DATA info;
-	if (!GetFileAttributesExW(aPath.c_str(), GetFileExInfoStandard, &info))
-		return -1;
-	LARGE_INTEGER size;
-	size.HighPart = (LONG)info.nFileSizeHigh;
-	size.LowPart = info.nFileSizeLow;
-	return (long long)size.QuadPart;
 }
 
 void RemoveFile(const std::wstring &aPath)
@@ -261,6 +249,32 @@ bool RefreshBundledCatalog(const std::string &aUrl, std::string &aOut,
 	return true;
 }
 
+bool VerifyDownloadedScript(const std::wstring &aPartPath,
+	const ScriptInstallRequest &aRequest, std::string &aError)
+{
+	// m160: the whole verification, kept in one testable function so the gate
+	// never needs the network. Same parser as the info window (m151) - there
+	// must not be a second dialect of the header block.
+	ScriptInspection inspection;
+	if (!InspectScript(aPartPath, inspection) || !inspection.headerFound)
+	{
+		aError = "下载内容不是有效的 AHKDeck 脚本";
+		return false;
+	}
+	// User rule (m159): official scripts - the download only has to prove it
+	// IS the named script at the advertised version. Strict equality, because
+	// the manifest is generated FROM these very header fields (m141): any
+	// difference means these bytes are not the advertised script. No hashing,
+	// no size check; empty expectations never match (fail closed).
+	if (inspection.Get("name") != aRequest.expectedName
+		|| inspection.Get("version") != aRequest.expectedVersion)
+	{
+		aError = "下载内容与清单不符（名称或版本不一致）";
+		return false;
+	}
+	return true;
+}
+
 bool InstallScriptFile(const ScriptInstallRequest &aRequest, std::string &aError,
 	ScriptInstallProgress aProgress)
 {
@@ -287,34 +301,17 @@ bool InstallScriptFile(const ScriptInstallRequest &aRequest, std::string &aError
 		return false;
 	}
 
-	// 2. Verify it is a script with a version header, and roughly the size the
-	//    manifest advertised (size_kb has one decimal, so allow headroom).
-	TextDocument doc;
-	std::string readError;
-	if (!ReadTextDocument(wPart, doc, readError))
+	// 2. Verify it IS the script the manifest advertised: the same header
+	//    parser as the info window, @name and @version must match exactly.
+	//    m160 user rule: name and version only - no hashing, no size check
+	//    (the old 5% tolerance verified exactly what the rule excludes, while
+	//    @name itself went unchecked).
+	std::string verifyError;
+	if (!VerifyDownloadedScript(wPart, aRequest, verifyError))
 	{
 		RemoveFile(wPart);
-		aError = "下载内容无法读取";
+		aError = verifyError;
 		return false;
-	}
-	if (doc.utf8.find("; ==UserScript==") == std::string::npos
-		|| doc.utf8.find("@version") == std::string::npos)
-	{
-		RemoveFile(wPart);
-		aError = "下载内容不是有效的 AHKDeck 脚本";
-		return false;
-	}
-	const long long bytes = FileSizeBytes(wPart);
-	if (aRequest.expectedSizeKb > 0.0 && bytes > 0)
-	{
-		const double expected = aRequest.expectedSizeKb * 1024.0;
-		const double tolerance = expected * 0.05 + 256.0;
-		if (std::fabs((double)bytes - expected) > tolerance)
-		{
-			RemoveFile(wPart);
-			aError = "下载内容大小与清单不符";
-			return false;
-		}
 	}
 
 	// 3. Keep the old file as both a backup of local edits and a restore point.

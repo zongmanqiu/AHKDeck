@@ -125,6 +125,20 @@ const char *VerdictOf(Engine &aEngine, DWORD aSessionId, bool aFinished,
 	return "timeout";
 }
 
+// m159: the verdict says what happened; this says what to do about it. A
+// caller (a model especially) should not have to infer the next tool call
+// from a label it has never seen. pass returns "" - no next field at all.
+const char *NextStepOf(const std::string &aVerdict)
+{
+	if (aVerdict == "fail")
+		return "先用 get_session_output 读完整输出，按 errors[].line 用 patch_editor 修，再运行复验。";
+	if (aVerdict == "timeout")
+		return "脚本超时且窗口无响应：先 get_session_output 读已有输出，再 stop_script。";
+	if (aVerdict == "resident")
+		return "脚本常驻：用 get_session_output 读输出；需要结束时 stop_script。";
+	return "";
+}
+
 // m062: the last ten kernel error records as objects, so a caller does not
 // have to regex the prose (or parse the JSONL itself) to learn the line number.
 Json ErrorsFromLog(const std::string &aLog)
@@ -829,6 +843,8 @@ std::vector<ToolDef> Toolbox::Definitions() const
 		d.description = "对当前编辑区做纯文本静态检查（不执行、不改编辑区、不落盘）："
 			"查 v1 专有命令、v1 命令式写法（如 MsgBox,）、v1 变量引用 %var%、未闭合双引号。"
 			"返回 findings（line/severity/rule/message）与 counts；ok=false 表示存在 error 级问题。"
+			"注意：这些 error 只是文本启发式、可能误报，不要据此改代码；"
+			"语法能否通过一律以 validate_editor 的内核解析结果为准。"
 			"运行前先调用它，可以省掉一次必然失败的运行。每类最多 10 条、总共最多 40 条。";
 		defs.push_back(std::move(d));
 	}
@@ -1583,6 +1599,11 @@ std::string Toolbox::ToolRunEditor(const Json &aArgs)
 	}
 	const std::string verdict = VerdictOf(engine, sessionId, finished, rc, session);
 	result.Set("verdict", Json(verdict));
+	// m159: an actionable next step, so a failed run names the tool to call
+	// next instead of leaving the caller to guess from the label.
+	const char *next = NextStepOf(verdict);
+	if (*next)
+		result.Set("next", Json(next));
 	result.Set("script_dir", Json(target.mode));
 	result.Set("errors", ErrorsFromLog(logText));
 	result.Set("output", Json(output));
@@ -1672,6 +1693,10 @@ std::string Toolbox::ToolRunScript(const Json &aArgs)
 	}
 	const std::string verdict = VerdictOf(engine, sessionId, finished, rc, session);
 	result.Set("verdict", Json(verdict));
+	// m159: same next-step hint as run_editor, so both run tools answer alike.
+	const char *next = NextStepOf(verdict);
+	if (*next)
+		result.Set("next", Json(next));
 	result.Set("errors", ErrorsFromLog(logText));
 	result.Set("output", Json(output));
 

@@ -6239,6 +6239,26 @@ void DeckWindow::OpenScriptMenu(int aIndex)
 		return;
 	}
 
+	// m160: a script that emptied its own tray menu (A_TrayMenu.Delete()) turns
+	// the message below into an EMPTY popup - to the kernel it is exactly "the
+	// user right-clicked my tray icon". Ask the kernel for the live HMENU first
+	// (m132's read-only DeckTrayMenu export) and fall back to bringing the
+	// script's window to the front when there is nothing to show. Every entry
+	// lands here - the list context action, the gear cell, the menu-bar command
+	// and the tray "running" fallback - so this one guard covers all of them.
+	const HMENU scriptMenu = mEngine.TrayMenu(row.session);
+	if (!scriptMenu || GetMenuItemCount(scriptMenu) == 0)
+	{
+		if (IsIconic(window))
+			ShowWindowAsync(window, SW_RESTORE);
+		// The deck owns the foreground right now (the user just clicked us), so
+		// the hand-off is allowed; BringWindowToTop covers the rare refusal.
+		if (!SetForegroundWindow(window))
+			BringWindowToTop(window);
+		Append("[" + UiClock() + "] " + row.name + " 没有托盘菜单，已前置它的窗口");
+		return;
+	}
+
 	// AHK_NOTIFYICON (WM_USER+4) with lParam = WM_RBUTTONUP is the kernel's own
 	// "the user right-clicked my tray icon" path: MainWindowProc calls
 	// mTrayMenu->Display() with no coordinates, and Display() then reads

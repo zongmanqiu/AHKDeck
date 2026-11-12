@@ -124,6 +124,39 @@ bool EndsWithRoot(const std::wstring &aLowerPath, const std::wstring &aLowerRoot
 	return aLowerPath[aLowerRoot.size()] == L'\\';
 }
 
+// m160: a canonical path can still smuggle a request out of the whitelist
+// through a junction or a symlink, and GetFullPathNameW never resolves those.
+// Walk the path component by component and reject any level that carries a
+// reparse point. A missing component ends the walk: it has no reparse point,
+// and the later open/create fails on its own. The caller rejects UNC and
+// device paths before this, so only "X:\..." forms arrive here; the root
+// itself is host-configured and trusted.
+bool CrossesReparsePoint(const std::wstring &aCanonical, std::string &aError)
+{
+	if (aCanonical.size() < 3 || aCanonical[1] != L':')
+		return false;
+	const size_t prefix = 3; // keep "X:\" and start at the first component
+	size_t level = prefix;
+	while (level < aCanonical.size())
+	{
+		const size_t slash = aCanonical.find(L'\\', level);
+		const std::wstring part = aCanonical.substr(0,
+			slash == std::wstring::npos ? aCanonical.size() : slash);
+		const DWORD attrs = GetFileAttributesW(part.c_str());
+		if (attrs == INVALID_FILE_ATTRIBUTES)
+			return false; // nothing there yet; no reparse point to cross
+		if (attrs & FILE_ATTRIBUTE_REPARSE_POINT)
+		{
+			aError = "the path crosses a reparse point (junction or symlink)";
+			return true;
+		}
+		if (slash == std::wstring::npos)
+			break;
+		level = slash + 1;
+	}
+	return false;
+}
+
 } // namespace
 
 bool IsInsideAiPolicy(const AiScriptPolicy &aPolicy, const std::wstring &aCanonical)
@@ -163,6 +196,15 @@ bool ResolveAiScriptPath(const AiScriptPolicy &aPolicy, const std::wstring &aReq
 	}
 
 	std::wstring path = NormalizeSlashes(aRequested);
+	// m160: UNC and \\?\ device paths are out of scope for the AI tools - they
+	// only ever address local script ids. Reject them before root joining so
+	// the denial names the real reason instead of a whitelist mismatch, and so
+	// no network share or device-path syntax can sidestep the checks below.
+	if (path.size() >= 2 && path[0] == L'\\' && path[1] == L'\\')
+	{
+		aError = "UNC paths are not allowed";
+		return false;
+	}
 	const bool absolute = path.size() >= 2 && path[1] == L':';
 	if (!absolute && path[0] != L'\\')
 	{
@@ -176,6 +218,11 @@ bool ResolveAiScriptPath(const AiScriptPolicy &aPolicy, const std::wstring &aReq
 
 	if (!Canonicalize(path, aCanonical, aError))
 		return false;
+	if (CrossesReparsePoint(aCanonical, aError))
+	{
+		aCanonical.clear();
+		return false;
+	}
 	if (!IsInsideAiPolicy(aPolicy, aCanonical))
 	{
 		aError = "the path is outside the allowed script area";

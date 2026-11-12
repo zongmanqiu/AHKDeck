@@ -16,7 +16,9 @@
 //      so the record must still carry the session's own thread id;
 //   F  pulling a script's own tray menu out of the host (m024): the kernel's
 //      notify-icon message pops it on that session's thread, at the pointer,
-//      one session at a time, and a finished session has no window left.
+//      one session at a time, and a finished session has no window left;
+//   G  the menu-less script and the tray-menu count the deck now checks
+//      before popping it (m160).
 //
 // Usage: session_gate <probeDir>   (Logs next to this exe; cwd holds heartbeats)
 
@@ -326,7 +328,7 @@ int main()
 	// Preflight: if the corpus is not on disk, every scenario below would "pass"
 	// on synthetic file-open errors - that is not evidence, so stop here.
 	const wchar_t *needed[] = { L"long.ahk", L"boom.ahk", L"exit3.ahk", L"bad_syntax.ahk",
-		L"timer_boom.ahk", L"tray_a.ahk", L"tray_b.ahk" };
+		L"timer_boom.ahk", L"tray_a.ahk", L"tray_b.ahk", L"tray_empty.ahk" };
 	size_t found = 0;
 	for (const wchar_t *name : needed)
 		if (GetFileAttributesW(ProbeFile(name).c_str()) != INVALID_FILE_ATTRIBUTES)
@@ -643,6 +645,43 @@ int main()
 	Check(engine.FindScriptWindow(999999) == nullptr, "F12 an unknown session id yields no window");
 	engine.StopSession(sTrayB);
 	RunUntil(engine, colF, 8000, [&] { return AllFinished(engine); });
+
+	// -----------------------------------------------------------------------
+	// G: the menu-less script and the predicate the deck checks before popping
+	// it (m160). DeckUI::OpenScriptMenu asks mEngine.TrayMenu + GetMenuItemCount
+	// before deciding between "post AHK_NOTIFYICON" and "front the window"; the
+	// emptied-menu script is exactly the m158 case (a window-type script that
+	// did A_TrayMenu.Delete() and adds nothing back). Proving the count here -
+	// with real kernel sessions - is what the one-line UI branch turns on; the
+	// desktop-side tray click that used to pop the empty menu is deliberately
+	// not automated: the keyboard recipe over the shell tray is fragile (see
+	// test/ui_gate/README), and the count IS its whole decision.
+	// -----------------------------------------------------------------------
+	Collector colG;
+	DWORD sNoMenu = StartOne(engine, ProbeFile(L"tray_empty.ahk"), {});
+	DWORD sWithMenu = StartOne(engine, ProbeFile(L"tray_b.ahk"), {});
+	Check(sNoMenu && sWithMenu, "G1 the menu-less script and the menu'd control started");
+	bool gWindowsUp = RunUntil(engine, colG, 10000, [&] {
+		return engine.FindScriptWindow(sNoMenu) && engine.FindScriptWindow(sWithMenu);
+	});
+	Check(gWindowsUp, "G2 both have windows (front-target exists for the fallback branch)");
+	HMENU emptyMenu = nullptr;
+	HMENU fullMenu = nullptr;
+	bool menusReady = RunUntil(engine, colG, 5000, [&] {
+		emptyMenu = engine.TrayMenu(sNoMenu);
+		fullMenu = engine.TrayMenu(sWithMenu);
+		return emptyMenu != nullptr && fullMenu != nullptr;
+	});
+	Check(menusReady, "G3 the kernel hands out the tray menu even after A_TrayMenu.Delete()");
+	Check(emptyMenu && GetMenuItemCount(emptyMenu) == 0,
+		"G4 the menu-less script's count is 0 - the exact number OpenScriptMenu tests now");
+	Check(fullMenu && GetMenuItemCount(fullMenu) >= 1,
+		"G5 the control's count is >= 1, so the guard never fires on a real menu");
+	Check(engine.TrayMenu(999999) == nullptr,
+		"G6 an unknown session id reports no menu (the guard must not deref it)");
+	engine.StopSession(sNoMenu);
+	engine.StopSession(sWithMenu);
+	RunUntil(engine, colG, 8000, [&] { return SessionFinished(engine, sNoMenu) && SessionFinished(engine, sWithMenu); });
 
 	std::printf("\n%s: %d failure(s)\n", g_failures ? "FAIL" : "OK", g_failures);
 	std::fflush(stdout);

@@ -1,9 +1,9 @@
 # agent/ — 脚本工具层与 MCP 端（m063／m064）
 
-一句话：**工具的唯一定义处**。谁驱动这 10 个脚本工具都行，实现与清单只有一份。
+一句话：**工具的唯一定义处**。谁驱动这 12 个脚本工具都行，实现与清单只有一份。
 
 ```
-Toolbox     10 个脚本工具 + 中性工具定义（ToolDef）；线程安全；只经 core/AiPolicy 落盘
+Toolbox     12 个脚本工具 + 中性工具定义（ToolDef）；线程安全；只经 core/AiPolicy 落盘
 McpServer   MCP stdio 端：换行分隔 JSON-RPC，stdout 只放协议帧，日志走 stderr
 ```
 
@@ -21,6 +21,7 @@ m065 把那个循环删了：模型、重试、上下文管理交给外部 MCP �
 
 `list_scripts` / `read_script` / `edit_editor` / `check_editor` / `validate_editor`
 / `patch_editor` / `run_editor` / `run_script` / `get_session_output` / `stop_script`
+/ `list_sessions` / `stop_all`
 
 - 模型只看脚本 **id**（`S1`…），看不到本机绝对路径（规则 9）。`list_scripts` 每次都重新枚举，
   所以外部 agent 新建的文件下一句就能看见。
@@ -45,10 +46,14 @@ m065 把那个循环删了：模型、重试、上下文管理交给外部 MCP �
   内核的验证入口只在命令行上有，且同一进程加载过脚本后会拒绝再验（`Line::sSourceFileCount`
   保护），所以这条路径由宿主把编辑区写成临时脚本、再以 `--validate` 拉起一个短命进程，
   读回 JSONL 报告。`rc=2` 表示有语法错，`findings` 带行号与内核原话；`ok=true` 即可运行。
+- 协议级闭环（m159）：`initialize` 回带 `instructions`，把「写 → check → validate →
+  run → 读错 → 修」写成服务端说明，客户端会注入模型上下文，不靠提示词自觉；
+  `check_editor` 的 error 只是文本启发式、可能误报，一律以 `validate_editor` 为准；
+  `run_editor` / `run_script` 在 verdict 非 pass 时回带 `next`，指明下一步该调哪个工具。
 
 ## 接入 MCP 客户端
 
-**面向用户/AI 的接入说明就在发行包里**：`docs\MCP接入.md`（配置示例就在正文里、10 个工具、
+**面向用户/AI 的接入说明就在发行包里**：`docs\MCP接入.md`（配置示例就在正文里、12 个工具、
 典型提示词、边界、排错）；程序内「帮助 > MCP 接入」用系统默认程序打开它。
 本节是开发者视角的同一份事实，不重复那份文档的内容。
 

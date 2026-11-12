@@ -65,6 +65,12 @@ AI 的典型动作是 `edit_editor` → `run_editor` → 读 `output` 里的 `li
 只改一两行时用 `patch_editor`：`old_text` 必须唯一命中，否则整批拒绝、编辑区不变；
 `preview:true` 只回变更摘要、不落地。
 
+服务端在 `initialize` 里回带 `instructions`：上面这条「写 → 静态排查 → 内核验证 →
+运行 → 读错 → 修」的闭环由客户端直接注入模型上下文，不必写进提示词。
+`check_editor` 的 `error` 只是文本启发式、可能误报，**语法能否通过一律以
+`validate_editor` 为准**；`run_editor` / `run_script` 在 `verdict` 非 `pass` 时还会回带
+`next`，直接说明下一步该调哪个工具（`get_session_output`、`patch_editor`、`stop_script`）。
+
 ## 三、边界
 
 - **不泄露本机路径**：工具输出只给脚本 `id`（`S1`…）和文件名，不给盘符全路径；越界路径

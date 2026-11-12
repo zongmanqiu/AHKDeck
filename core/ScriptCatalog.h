@@ -69,9 +69,14 @@ using ScriptInstallProgress = std::function<void(long long, long long)>;
 
 struct ScriptInstallRequest
 {
-	std::string targetPathUtf8; // <exe>\Scripts\<name>.ahk
+	std::string targetPathUtf8;  // <exe>\Scripts\<name>.ahk
 	std::string url;
-	double expectedSizeKb = 0.0;
+	// m160: the manifest entry the download must prove to be. The user's rule:
+	// official scripts, so only name and version are verified - no hashing and
+	// no size check (the old expectedSizeKb verified exactly what this rule
+	// excludes, while @name itself went unchecked).
+	std::string expectedName;
+	std::string expectedVersion;
 };
 
 // A UTF-8 BOM is tolerated. Items with an unsafe name, no version, or no
@@ -107,5 +112,13 @@ bool RefreshBundledCatalog(const std::string &aUrl, std::string &aOut,
 // on any error. The user's script is never deleted.
 bool InstallScriptFile(const ScriptInstallRequest &aRequest, std::string &aError,
 	ScriptInstallProgress aProgress = nullptr);
+
+// m160: the download verification as one standalone function (the .part file
+// is already on disk). Uses the SAME header parser as the info window, then
+// requires @name and @version to match the manifest entry exactly. No content
+// hashing and no size check - the user's rule for official scripts is name and
+// version only. Empty expectedName/expectedVersion never match (fail closed).
+bool VerifyDownloadedScript(const std::wstring &aPartPath,
+	const ScriptInstallRequest &aRequest, std::string &aError);
 
 } // namespace ahkdeck

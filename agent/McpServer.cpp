@@ -320,6 +320,25 @@ void ServeStdio(Toolbox &aToolbox, const std::atomic<bool> &aRunning,
 			result.Set("protocolVersion", Json(version));
 			result.Set("capabilities", std::move(capabilities));
 			result.Set("serverInfo", std::move(serverInfo));
+			// m159: instructions is a server-level InitializeResult field
+			// (MCP 2024-11-05+; all three versions we accept are newer). The
+			// write -> check -> validate -> run -> read -> fix loop used to be
+			// only a hint inside one tool description; here every client hands
+			// it to the model before the first tool call, so the loop no longer
+			// depends on the prompt or on the model remembering to check.
+			result.Set("instructions", Json(
+				"AHKDeck 脚本工具按固定闭环使用："
+				"1) 先 list_scripts 取脚本 id，按 id 操作的工具只接受这里返回的 id。"
+				"2) 写/改脚本用 edit_editor（只改编辑区、不落盘）或 patch_editor（小改）。"
+				"3) 运行前先 check_editor 快速排查，但它的 error 只是文本启发式、可能误报，"
+				"不要据此改代码；语法能否通过一律以 validate_editor 为准"
+				"（内核 /validate 只解析不执行，ok=true 才可运行）。"
+				"4) 运行用 run_editor（编辑区）或 run_script（磁盘脚本）；"
+				"verdict 为 pass/fail/resident/timeout 之一，errors 是带行号的结构化内核原话，"
+				"next 字段直接给出下一步该调哪个工具。"
+				"5) 失败时按 errors[].line 用 patch_editor 修，再运行复验，直到 verdict=pass。"
+				"verdict=resident 表示脚本常驻：用 get_session_output 读输出，需要结束时 stop_script。"
+				"工具输出只给脚本 id 与文件名，不含本机绝对路径。"));
 			WriteErrorLog(aLog, "mcp: initialize from protocolVersion=" + requested + "\n");
 			WriteFrame(ResultFrame(id, std::move(result)));
 			continue;

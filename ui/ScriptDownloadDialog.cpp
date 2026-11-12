@@ -547,7 +547,10 @@ void ScriptDownloadDialog::OnRowAction(int aIndex)
 
 	const std::string name = view.entry.name;
 	const std::string target = ScriptsDirUtf8() + name + ".ahk";
-	const double sizeKb = view.entry.sizeKb;
+	// m160: the manifest entry is the truth the download is verified against -
+	// name and version, nothing else (no size check: the user's rule for
+	// official scripts, and entry.sizeKb stays for the 信息 display only).
+	const std::string version = view.entry.version;
 	mBusy = true;
 	mDownloadIndex = aIndex;
 	mDownloadName = name;
@@ -558,11 +561,12 @@ void ScriptDownloadDialog::OnRowAction(int aIndex)
 	std::shared_ptr<bool> alive = mAlive;
 	try
 	{
-		std::thread([this, alive, name, url, target, sizeKb]() {
+		std::thread([this, alive, name, url, target, version]() {
 			ScriptInstallRequest request;
 			request.targetPathUtf8 = target;
 			request.url = url;
-			request.expectedSizeKb = sizeKb;
+			request.expectedName = name;
+			request.expectedVersion = version;
 
 			auto progress = [this, alive](long long got, long long total) {
 				using ProgressJob = Job<std::pair<long long, long long>>;
