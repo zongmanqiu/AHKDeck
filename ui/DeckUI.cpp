@@ -17,6 +17,7 @@
 
 #include "agent/McpServer.h"
 #include "agent/Toolbox.h"
+#include "core/ExeCompiler.h"
 #include "core/Housekeeping.h"
 #include "core/Hotkeys.h"
 #include "core/Json.h"
@@ -31,6 +32,8 @@
 #include "ui/ThemeWidgets.h"
 
 #include <windows.h>
+#include <commdlg.h> // m173: file dialogs for the 编译为 EXE target picker (IFileSaveDialog)
+#include <shobjidl.h>
 #include <dwmapi.h>
 #include <shellapi.h>
 #include <winver.h>
@@ -70,6 +73,7 @@
 #include <initializer_list>
 #include <map>
 #include <mutex>
+#include <memory>
 #include <string>
 #include <thread>
 #include <utility>
@@ -1011,6 +1015,9 @@ private:
 		IdRename,
 		IdHotkeyEdit,
 		IdNotepad,
+		// m172: 脚本/编译为 EXE - the official compiler ships under tools\
+		// and runs as a short-lived child; see core/ExeCompiler.h.
+		IdCompileExe,
 		IdHideTray,
 		IdRunAll,
 		IdOpenScriptsFolder,
@@ -1148,6 +1155,16 @@ private:
 	void RunEverything();
 	void OpenScriptsFolder();
 	void EditSelected();
+	// m172: row-index based (context menu hands the exact row, the menu item
+	// passes SelectedIndex()). Spawns the official compiler on a worker thread
+	// and reports through the console; aIndex < 0 = "pick a script first".
+	void CompileSelected(int aIndex);
+	// m173: arm the post-dialog working-set trim (pecila scheduleTrimSoon:
+	// dialog open/close is a page fault the product just paid for).
+	void ScheduleSaveTrim();
+	static void SaveTrimCb(void *aSelf);
+	void CompileExeOnWorker(std::wstring scriptPath, std::wstring outPath, std::string name);
+	void ApplyCompileResult(const ExeCompileOutcome &aOutcome, const std::string &aName);
 	bool EditingScriptRunning(DWORD *aSession = nullptr) const;
 	void RunOrStopEditing();
 	void SyncEditorRunButton();
@@ -1436,6 +1453,7 @@ private:
 	// re-checks that nothing started during the 2 s window before trimming.
 	bool mHadRunning = false;
 	bool mTrimPending = false;
+	bool mSaveTrimPending = false; // m173: the save-dialog one-shot (same shape)
 
 	std::wstring mEditPath;
 	std::wstring mSettingsPath;
@@ -1470,6 +1488,12 @@ private:
 	std::vector<std::string> mContextLabels;    // ... and the text it points at
 	bool mQuitRequested = false;
 	std::string mKernelSummary; // "2.0.25", read once from the loaded kernel
+	// m172: single-flight for 编译为 EXE - the child is short-lived but only
+	// one compile may run at a time (shared .temp capture names, one console
+	// voice). The shared flag outlives the window's queue: a Fl::awake job
+	// posted just before 退出 must not hop into a dead sink.
+	bool mCompileBusy = false;
+	std::shared_ptr<bool> mCompileAlive = std::make_shared<bool>(true);
 };
 
 // A browser that runs the selected script on a double-click; a single click
@@ -3169,7 +3193,7 @@ const std::vector<DeckWindow::CommandSpec> &DeckWindow::Commands()
 		// user-bound hotkeys and the shortcut dialog still work; an empty path
 		// is the table's established way to own a key without a menu row.
 		{IdHideTray, "hideTray", "", "窗口 > 托盘", "隐藏到托盘", 0, 0, false},
-		// m149: three groups, two divider lines. The first five act on ONE
+		// m149: three groups, two divider lines. The first rows act on ONE
 		// script; 全部停止/全部运行 act on the whole set and get their own band
 		// in the middle; the last three maintain the script library.
 		// FL_MENU_DIVIDER draws BELOW its item (Fl_Menu_Item.H:36), so the
@@ -3179,7 +3203,10 @@ const std::vector<DeckWindow::CommandSpec> &DeckWindow::Commands()
 		{IdStop, "stop", "脚本/停止", "菜单", "停止", 0, 0, false},
 		{IdRestart, "restart", "脚本/重启", "菜单", "重启", 0, 0, false},
 		{IdEditSelected, "editSelected", "脚本/编辑", "菜单", "编辑", 0, 0, false},
-		{IdNotepad, "notepad", "脚本/用记事本打开", "菜单", "用记事本打开", 0, FL_MENU_DIVIDER, false},
+		{IdNotepad, "notepad", "脚本/用记事本打开", "菜单", "用记事本打开", 0, 0, false},
+		// m172: the per-script band's last row now; the divider flag moved off
+		// 用记事本打开 to here, keeping the "line below the last row" rule.
+		{IdCompileExe, "compileExe", "脚本/编译为 EXE", "菜单", "编译为 EXE", 0, FL_MENU_DIVIDER, false},
 		{IdStopAll, "stopAll", "脚本/全部停止", "菜单", "全部停止", 0, 0, false},
 		{IdRunAll, "runAll", "脚本/全部运行", "菜单", "全部运行", 0, FL_MENU_DIVIDER, false},
 		// m147: grouping is by the object acted upon, not by whether the action
@@ -3753,6 +3780,10 @@ DeckWindow::~DeckWindow()
 	// m094: any destruction path other than Run()'s orderly shutdown used to
 	// destroy a joinable std::thread, which is std::terminate. StopMcp is
 	// idempotent, so calling it here is both safe and the last line of defence.
+	// m172: the same argument for the (detached) compile worker - clear the
+	// alive flag FIRST, so any Fl::awake reply still in the queue drops itself
+	// instead of hopping into a half-dead window.
+	*mCompileAlive = false;
 	StopMcp();
 	delete mShortcutDialog;
 	mShortcutDialog = nullptr;
@@ -4954,6 +4985,203 @@ void DeckWindow::RunSelected()
 	StartPath(mScripts[(size_t)index].path);
 }
 
+// m173: the compiler child and the save dialog run outside the kernel, so the
+// deck thread never holds COM today; a one-shot init/uninit pair around the
+// dialog is the whole obligation (recipe: .ex/pecia cbOpen). Fail-closed: if
+// the apartment refuses, the picker returns empty and the compile is reported
+// as not-started - the user keeps a clean console line, not a half action.
+static bool ShowPickSaveExePath(const std::wstring &aFolder, const std::wstring &aFileName,
+	std::wstring &aOutPath)
+{
+	aOutPath.clear();
+	const HRESULT hrInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+	const bool ownUninit = SUCCEEDED(hrInit);
+	bool ok = false;
+	IFileSaveDialog *dlg = nullptr;
+	if (SUCCEEDED(CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER,
+		IID_IFileSaveDialog, reinterpret_cast<void **>(&dlg))) && dlg)
+	{
+		HRESULT hr = dlg->SetTitle(L"编译为 EXE：选择保存位置");
+		static const COMDLG_FILTERSPEC kOne[] = { { L"可执行文件", L"*.exe" } };
+		if (SUCCEEDED(hr))
+			hr = dlg->SetFileTypes(1, kOne);
+		if (SUCCEEDED(hr))
+			hr = dlg->SetDefaultExtension(L"exe"); // typed name without extension -> gets .exe
+		if (SUCCEEDED(hr) && !aFolder.empty())
+		{
+			IShellItem *folder = nullptr;
+			if (SUCCEEDED(SHCreateItemFromParsingName(aFolder.c_str(), nullptr,
+				IID_IShellItem, reinterpret_cast<void **>(&folder))) && folder)
+			{
+				hr = dlg->SetFolder(folder); // best-effort: a dead folder must not block the dialog
+				folder->Release();
+			}
+		}
+		if (SUCCEEDED(hr) && !aFileName.empty())
+			dlg->SetFileName(aFileName.c_str()); // default into the edit field
+		if (SUCCEEDED(hr))
+		{
+			hr = dlg->Show(nullptr);
+			if (SUCCEEDED(hr))
+			{
+				IShellItem *item = nullptr;
+				if (SUCCEEDED(dlg->GetResult(&item)) && item)
+				{
+					PWSTR path = nullptr;
+					if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path)
+					{
+						aOutPath = path;
+						ok = !aOutPath.empty();
+						CoTaskMemFree(path);
+					}
+					item->Release();
+				}
+			}
+			// FAILED(hr) from Show() is the user cancel - not an error.
+		}
+		dlg->Release();
+	}
+	if (ownUninit)
+		CoUninitialize();
+	return ok;
+}
+
+// m110 helper: "c:\dir\x" -> "c:\dir" (last segment cut at the final slash).
+static std::wstring ParentDirOf(const std::wstring &aPath)
+{
+	const size_t slash = aPath.find_last_of(L'\\');
+	if (slash == std::wstring::npos)
+		return std::wstring();
+	return aPath.substr(0, slash);
+}
+
+// m173: compile one row to a standalone exe. The console is the only report
+// surface (no dialog to invent): the picker decides the path, the worker
+// decides the verdict. The child can take a second or two, so it runs on a
+// worker exactly like the downloader, and the reply hops back with Fl::awake
+// guarded by mCompileAlive.
+void DeckWindow::CompileSelected(int aIndex)
+{
+	if (aIndex < 0 || (size_t)aIndex >= mScripts.size())
+	{
+		Append("[ui] 先在左侧选一个脚本");
+		return;
+	}
+	if (mCompileBusy)
+	{
+		Append("[编译] 已有一个编译在进行，等它结束再试");
+		return;
+	}
+	const ScriptRow row = mScripts[(size_t)aIndex]; // m173: copy - the picker re-enters the list path
+	std::wstring probeCompiler;
+	std::wstring probeBase;
+	std::string toolError;
+	if (!ResolveCompileTools(ExeDirectory(), probeCompiler, probeBase, toolError))
+	{
+		Append("[编译] " + toolError);
+		return;
+	}
+	// m173: 「另存为」first (pecila's IFileSaveDialog), with the script's own
+	// folder and pre-filled name; cancel stops here and says so. The dialog's
+	// working set is handed back when it closes (ScheduleSaveTrim -
+	// on every path, the same rule as .ex pecia MainWindow_timers).
+	// The pre-fill is "<script base>.exe" - the SAME swap rule as core's
+	// DefaultExePathFor (it replaces a trailing .ahk; row.name keeps .ahk, so
+	// gluing ".exe" onto it would offer 名字.ahk.exe). The test nails the
+	// rule on the core side; the leaf is taken here, one truth, one helper.
+	const std::wstring suggested = DefaultExePathFor(row.path);
+	std::wstring savePath;
+	if (!ShowPickSaveExePath(ParentDirOf(row.path), LeafOf(suggested), savePath))
+	{
+		ScheduleSaveTrim();
+		Append("[编译] 已取消（未选择输出位置）");
+		return;
+	}
+	ScheduleSaveTrim();
+	// The filter guarantees .exe; belt: the core contract writes exactly here.
+	mCompileBusy = true;
+	Append("[编译] 正在编译 " + row.name + " 为 exe…");
+	CompileExeOnWorker(row.path, savePath, row.name);
+}
+
+void DeckWindow::CompileExeOnWorker(std::wstring scriptPath, std::wstring outPath, std::string name)
+{
+	struct Reply
+	{
+		DeckWindow *self;
+		std::shared_ptr<bool> alive;
+		ExeCompileOutcome outcome;
+		std::string name;
+	};
+	const std::wstring exeDir = ExeDirectory();
+	std::shared_ptr<bool> alive = mCompileAlive;
+	std::thread([exeDir, scriptPath, outPath, name, alive, this]() {
+		ExeCompileOutcome outcome;
+		try
+		{
+			outcome = CompileScriptToExe(exeDir, scriptPath, outPath);
+		}
+		catch (...)
+		{
+			outcome.error = "编译线程异常";
+		}
+		auto *reply = new Reply{ this, alive, std::move(outcome), name };
+		Fl::awake([](void *aPayload) {
+			auto *r = static_cast<Reply *>(aPayload);
+			if (*r->alive)
+				r->self->ApplyCompileResult(r->outcome, r->name);
+			delete r;
+		}, reply);
+	}).detach();
+}
+
+void DeckWindow::ApplyCompileResult(const ExeCompileOutcome &aOutcome, const std::string &aName)
+{
+	mCompileBusy = false;
+	// m173: the task is over (worker done, child process reaped). The picker's
+	// earlier trim was skipped while mCompileBusy held it, so arm once more
+	// here - this is the "结束任务后释放内存" point the user named. The dialog
+	// pages and the compiler child's shared loads all ride back to the OS.
+	ScheduleSaveTrim();
+	if (!aOutcome.error.empty())
+	{
+		Append("[编译] " + aName + " 失败：" + aOutcome.error);
+		return;
+	}
+	if (aOutcome.rc == 0 && aOutcome.produced)
+	{
+		std::string line = "[编译] " + aName + " 完成：" + Utf8(aOutcome.outPath);
+		if (aOutcome.backedUp)
+			line += "（旧产物已备份为 .old）";
+		Append(line);
+		return;
+	}
+	std::string detail = aOutcome.output;
+	// The compiler writes several lines; keep the console readable but never
+	// hide the verdict - show up to the last 3 non-empty lines verbatim.
+	Append("[编译] " + aName + " 未成功（rc=" + std::to_string(aOutcome.rc) + "）");
+	if (!detail.empty())
+	{
+		std::vector<std::string> lines;
+		size_t pos = 0;
+		while (pos < detail.size())
+		{
+			size_t nl = detail.find('\n', pos);
+			if (nl == std::string::npos)
+				nl = detail.size();
+			std::string piece = detail.substr(pos, nl - pos);
+			while (!piece.empty() && piece.back() == '\r')
+				piece.pop_back();
+			if (!piece.empty())
+				lines.push_back(piece);
+			pos = nl + 1;
+		}
+		const size_t start = lines.size() > 3 ? lines.size() - 3 : 0;
+		for (size_t i = start; i < lines.size(); ++i)
+			Append("    " + lines[i]);
+	}
+}
+
 void DeckWindow::StopSelected()
 {
 	int index = SelectedIndex();
@@ -5991,6 +6219,9 @@ void DeckWindow::ShowContextMenu(int aIndex)
 	add("编辑", 3);
 	add("快捷键…", 4);
 	add("重命名", 5);
+	// m172: 编译为 EXE joins the per-script actions, right before 信息 (which
+	// stays last - it is the "properties" row, not an action).
+	add("编译为 EXE", 7);
 	// m153: no divider above 信息 after all. FL_MENU_DIVIDER on 重命名 drew a
 	// rule that made a five-item menu read as two unrelated halves; Explorer's
 	// 属性 sits in the same list without one.
@@ -6033,6 +6264,9 @@ void DeckWindow::ShowContextMenu(int aIndex)
 		break;
 	case 6: // 信息
 		ShowScriptInfo(aIndex);
+		break;
+	case 7: // 编译为 EXE
+		CompileSelected(aIndex);
 		break;
 	default:
 		break;
@@ -7312,6 +7546,7 @@ void DeckWindow::HandleMenu(int aId)
 	case IdStopAll: StopEverything(); break;
 	case IdRunAll: RunEverything(); break;
 	case IdEditSelected: EditSelected(); break;
+	case IdCompileExe: CompileSelected(SelectedIndex()); break;
 	case IdRescan: RefreshFromDisk(); break;
 	case IdScriptDownload: ShowScriptDownloadDialog(); break;
 	case IdOpenScriptsFolder: OpenScriptsFolder(); break;
@@ -7509,6 +7744,32 @@ void DeckWindow::TrimWorkingSetCb(void *aSelf)
 {
 	auto *self = static_cast<DeckWindow *>(aSelf);
 	self->mTrimPending = false;
+	for (const Session &s : self->CachedSessions())
+		if (s.state == SessionState::Running || s.state == SessionState::Stopping)
+			return;
+	SetProcessWorkingSetSize(GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1);
+}
+
+// m173: the save dialog (comdlg32 + shell namespace pages) inflates the
+// working set by megabytes that the deck never touches again. Pecila's rule,
+// kept verbatim: trim two seconds after EVERY close - open/close is a paid
+// fault, and the next open reloads the shell pages regardless. Same guard as
+// TrimWorkingSetCb: live sessions own pages; a compile in flight wants its
+// own pages too (the worker + console append).
+void DeckWindow::ScheduleSaveTrim()
+{
+	if (mSaveTrimPending)
+		Fl::remove_timeout(SaveTrimCb, this);
+	mSaveTrimPending = true;
+	Fl::add_timeout(2.0, SaveTrimCb, this);
+}
+
+void DeckWindow::SaveTrimCb(void *aSelf)
+{
+	auto *self = static_cast<DeckWindow *>(aSelf);
+	self->mSaveTrimPending = false;
+	if (self->mCompileBusy)
+		return;
 	for (const Session &s : self->CachedSessions())
 		if (s.state == SessionState::Running || s.state == SessionState::Stopping)
 			return;

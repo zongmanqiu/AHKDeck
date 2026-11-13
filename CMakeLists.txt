@@ -12,7 +12,7 @@ if(CMAKE_GENERATOR MATCHES "Makefiles")
     set(CMAKE_DEPENDS_USE_COMPILER FALSE)
 endif()
 
-project(AHKDeck VERSION 0.3.2 LANGUAGES C CXX RC)
+project(AHKDeck VERSION 0.3.3 LANGUAGES C CXX RC)
 
 # Static CRT (/MT): the shipped exe must run with ZERO VC++ redistributable
 # dependencies ("单 exe 即装即用"). CMP0091 NEW lets CMAKE_MSVC_RUNTIME_LIBRARY
@@ -76,6 +76,7 @@ add_library(core STATIC
     core/Updater.cpp
     core/ScriptCatalog.cpp
     core/ScriptHeader.cpp
+    core/ExeCompiler.cpp
     core/ResourceStats.cpp
     core/Housekeeping.cpp
 )
@@ -232,6 +233,29 @@ if(EXISTS "${AHKDECK_SCRIPT_CATALOG}")
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${AHKDECK_SCRIPT_CATALOG}" "$<TARGET_FILE_DIR:AHKDeck>/docs/scripts.json"
         COMMENT "Staging the official script catalog next to AHKDeck.exe")
+endif()
+
+# m172: the official compiler pair ships under tools\ so the deck's
+# 「脚本/编译为 EXE」 works on a user machine with no AutoHotkey installed.
+# Same discipline as the script catalog above: the build only copies, never
+# invents - missing .3rd (a standalone .main checkout) simply leaves the deck
+# reporting "tools 缺失" at click time, and the ctest end-to-end arms SKIP.
+# The pair is not splittable: Ahk2Exe searches its own directory for a
+# matching-version interpreter to use as a compile-time utility, and the
+# base exe doubles as that utility (docs: Background Information).
+set(AHKDECK_COMPILER_SRC "${CMAKE_SOURCE_DIR}/../.3rd/AutoHotkey_2.0.30")
+if(EXISTS "${AHKDECK_COMPILER_SRC}/Compiler/Ahk2Exe.exe" AND
+   EXISTS "${AHKDECK_COMPILER_SRC}/AutoHotkey64.exe")
+    add_custom_command(TARGET AHKDeck POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:AHKDeck>/tools"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${AHKDECK_COMPILER_SRC}/Compiler/Ahk2Exe.exe"
+                "$<TARGET_FILE_DIR:AHKDeck>/tools/Ahk2Exe.exe"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${AHKDECK_COMPILER_SRC}/AutoHotkey64.exe"
+                "$<TARGET_FILE_DIR:AHKDeck>/tools/AutoHotkey64.exe"
+        COMMENT "Staging the official compiler pair under tools/")
 endif()
 
 # ----------------------------------------------------------------------------
@@ -420,6 +444,27 @@ set_target_properties(test_scriptcatalog PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_DEBUG "${AHKDECK_TEMP_BIN}"
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${AHKDECK_TEMP_BIN}")
 add_test(NAME scriptcatalog COMMAND test_scriptcatalog)
+
+# m172: the exe compiler wrapper. Pure arms always run; the end-to-end arms
+# drive the staged official compiler when it is present and SKIP otherwise.
+# cwd = .temp/execompiler_gate; the wrapper's OWN temp capture files live
+# under toolsExeDir\.temp, which the copy stage already creates.
+set(AHKDECK_EXECOMPILER_DIR "${CMAKE_SOURCE_DIR}/../.temp/execompiler_gate")
+file(MAKE_DIRECTORY "${AHKDECK_EXECOMPILER_DIR}")
+add_executable(test_execompiler
+    test/test_execompiler.cpp
+)
+target_link_libraries(test_execompiler PRIVATE core)
+if(MSVC)
+    target_compile_options(test_execompiler PRIVATE /W4 /WX)
+endif()
+set_target_properties(test_execompiler PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${AHKDECK_TEMP_BIN}"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${AHKDECK_TEMP_BIN}"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${AHKDECK_TEMP_BIN}")
+add_test(NAME execompiler COMMAND test_execompiler)
+set_tests_properties(execompiler PROPERTIES
+    WORKING_DIRECTORY "${AHKDECK_EXECOMPILER_DIR}")
 
 
 # ----------------------------------------------------------------------------

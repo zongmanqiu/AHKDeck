@@ -38,6 +38,7 @@ full.bat                 :: 一键全链路
 | CMake 构建树 | `.temp\cmake_build\` |
 | 测试 exe | `.temp\bin\` |
 | 成品 exe 与内核 | `.build\AHKDeck.exe`、`.build\AutoHotkey64.dll` |
+| 编译器随包件 | `.build\tools\`（m172：CMake POST_BUILD 从 `.3rd\AutoHotkey_2.0.30` 平铺 `Ahk2Exe.exe` + `AutoHotkey64.exe`，供「脚本/编译为 EXE」；`.3rd` 缺失的独立检出不生成，打包必需项会拦） |
 | 脚本目录 | `.build\Scripts\`（CMake `deck_scripts ALL` 目标只负责创建该目录；脚本由用户自行放入） |
 
 ## 构建约束

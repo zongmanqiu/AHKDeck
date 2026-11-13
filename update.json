@@ -1,8 +1,8 @@
 {
-  "version": "0.3.2",
-  "published": "2026-11-12",
-  "notes": "0.3.2：删空自己托盘菜单的脚本不再弹空菜单——点它改为前置它的主窗口（列表右键、齿轮格、菜单栏、托盘「运行中」四条入口一致）；官方脚本下载验真收敛为只认头部 @name + @version（与你改脚本头部后的清单一致才装，不加哈希、不比大小）；MCP 端 initialize 回带 instructions 闭环说明，运行失败回带 next 指明下一步工具；AI 文件边界拒 UNC 与目录联接伪装。",
-  "notes_en": "0.3.2: a script that emptied its own tray menu no longer pops an empty popup - clicking it now brings its window to the front (same guard on row menu, gear cell, menu bar and tray Running). Official downloads are verified by header @name + @version only: no hashing, no size tolerance. The MCP endpoint returns initialize.instructions describing the edit-check-validate-run-read-fix loop, and failed runs carry a next hint naming the next tool. The AI file boundary now rejects UNC paths and reparse-point (junction/symlink) smuggling.",
-  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.3.2/AHKDeck_0.3.2.zip",
-  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.3.2/AHKDeck_0.3.2.zip"
+  "version": "0.3.3",
+  "published": "2026-11-13",
+  "notes": "0.3.3：新增「编译为 EXE」——选中脚本后可编译成独立 exe，机器上不用装 AutoHotkey；官方 Ahk2Exe 与编译底座随包放在 tools/，编译在后台跑、结果与编译器原文回控制台，覆盖同名旧产物自动备份为 .old，不做 UPX 之类加壳。输出位置和文件名改由原生「另存为」框决定，预填名把 .ahk 正确换成 .exe，取消不留痕迹；弹窗与任务结束后自动归还工作集。另把「测试范围与改动范围一致」写进开发指南，发行包新增 tools/ 必需项并补齐第三方分发声明。",
+  "notes_en": "0.3.3: Compile to EXE. A selected script now builds into a standalone exe with no AutoHotkey installed on the machine; the official Ahk2Exe and its base interpreter ship in tools/. Compilation runs on a worker, the compiler's rc/stdout/stderr go to the console, an existing target is backed up as .old, and no UPX-style runtime packer is used. A native Save As dialog picks the output path with the name pre-filled by replacing .ahk with .exe; cancelling leaves no trace, and the working set is trimmed after the dialog and the job. The developer guide now states that test scope must match change scope; the release whitelist adds tools/ as a required item and the third-party notices cover the bundled compiler.",
+  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.3.3/AHKDeck_0.3.3.zip",
+  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.3.3/AHKDeck_0.3.3.zip"
 }

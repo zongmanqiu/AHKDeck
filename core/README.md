@@ -16,5 +16,6 @@
 | `AiPolicy.{h,cpp}` | 工具文件操作路径校验与备份，不是脚本执行沙箱。m160 起拒 UNC/`\\?\` 设备路径，并逐级检查 reparse point（junction/符号链接混入白名单目录也出不去） |
 | `ResourceStats.{h,cpp}` | 宿主自身占用（CPU% / 内存＝专用工作集（任务管理器口径）/ 线程 / 句柄 / GPU，m107）。只做测量（psapi、Toolhelp、PDH），不碰窗口；状态栏与 `--stats` 共用同一份格式化 |
 | `Housekeeping.{h,cpp}` | 启动清理（m109）：`settings.json` 的 `housekeeping.max_age_days`（默认 30，`0`＝关闭）驱动 `.temp\`/`Backups\`/`Logs\` 的按时间清理；递归删文件后删空目录，不跟目录联接，占用中的文件只记数 |
+| `ExeCompiler.{h,cpp}` | m172 脚本编译为 EXE：对随包官方编译器（`tools\Ahk2Exe.exe` + `tools\AutoHotkey64.exe`）的短命子进程封装（同 m103 validate 的文件捕获形状，不走管道）。rc 语义实测钉死（0 成 / 17 语法错 stderr 载原文 / 50 include 缺失），`/silent` 保证永不弹窗；覆盖契约＝旧目标先改名 `.old`（同下载器），`backedUp` 只报本轮事实；工具缺失 fail-closed 报「请用完整安装包」。无 FLTK、无窗口 API，阻塞式——由调用方放 worker 线程 |
 
 依赖方向见 [.main/目录结构说明.md](../目录结构说明.md)：`core ← engine ← ui`，反向 include 一律不许。

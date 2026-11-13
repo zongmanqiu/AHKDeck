@@ -1,7 +1,7 @@
 # AHKDeck
 
-**[⬇️ 下载 0.3.2 (Gitee)](https://gitee.com/qiuzongman/AHKDeck/releases/download/0.3.2/AHKDeck_0.3.2.zip)**
-｜ **[⬇️ 下载 0.3.2 (GitHub)](https://github.com/zongmanqiu/AHKDeck/releases/download/0.3.2/AHKDeck_0.3.2.zip)**
+**[⬇️ 下载 0.3.3 (Gitee)](https://gitee.com/qiuzongman/AHKDeck/releases/download/0.3.3/AHKDeck_0.3.3.zip)**
+｜ **[⬇️ 下载 0.3.3 (GitHub)](https://github.com/zongmanqiu/AHKDeck/releases/download/0.3.3/AHKDeck_0.3.3.zip)**
 
 
 > AHKDeck: [Gitee](https://gitee.com/qiuzongman/AHKDeck)
@@ -14,6 +14,7 @@
 - 脚本会话在宿主进程内运行；真正退出宿主时一并停止。
 - 标题栏关闭通常只是隐藏到托盘，脚本继续运行。
 - 支持mcp，可接入AI进行脚本撰写与修改。
+- 一键把脚本编译成独立 exe（官方 Ahk2Exe 随包，机器上不用装 AutoHotkey）。
 
 ## 窗口
 
@@ -25,6 +26,10 @@
 - 「脚本 > 获取脚本…」从官方脚本仓库下载或升级脚本，安装到程序旁的 `Scripts/`；
   打开时读随包清单，只有点「刷新」才联网。
 - 内置编辑器提供保存、查找替换；当前编辑脚本的运行回执与内核错误显示在控制台，各会话日志写入程序旁的 `Logs/`。
+- 「脚本 > 编译为 EXE」（或行右键同名项）先弹「另存为」选位置和名称，产物是独立 exe，可在任何 Windows
+  机器直接双击运行（免装 AutoHotkey）；编译器与底座随包在 `tools/`。覆盖同名旧产物时自动备份为
+  `.old`；对话框与任务结束后自动把工作集交还系统；不做 UPX 之类的运行时加壳（轻量口径：省的是磁盘、
+  花的是运行内存）。
 - AI 接入使用 MCP stdio：外部客户端负责模型和修正循环，本程序提供脚本工具与可见编辑区，不内建聊天面板。
 - 每次启动会清理程序旁 `.temp/`、`Backups/`、`Logs/` 里超过 30 天的旧文件；天数在 `settings.json` 的
   `housekeeping.max_age_days`（`0` 关闭），不在界面上暴露。

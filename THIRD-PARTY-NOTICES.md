@@ -35,9 +35,17 @@
 链接进 exe 的第三方库（FLTK）必须用同一旗标构建（4_build 已传
 `-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded`）。
 
-## 4. 构建期工具（不随产品分发）
+## 4. AutoHotkey v2.0.30 官方编译器与编译底座（m172，随产品分发）
 
-CMake、MSVC、Windows SDK、curl、bsdtar 仅为构建工具，不进入产物、不参与分发。
+- 文件：程序旁 `tools\Ahk2Exe.exe`（官方编译器本体）、`tools\AutoHotkey64.exe`（编译底座，被嵌进
+  每个用户产物 exe）；构建期由 CMake POST_BUILD 从 `.3rd\AutoHotkey_2.0.30\` 原样平铺，不改动。
+- 来源：AutoHotkey v2 官方发布（https://github.com/AutoHotkey ）；编译器源码仓库
+  https://github.com/AutoHotkey/Ahk2Exe （Ahk2Exe.exe 即由该脚本自身编译而成）
+- 许可：**GPL-2.0（含 AutoHotkey 的 script exception 惯例）**——与本仓库 `LICENSE` 与
+  `licenses\GPL-2.0.txt` 同族；两文件均以原样二进制随 GPL 源码分发。
+- 用途：deck 内「脚本/编译为 EXE」（m172）。两文件不可拆：Ahk2Exe 在自身目录搜索同版本解释器当编译工具。
+- **构建期工具**（另一节口径不变）：CMake、MSVC、Windows SDK、curl、bsdtar 仅为构建工具，
+  不进入产物、不参与分发。
 
 ## 5. AutoHotkey 应用图标（m030）
 
