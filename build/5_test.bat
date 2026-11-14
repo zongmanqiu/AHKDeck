@@ -118,12 +118,32 @@ if not exist "%BUILD_DIR%\CMakeCache.txt" (
 cd /d "%BUILD_DIR%"
 REM -LE gui keeps the default pipeline headless (the user's standing rule: gates
 REM that open a window are opt-in). mcp_stdio (m064) is the labelled one so far.
-ctest --output-on-failure -LE gui
+REM m195: capture verbose output so the skip audit can see INSIDE each test.
+REM A green ctest summary proves nothing about a branch that never ran - the
+REM m193 end-to-end arms once reported 21/21 while both were skipped.
+set "GATE_LOG=%BUILD_DIR%\gate_ctest_verbose.log"
+ctest -V --output-on-failure -LE gui > "!GATE_LOG!" 2>&1
 if !ERRORLEVEL! neq 0 (
+    type "!GATE_LOG!"
     echo.
     echo   [ERROR] tests failed - build does not pass
     echo           details above; set AHKDECK_SKIP_TESTS=1 to compile without tests
     echo.
+    cd /d "%SCRIPT_DIR%."
+    if not "!AHKDECK_CHAINED!"=="1" pause
+    exit /b 1
+)
+echo   checking skipped test branches (m195)...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%MAIN_DIR%\test\shipping_gate\gate_no_skip.ps1" -Log "!GATE_LOG!" -SelfTest
+if !ERRORLEVEL! neq 0 (
+    echo   [ERROR] the skip audit cannot catch its own bad sample
+    cd /d "%SCRIPT_DIR%."
+    if not "!AHKDECK_CHAINED!"=="1" pause
+    exit /b 1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%MAIN_DIR%\test\shipping_gate\gate_no_skip.ps1" -Log "!GATE_LOG!"
+if !ERRORLEVEL! neq 0 (
+    echo   [ERROR] a conditional test branch was skipped - the green summary above is not a pass
     cd /d "%SCRIPT_DIR%."
     if not "!AHKDECK_CHAINED!"=="1" pause
     exit /b 1

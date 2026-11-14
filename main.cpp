@@ -534,31 +534,40 @@ int RunValidate(wchar_t *aScriptPath)
 	return rc;
 }
 
-// m107: one JSON line with the same numbers the status bar draws. Two samples
-// 300 ms apart turn the CPU counters into a real delta, and the first GPU
-// collect only primes PDH. Nothing here touches the window, so this mode is
-// also the machine reader for the stats gate.
+// m107/m196: one JSON line with the same numbers the status bar draws. Two
+// samples 300 ms apart turn the CPU counters into a real delta, and the first
+// GPU collect only primes PDH. Nothing here touches the window, so this mode
+// is also the machine reader for the stats gate.
 //
-// pid is in the line on purpose: it lets a reader (or a person with Task
-// Manager open) confirm that these numbers belong to THIS process, not to
-// something the deck started alongside it.
+// The old fields are the HOST reading; the total_* fields are what the status
+// bar shows (host + every running script). --stats starts no children, so the
+// gate asserts the two agree - that is the machine check for the sum itself.
+// pid is in the line on purpose: it lets a reader confirm these numbers belong
+// to THIS process, not to something the deck started alongside it.
 int RunStats()
 {
 	ahkdeck::ResourceSampler sampler;
 	sampler.Sample();
 	Sleep(300);
-	const ahkdeck::ResourceSample sample = sampler.Sample();
+	const ahkdeck::ResourceSnapshot snapshot = sampler.SampleWithChildren();
+	const ahkdeck::ResourceSample &host = snapshot.host;
 	std::printf("{\"ok\":true,\"pid\":%lu,\"cpu_percent\":%.1f,\"working_set_bytes\":%llu,"
 		"\"private_working_set_bytes\":%llu,\"private_bytes\":%llu,"
-		"\"threads\":%u,\"handles\":%u,\"gpu_percent\":%.1f,\"text\":%s}\n",
+		"\"threads\":%u,\"handles\":%u,\"gpu_percent\":%.1f,"
+		"\"children\":%u,\"total_cpu_percent\":%.1f,"
+		"\"total_private_working_set_bytes\":%llu,\"total_gpu_percent\":%.1f,\"text\":%s}\n",
 		(unsigned long)GetCurrentProcessId(),
-		sample.cpuPercent,
-		(unsigned long long)sample.workingSetBytes,
-		(unsigned long long)sample.privateWorkingSetBytes,
-		(unsigned long long)sample.privateBytes,
-		(unsigned)sample.threadCount, (unsigned)sample.handleCount,
-		sample.gpuPercent,
-		JsonString(ahkdeck::FormatResources(sample)).c_str());
+		host.cpuPercent,
+		(unsigned long long)host.workingSetBytes,
+		(unsigned long long)host.privateWorkingSetBytes,
+		(unsigned long long)host.privateBytes,
+		(unsigned)host.threadCount, (unsigned)host.handleCount,
+		host.gpuPercent,
+		(unsigned)snapshot.children.size(),
+		snapshot.total.cpuPercent,
+		(unsigned long long)snapshot.total.privateWorkingSetBytes,
+		snapshot.total.gpuPercent,
+		JsonString(ahkdeck::FormatResources(snapshot.total)).c_str());
 	std::fflush(stdout);
 	return 0;
 }

@@ -106,6 +106,24 @@ int main()
     Expect(withoutGpu.find("GPU") == std::string::npos,
            "an unavailable GPU counter is omitted, not printed as a dash", file, __LINE__);
 
+    // --- m196: status bar = host + the rows -------------------------------
+    // A pid that cannot be opened must never invent numbers: it stays invalid
+    // (blank list cells) and adds nothing to the total. Together with the
+    // stats gate (children=0 => total==host) this pins the sum on both sides.
+    {
+        ahkdeck::ResourceSampler sampler;
+        const ahkdeck::ResourceSnapshot snapshot =
+            sampler.SampleWithChildren({ (uint32_t)0xFFFFFFF0u });
+        Expect(snapshot.children.size() == 1,
+               "one child slot is kept per requested pid", file, __LINE__);
+        Expect(!snapshot.children[0].valid,
+               "an unreachable pid is not a measurement", file, __LINE__);
+        Expect(snapshot.total.privateWorkingSetBytes == snapshot.host.privateWorkingSetBytes,
+               "an unreachable child adds no memory to the host total", file, __LINE__);
+        Expect(snapshot.total.cpuPercent == snapshot.host.cpuPercent,
+               "an unreachable child adds no CPU to the host total", file, __LINE__);
+    }
+
     if (g_failures == 0) {
         std::printf("test_resources: all checks passed (\"%s\")\n", withGpu.c_str());
         return 0;

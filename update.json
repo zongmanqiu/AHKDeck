@@ -1,8 +1,8 @@
 {
-  "version": "0.3.3",
-  "published": "2026-11-13",
-  "notes": "0.3.3：新增「编译为 EXE」——选中脚本后可编译成独立 exe，机器上不用装 AutoHotkey；官方 Ahk2Exe 与编译底座随包放在 tools/，编译在后台跑、结果与编译器原文回控制台，覆盖同名旧产物自动备份为 .old，不做 UPX 之类加壳。输出位置和文件名改由原生「另存为」框决定，预填名把 .ahk 正确换成 .exe，取消不留痕迹；弹窗与任务结束后自动归还工作集。另把「测试范围与改动范围一致」写进开发指南，发行包新增 tools/ 必需项并补齐第三方分发声明。",
-  "notes_en": "0.3.3: Compile to EXE. A selected script now builds into a standalone exe with no AutoHotkey installed on the machine; the official Ahk2Exe and its base interpreter ship in tools/. Compilation runs on a worker, the compiler's rc/stdout/stderr go to the console, an existing target is backed up as .old, and no UPX-style runtime packer is used. A native Save As dialog picks the output path with the name pre-filled by replacing .ahk with .exe; cancelling leaves no trace, and the working set is trimmed after the dialog and the job. The developer guide now states that test scope must match change scope; the release whitelist adds tools/ as a required item and the third-party notices cover the bundled compiler.",
-  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.3.3/AHKDeck_0.3.3.zip",
-  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.3.3/AHKDeck_0.3.3.zip"
+  "version": "0.3.4",
+  "published": "2026-11-15",
+  "notes": "0.3.4：内核收敛为单一官方 AutoHotkey 2.0.31 进程外子进程，发行包由 3 个 PE 变 2 个 PE（AutoHotkey64.dll 与 tools\\ 退场），合并托盘菜单保留；状态栏与脚本列表的 CPU/GPU/运行内存改为「本体 ＋ 各运行中脚本之和」，列表扩为 7 列（运行/菜单/脚本/CPU/GPU/内存/快捷键）并恢复表头点击排序；内核版本号收为单一参数，关于界面补「内核 AutoHotkey 2.0.31」；门禁补「假绿」防线与内核版本四处一致性断言。",
+  "notes_en": "0.3.4: The kernel converges to a single out-of-process official AutoHotkey v2.0.31 child process, and the release shrinks from 3 PEs to 2 PEs (AutoHotkey64.dll and tools\\ retired) while keeping the merged tray menu. The status bar and the script list now show CPU/GPU/working-memory as host plus all running scripts; the list grows to 7 columns (run/menu/script/CPU/GPU/memory/hotkey) with header-click sorting restored. The kernel version is now a single parameter, the About dialog gains a 'Kernel AutoHotkey 2.0.31' line, and the gate suite adds a fake-green guard plus a four-way kernel-version consistency assertion.",
+  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.3.4/AHKDeck_0.3.4.zip",
+  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.3.4/AHKDeck_0.3.4.zip"
 }

@@ -39,7 +39,6 @@
 #include <shobjidl.h>
 #include <dwmapi.h>
 #include <shellapi.h>
-#include <winver.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -129,6 +128,47 @@ std::string DisplayNameOf(const std::string &aName)
 	if (aName.size() > n && _stricmp(aName.c_str() + aName.size() - n, kSuffix) == 0)
 		return aName.substr(0, aName.size() - n);
 	return aName;
+}
+
+// m202: a name too long for its column - even with the window maximised - is
+// cut at a UTF-8 character boundary and given a "..." suffix, so the user can
+// tell it was shortened instead of staring at a hard clip. fl_font() must
+// already be set to the size the name is drawn with.
+std::string EllipsizeName(const std::string &aName, int aAvailPx)
+{
+	// fl_font() is global FLTK state. The caller may be mid-draw with a
+	// different font selected, so save and restore it around our measurements.
+	const Fl_Font savedFont = fl_font();
+	const Fl_Fontsize savedSize = fl_size();
+	fl_font(FL_HELVETICA, TextSize());
+	struct FontRestore
+	{
+		Fl_Font font;
+		Fl_Fontsize size;
+		~FontRestore() { fl_font(font, size); }
+	} restore{ savedFont, savedSize };
+
+	if (aAvailPx <= 0)
+		return "...";
+	if ((int)std::ceil(fl_width(aName.c_str())) <= aAvailPx)
+		return aName;
+	const int room = aAvailPx - (int)std::ceil(fl_width("..."));
+	if (room <= 0)
+		return "...";
+	std::string prefix;
+	for (size_t i = 0; i < aName.size(); )
+	{
+		const unsigned char lead = (unsigned char)aName[i];
+		const size_t step = lead < 0x80 ? 1 : (lead < 0xE0 ? 2 : (lead < 0xF0 ? 3 : 4));
+		if (i + step > aName.size())
+			break; // truncated UTF-8 sequence; never cut inside a character
+		std::string candidate = prefix + aName.substr(i, step);
+		if ((int)std::ceil(fl_width(candidate.c_str())) > room)
+			break;
+		prefix = std::move(candidate);
+		i += step;
+	}
+	return prefix + "...";
 }
 
 bool SamePathI(const std::wstring &aLeft, const std::wstring &aRight)
@@ -511,28 +551,11 @@ std::string UiClock()
 	return buf;
 }
 
-// The status bar names the kernel the deck is about to load, the way v1.3's
-// "内核：v2.0.25 · 64 位" did. Version only: the build is x64-only by CMake fiat (a
-// non-x64 configure stops with FATAL_ERROR), so a bitness column could repeat
-// itself forever.
-std::string KernelVersionOf(const std::wstring &aPath)
-{
-	const DWORD size = GetFileVersionInfoSizeW(aPath.c_str(), nullptr);
-	if (!size)
-		return std::string();
-	std::vector<char> blob(size);
-	if (!GetFileVersionInfoW(aPath.c_str(), 0, size, blob.data()))
-		return std::string();
-	VS_FIXEDFILEINFO *info = nullptr;
-	UINT infoSize = 0;
-	if (!VerQueryValueW(blob.data(), L"\\", reinterpret_cast<void **>(&info), &infoSize) || !info)
-		return std::string();
-	char buf[32];
-	std::snprintf(buf, sizeof(buf), "%u.%u.%u",
-		HIWORD(info->dwProductVersionMS), LOWORD(info->dwProductVersionMS),
-		HIWORD(info->dwProductVersionLS));
-	return buf;
-}
+// m202: the kernel version no longer comes from GetFileVersionInfoW here.
+// core/Version.h::kKernelVersion is the single display source, and the
+// kernel_version gate asserts it against the shipped PE's version resource,
+// ahkversion.h and deps.txt. Keeping a second runtime reader would allow the
+// status bar and the About box to disagree.
 
 // The official exit code for a session. A failing script's thread unwinds with
 // 0, while the official dialog's "Exit" gives 2 - Engine exposes the raw thread
@@ -646,8 +669,99 @@ static Fl_Boxtype BorderOnlyBox()
 	return type;
 }
 
-// m037: headers are plain labels (no click sorting; the store stays in name
-// order). The menu column is a gear between 状态 and 脚本.
+// m199: clicking a column caption sorts the list. A plain Fl_Box handles no
+// events, so each caption gets a tiny handle() that reports its column. The
+// owner travels as void* + a thunk so this class needs no knowledge of
+// DeckWindow (defined further down the file).
+//
+// m200: the sort marker is NOT part of the label any more. Appending "↑" to a
+// right-aligned caption pushed the words to the left every time sorting was
+// toggled. Instead the label NEVER changes, and the marker is drawn in a slot
+// that is permanently reserved right after the text. Two consequences: the
+// caption text cannot move, and MeasureColumnNeeds() can size the column once
+// (label + slot) without any width jump when sorting starts or flips.
+// m202: the marker is TEXT again ("↑" / "↓") - the triangle was less legible.
+// Its width is measured with the caption's own font rather than guessed, so
+// the reserved slot is exactly as wide as the glyph that will fill it.
+class DeckHeaderBox : public Fl_Box
+{
+public:
+	typedef void (*SortFn)(void *, int);
+	static constexpr int kInset = 4;       // left padding inside the caption
+	static constexpr int kMarkGap = 3;     // between the label and the marker
+	static constexpr int kMarkTail = 2;    // breathing room after the marker
+
+	// Both draw() and MeasureColumnNeeds() call these, so the reserved slot can
+	// never disagree with what is painted. Always reserved, sorted or not.
+	static int MarkWidth(int aFont, int aSize)
+	{
+		fl_font(aFont, aSize);
+		const int up = (int)std::ceil(fl_width("↑"));
+		const int down = (int)std::ceil(fl_width("↓"));
+		return up > down ? up : down;
+	}
+	static int SortSlot(int aFont, int aSize)
+	{
+		return kMarkGap + MarkWidth(aFont, aSize) + kMarkTail;
+	}
+
+	DeckHeaderBox(int aX, int aY, int aW, int aH, const char *aLabel,
+		void *aOwner, SortFn aSort, int aColumn)
+		: Fl_Box(aX, aY, aW, aH, aLabel), mOwner(aOwner), mSort(aSort),
+		  mColumn(aColumn), mSortDir(0) {}
+	// 0 = not sorted, 1 = ascending, -1 = descending.
+	void SetSort(int aDir)
+	{
+		if (mSortDir == aDir)
+			return;
+		mSortDir = aDir;
+		redraw();
+	}
+	void draw() override
+	{
+		Fl_Box::draw(); // flat background + the label at its own alignment
+		if (!mSortDir)
+			return;
+		fl_font(labelfont(), labelsize());
+		const char *text = label() ? label() : "";
+		const int tw = (int)std::ceil(fl_width(text));
+		const int ax = x() + kInset + tw + kMarkGap;
+		const int room = w() - (ax - x());
+		if (room <= 0)
+			return;
+		fl_color(labelcolor());
+		fl_draw(mSortDir > 0 ? "↑" : "↓", ax, y(), room, h(),
+			FL_ALIGN_LEFT | FL_ALIGN_CLIP);
+	}
+	int handle(int aEvent) override
+	{
+		if (aEvent == FL_PUSH && Fl::event_button() == FL_LEFT_MOUSE)
+		{
+			mSort(mOwner, mColumn);
+			return 1;
+		}
+		return Fl_Box::handle(aEvent);
+	}
+private:
+	void *mOwner;
+	SortFn mSort;
+	int mColumn;
+	int mSortDir;
+};
+
+// m037 made the captions plain labels and dropped click sorting; m199 brings
+// it back. The menu column is still the gear between 状态 and 脚本.
+static const char *kColumnCaptions[7] =
+	{"运行", "菜单", "脚本", "CPU", "GPU", "内存", "快捷键"};
+
+// m202: the caption PLUS its always-reserved ↑/↓ slot is a column's FLOOR,
+// measured conservatively at the design fonts (s10 = 16px, s9 = 14px). These
+// are compile-time so the very first layout - before shown() lets fl_width()
+// measure - can never squeeze a caption or its sort marker out of view.
+// MeasureColumnNeeds() later replaces them with exact glyph measurements;
+// a larger caption or a wider sort glyph can only ever raise the floor.
+static constexpr int kHeaderFloor[7] = { 56, 56, 56, 48, 48, 56, 72 };
+
 static void DrawGear(int aCx, int aCy, int aRadius, Fl_Color aColor)
 {
 	fl_color(aColor);
@@ -863,6 +977,20 @@ public:
 	int ScriptCount() const { return (int)mScripts.size(); }
 	std::string ScriptNameAt(int aIndex) const;
 	std::string ScriptBindingAt(int aIndex) const;
+	// m202: the ONE source of the name cell text. A name wider than column 2
+	// gets a "..." suffix (UTF-8 safe). aReservePx keeps room for the " *" of a
+	// dirty editor row, so the label and the highlighted redraw agree.
+	std::string DisplayNameAt(int aIndex, int aReservePx = 0);
+	// m197: the one source of the CPU/GPU/memory cell text (aWhich 0..2).
+	// Empty when the script is not running, so its cells stay blank, never 0.
+	std::string ResourceCellText(int aIndex, int aWhich) const;
+	// m199: the seven captions sort the view. Sorting touches mVisible only;
+	// mScripts stays in name order so sessions/editor/gates keep their ids.
+	void SortByColumn(int aColumn);
+	int CompareRows(int aIndexA, int aIndexB) const;
+	void UpdateSortCaptions();
+	// m199: re-fit the four right-hand columns to the widest visible value.
+	void MeasureColumnNeeds();
 	void ShowShortcutDialog();
 	// m092: Help > About / Check for Updates.
 	void ShowUpdateDialog();
@@ -919,20 +1047,29 @@ public:
 	enum class RowLight { Idle, Running };
 	bool LastRunFailed(int aIndex) const;
 	RowLight LightOf(int aIndex) const;
+	// m198: column order is play | menu | name | CPU | GPU | memory | hotkey.
+	// The two glyph columns stay at the LEFT edge where they always were; the
+	// three metric columns follow the name; the hotkey button closes the row on
+	// the right. One offset helper keeps every rect below honest about where
+	// the metric group starts.
+	int MetricOffset(int aWhich) const
+	{
+		int offset = mColumns[0] + mColumns[1] + mColumns[2]; // play + menu + name
+		for (int i = 0; i < aWhich; ++i)
+			offset += mColumns[3 + i];
+		return offset;
+	}
+	void PlayCellRect(int aX, int aY, int aH, int &aRX, int &aRY, int &aRW, int &aRH) const
+	{
+		aRX = aX;
+		aRW = mColumns[0];
+		aRY = aY + (aH - 24) / 2;
+		aRH = 24;
+	}
 	void MenuCellRect(int aX, int aY, int aH, int &aRX, int &aRY, int &aRW, int &aRH) const
 	{
 		aRX = aX + mColumns[0];
 		aRW = mColumns[1];
-		aRY = aY + (aH - 24) / 2;
-		aRH = 24;
-	}
-	// m031: the hotkey cell is a button too (click = edit the binding). The
-	// row's first cell is the play/pause action glyph; that rect is just
-	// 0..mColumns[0] and needs no helper.
-	void HotkeyCellRect(int aX, int aY, int aH, int &aRX, int &aRY, int &aRW, int &aRH) const
-	{
-		aRX = aX + mColumns[0] + mColumns[1] + mColumns[2];
-		aRW = mColumns[3] - 6;
 		aRY = aY + (aH - 24) / 2;
 		aRH = 24;
 	}
@@ -941,7 +1078,26 @@ public:
 		aRX = aX + mColumns[0] + mColumns[1];
 		aRW = mColumns[2];
 	}
-	int DotColumnWidth() const { return mColumns[0]; }
+	// m031: the hotkey cell is a button too (click = edit the binding). m198:
+	// it moved to the far right and got wider - it is a bordered combo, the
+	// biggest cell in the row, and must hold a full "Ctrl+Alt+F".
+	void HotkeyCellRect(int aX, int aY, int aH, int &aRX, int &aRY, int &aRW, int &aRH) const
+	{
+		aRX = aX + MetricOffset(3); // after the three metric columns
+		aRW = mColumns[6] - 6;
+		aRY = aY + (aH - 24) / 2;
+		aRH = 24;
+	}
+	// m197: the three numbers are right-aligned inside their own rects at the
+	// auxiliary s9 size. They are painted, not written into the browser label.
+	void MetricCellRect(int aWhich, int aX, int aY, int aH,
+		int &aRX, int &aRY, int &aRW, int &aRH) const
+	{
+		aRX = aX + MetricOffset(aWhich);
+		aRW = mColumns[3 + aWhich];
+		aRY = aY;
+		aRH = aH;
+	}
 	bool IsEditingLine(int aLine) const
 	{
 		const int index = IndexOfLine(aLine);
@@ -1116,6 +1272,7 @@ private:
 	bool AddScript(const std::wstring &aPath);
 	int FindScript(const std::wstring &aPath) const;
 	void RefreshList();
+	void SampleResources();
 	void DrainRecords();
 	void TrackSessions();
 
@@ -1146,7 +1303,6 @@ private:
 	void RequestQuit();
 	std::string BindingOf(const ScriptRow &aRow) const;
 	void UpdateTrayTip();
-	void UpdateKernelSummary();
 
 	// --- m024/m026: the list view (filter + the columns it shows) --------------
 	void RebuildView();
@@ -1311,15 +1467,40 @@ private:
 	Fl_Box *mCaptionMenu = nullptr;
 	Fl_Box *mCaptionName = nullptr;
 	Fl_Box *mCaptionHotkey = nullptr;
+	Fl_Box *mCaptionCpu = nullptr;
+	Fl_Box *mCaptionGpu = nullptr;
+	Fl_Box *mCaptionMemory = nullptr;
 
 	std::vector<Fl_Widget *> mListWidgets;
 	// Visible browser line (1-based) -> index in mScripts.
 	std::vector<int> mVisible;
 	std::vector<int> mLastVisible; // to notice a change the label text cannot show
-	// The list is a table: dot | name | hotkey | menu. This one array drives both
-	// the cells (Fl_Browser::column_widths reads it live) and the captions above.
-	// m032: 状态列要放得下“状态”两个字，也给播放/暂停一个不挤的命中区。
-	int mColumns[5] = { 36, 36, 300, 136, 0 };
+	// m198/m200: the list is a table: play | menu | name | CPU | GPU | memory |
+	// hotkey. The two glyph columns stay at the LEFT edge; the three metric
+	// columns follow the name; the hotkey button closes the row at the right
+	// (a bordered combo that must hold "Ctrl+Alt+F"). This array drives both
+	// the cells (Fl_Browser::column_widths reads it live) and the captions
+	// above. m200: LayoutListPane() re-fits ALL SEVEN from their measured
+	// needs - captions included - so even the glyph columns grow if their
+	// header needs more room for the sort marker.
+	int mColumns[8] = { 48, 48, 300, 44, 44, 56, 136, 0 };
+	// m202: the two-step width rule, measured per column and rounded to 8px:
+	//   mHeaderNeed = caption + ↑/↓ slot  -> the column's MINIMUM width
+	//   mColumnNeed = max(header, widest cell in that column) -> preferred width
+	// kHeaderFloor[] is the compile-time header floor used before shown() lets
+	// fl_width() measure real glyphs. Both needs only grow between real
+	// resizes, so a digit appearing in a 2 s reading never nudges the table.
+	// LayoutListPane remembers its geometry here so MeasureColumnNeeds() can
+	// re-fit in place.
+	int mHeaderNeed[7] = { 0, 0, 0, 0, 0, 0, 0 };
+	int mColumnNeed[7] = { 0, 0, 0, 0, 0, 0, 0 };
+	int mPaneX = 0, mPaneY = 0, mPaneW = 0, mPaneH = 0;
+	// m199: click sorting. -1 = the store's natural name order. Numeric columns
+	// sort by a snapshot taken at click time, otherwise every 2 s sample would
+	// reorder rows under the cursor.
+	int mSortColumn = -1;
+	bool mSortDesc = false;
+	std::map<int, double> mSortKeys;
 	Fl_Text_Display *mConsole = nullptr;
 	Fl_Text_Buffer *mBuffer = nullptr;
 	// One console, one test script: set when a run starts; the session JSONLs
@@ -1465,11 +1646,13 @@ private:
 	const std::vector<Session> &CachedSessions() const;
 	void InvalidateSessions() const { mSessionsCacheValid = false; }
 	std::string mLastStatus; // avoid a copy_label/redraw when nothing changed
-	// m107: the host's own footprint, refreshed every 2 s by OnTick and
-	// appended to the status line. The sampler keeps its previous reading, so
-	// each refresh is a delta, not a lifetime total.
+	// m107/m196: the status line shows the host PLUS every running script,
+	// refreshed every 2 s by OnTick. One snapshot feeds both the status line
+	// (total) and the list's CPU/GPU/memory cells (per session id), so the two
+	// can never disagree. The sampler keeps one CPU history per pid.
 	ResourceSampler mResourceSampler;
 	std::string mResourceText;
+	std::map<DWORD, ResourceSample> mSessionResources;
 	ULONGLONG mLastResourceCheck = 0;
 	bool mUpdatingList = false;
 	std::map<DWORD, SessionState> mSeenState;
@@ -1519,7 +1702,6 @@ private:
 	std::vector<Fl_Menu_Item> mContextItems;    // the row menu, rebuilt per popup
 	std::vector<std::string> mContextLabels;    // ... and the text it points at
 	bool mQuitRequested = false;
-	std::string mKernelSummary; // "2.0.25", read once from the loaded kernel
 	// m172: single-flight for 编译为 EXE - the child is short-lived but only
 	// one compile may run at a time (shared .temp capture names, one console
 	// voice). The shared flag outlives the window's queue: a Fl::awake job
@@ -1696,18 +1878,20 @@ public:
 				// bbox() is where item_draw gets its row origin from, so the hit
 				// test and the painted cell cannot drift apart. Only the x range
 				// matters: `line` already came from the click's y.
-				int bx = 0, by = 0, bw = 0, bh = 0;
-				bbox(bx, by, bw, bh);
-				if (Fl::event_x() < bx + mOwner->DotColumnWidth())
-				{
-					// The cell still runs/stops the row when it shows the editing
-					// pen: the pen is a status hint, not a new action.
-					mPlayHit = line;
-					return 1;
-				}
-				int rx = 0, ry = 0, rw = 0, rh = 0;
-				const int rowH = item_height(item_at(1));
-				mOwner->HotkeyCellRect(bx, 0, rowH, rx, ry, rw, rh);
+			int bx = 0, by = 0, bw = 0, bh = 0;
+			bbox(bx, by, bw, bh);
+			int rx = 0, ry = 0, rw = 0, rh = 0;
+			const int rowH = item_height(item_at(1));
+			// m198: the play/pause switch stays in the first column.
+			mOwner->PlayCellRect(bx, 0, rowH, rx, ry, rw, rh);
+			if (Fl::event_x() >= rx && Fl::event_x() < rx + rw)
+			{
+				// The cell still runs/stops the row when it shows the editing
+				// pen: the pen is a status hint, not a new action.
+				mPlayHit = line;
+				return 1;
+			}
+			mOwner->HotkeyCellRect(bx, 0, rowH, rx, ry, rw, rh);
 				if (Fl::event_x() >= rx && Fl::event_x() < rx + rw)
 				{
 					mHotkeyHit = line;
@@ -1812,6 +1996,28 @@ protected:
 
 		Fl_Browser::item_draw(item, X, Y, W, H);
 
+		// m202: ONE direction for the whole row - left. The label leaves these
+		// fields empty, so there is nothing to cover; we paint the numbers
+		// ourselves at the auxiliary s9 size with the same 4px left inset the
+		// captions use. (m197/m199 right-aligned them; that made the header
+		// left and the values right, which is what m202 removes.)
+		{
+			const int index = mOwner->IndexOfLine(line);
+			for (int which = 0; which < 3; ++which)
+			{
+				int mx = 0, my = 0, mw = 0, mh = 0;
+				mOwner->MetricCellRect(which, X, Y, H, mx, my, mw, mh);
+				const std::string text = mOwner->ResourceCellText(index, which);
+				if (text.empty())
+					continue; // not running, or no GPU counter: blank cell
+				fl_color(DeckColors().text1);
+				fl_font(textfont(), SubTextSize());
+				fl_draw(text.c_str(), mx + DeckHeaderBox::kInset, my,
+					mw - DeckHeaderBox::kInset - 2, mh,
+					FL_ALIGN_LEFT | FL_ALIGN_CLIP);
+			}
+		}
+
 		if (mRecordLine == line)
 		{
 			// Recording: cover the old binding, show the pending combo (or the
@@ -1824,7 +2030,7 @@ protected:
 			fl_font(FL_HELVETICA, 16);
 			const std::string text = mRecordText.empty() ? "请按下按键组合..." : mRecordText;
 			fl_font(FL_HELVETICA, HotkeyTextSize(text, hw - 12));
-			fl_draw(text.c_str(), hx + 8, hy, hw - 12, hh,
+			fl_draw(text.c_str(), hx + 4, hy, hw - 8, hh,
 				FL_ALIGN_LEFT | FL_ALIGN_CLIP);
 		}
 		else
@@ -1840,7 +2046,7 @@ protected:
 			fl_color(DeckColors().text1);
 			const std::string display = HotkeyDisplayText(binding);
 			fl_font(FL_HELVETICA, HotkeyTextSize(display, hw - 12));
-			fl_draw(display.c_str(), hx + 8, hy, hw - 12, hh,
+			fl_draw(display.c_str(), hx + 4, hy, hw - 8, hh,
 				FL_ALIGN_LEFT | FL_ALIGN_CLIP);
 		}
 
@@ -1848,7 +2054,9 @@ protected:
 		// live (click opens the script's tray menu); idle = grey and inert.
 		{
 			const bool menuOn = light == DeckWindow::RowLight::Running;
-			DrawGear(rx + rw / 2, ry + rh / 2, 6,
+			// m202: the gear starts at the same 4px inset as every other
+			// left-aligned cell in the row (centre = inset + radius).
+			DrawGear(rx + DeckHeaderBox::kInset + 6, ry + rh / 2, 6,
 				menuOn ? DeckColors().text1 : DeckColors().text2);
 		}
 
@@ -1858,7 +2066,9 @@ protected:
 		{
 			int nx = 0, nw = 0;
 			mOwner->NameCellRect(X, nx, nw);
-			const std::string name = DisplayNameOf(mOwner->ScriptNameAt(mOwner->IndexOfLine(line)));
+			// m202: the ellipsised name, not the full one - otherwise the
+			// highlight would paint a different string than the row label.
+			const std::string name = mOwner->DisplayNameAt(mOwner->IndexOfLine(line));
 			fl_font(textfont(), textsize());
 			const int tw = (int)fl_width(name.c_str());
 			const int bw = tw + 6 < nw - 4 ? tw + 6 : nw - 4;
@@ -1876,10 +2086,12 @@ protected:
 		{
 			int nx = 0, nw = 0;
 			mOwner->NameCellRect(X, nx, nw);
-			const std::string name = DisplayNameOf(mOwner->ScriptNameAt(mOwner->IndexOfLine(line)));
 			fl_font(textfont(), textsize());
 			const int avail = nw - 6;
 			const int starW = editingDirty ? (int)fl_width(" *") : 0;
+			// m202: reserve the " *" before ellipsising, so a long dirty name
+			// still ends in "..." followed by a visible star.
+			const std::string name = mOwner->DisplayNameAt(mOwner->IndexOfLine(line), starW);
 			const int nameW = (int)fl_width(name.c_str());
 			const int nameRoom = avail - starW > 0 ? avail - starW : 0;
 			const int shownNameW = nameW < nameRoom ? nameW : nameRoom;
@@ -1909,9 +2121,13 @@ protected:
 		// First cell = the action, and only the action: green play when clicking
 		// will start it, red pause while it runs. "This is the file being edited"
 		// is the red name plus " *" above (m043); the pen used to overwrite this
-		// cell and hide the state, which is what m069 filed.
+		// cell and hide the state, which is what m069 filed. m198 keeps it at
+		// the left edge; only the hotkey button moved to the right.
 		const int d = 10;
-		const int cx = X + (mOwner->DotColumnWidth() - d) / 2;
+		int playX = 0, playY = 0, playW = 0, playH = 0;
+		mOwner->PlayCellRect(X, Y, H, playX, playY, playW, playH);
+		// m202: same 4px inset as the caption and every other left-aligned cell.
+		const int cx = playX + DeckHeaderBox::kInset;
 		const int cy = Y + (H - d) / 2;
 		if (light == DeckWindow::RowLight::Running)
 		{
@@ -3375,24 +3591,43 @@ DeckWindow::DeckWindow(Engine &aEngine)
 	mHeaderBar = new Fl_Box(0, 0, 0, 0);
 	mHeaderBar->box(FL_FLAT_BOX);
 	mHeaderBar->color(DeckColors().background3);
-	mCaptionStatus = new Fl_Box(0, 0, 0, 0, "运行");
-	mCaptionMenu = new Fl_Box(0, 0, 0, 0, "菜单");
-	mCaptionName = new Fl_Box(0, 0, 0, 0, "脚本");
-	mCaptionHotkey = new Fl_Box(0, 0, 0, 0, "快捷键");
-	Fl_Box *captions[] = {mCaptionStatus, mCaptionMenu, mCaptionName, mCaptionHotkey};
-	for (Fl_Box *caption : captions)
+	// m200: ONE alignment rule for the header row - every caption is LEFT
+	// aligned. The sort triangle is drawn just after the label in a permanently
+	// reserved slot (DeckHeaderBox), so turning sorting on or flipping its
+	// direction never moves the words. Cells below keep their own alignment:
+	// identity columns left, numbers and the hotkey button right.
+	auto sortThunk = +[](void *aSelf, int aColumn)
 	{
+		static_cast<DeckWindow *>(aSelf)->SortByColumn(aColumn);
+	};
+	Fl_Box *caps[7];
+	for (int i = 0; i < 7; ++i)
+		caps[i] = new DeckHeaderBox(0, 0, 0, 0, kColumnCaptions[i], this, sortThunk, i);
+	mCaptionStatus = caps[0];
+	mCaptionMenu = caps[1];
+	mCaptionName = caps[2];
+	mCaptionCpu = caps[3];
+	mCaptionGpu = caps[4];
+	mCaptionMemory = caps[5];
+	mCaptionHotkey = caps[6];
+	for (int i = 0; i < 7; ++i)
+	{
+		Fl_Box *caption = caps[i];
 		caption->box(FL_FLAT_BOX);
 		caption->color(DeckColors().background3);
 		caption->labelcolor(DeckColors().text1);
+		// m202: all seven left, and so is every cell below them. The label is
+		// static, so the ↑/↓ marker in its reserved slot cannot displace it.
 		caption->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
-		caption->labelsize(TextSize());
+		// The three numeric headers share the cells' auxiliary s9 size.
+		caption->labelsize((i >= 3 && i <= 5) ? SubTextSize() : TextSize());
 	}
 	mFilterRule = new Fl_Box(0, 0, 0, 0);
 	mFilterRule->box(FL_FLAT_BOX);
 	mFilterRule->color(DeckColors().background2);
 	mListWidgets = {mListFrame, mHeaderBar, mFilterRule, mList, mFilter,
-		mCaptionStatus, mCaptionName, mCaptionHotkey, mCaptionMenu, mListBorder};
+		mCaptionStatus, mCaptionName, mCaptionHotkey, mCaptionMenu,
+		mCaptionCpu, mCaptionGpu, mCaptionMemory, mListBorder};
 
 	// m031: the editor bar keeps only the encoding choice and the file name;
 	// save / save-as / save-and-run / reload now live in 文件.
@@ -3762,8 +3997,8 @@ DeckWindow::DeckWindow(Engine &aEngine)
 
 	// m023: the tray and the global hotkeys are Win32-side and best-effort. If the
 	// tray cannot be installed the close box goes back to meaning "exit" - a window
-	// nobody can reach again is worse than no tray.
-	UpdateKernelSummary();
+	// nobody can reach again is worse than no tray. m202: no runtime kernel-version
+	// probe any more - core/Version.h owns that single value.
 	{
 		std::string hookError;
 		if (!mHooks.Create(GetModuleHandleW(nullptr), hookError))
@@ -3984,6 +4219,13 @@ void DeckWindow::resize(int x, int y, int w, int h)
 {
 	Fl_Double_Window::resize(x, y, w, h);
 	Layout();
+	// m202: the name column takes the slack, so a resize can change how much
+	// of a long script name fits. Rebuild the labels - the "..." must follow
+	// the new width immediately instead of waiting for the next 2 s tick.
+	// RefreshList() compares mLastLabels, so unchanged names cost only a
+	// redraw and never lose the focus line, gear hover or scroll position.
+	if (shown() && mList)
+		RefreshList();
 	if (mFrameInstalled)
 		SyncDeckFrame(this);
 }
@@ -4075,6 +4317,17 @@ void DeckWindow::Layout()
 // uniform, so a gate can still address a row by (pane top + header + n * row).
 void DeckWindow::LayoutListPane(int x, int y, int w, int h)
 {
+	// m199: remember the pane geometry so MeasureColumnNeeds() can re-fit the
+	// columns when a wider reading appears. A REAL resize (pane width changed)
+	// re-measures from scratch; the re-fit calls below pass the same geometry,
+	// so they do not wipe the needs and cannot loop.
+	if (w != mPaneW || h != mPaneH)
+		for (int i = 0; i < 7; ++i)
+		{
+			mHeaderNeed[i] = 0;
+			mColumnNeed[i] = 0;
+		}
+	mPaneX = x; mPaneY = y; mPaneW = w; mPaneH = h;
 	const int rowH = kRowHeight;
 	const int headerH = kRowHeight;
 	// m033: header first, browser, search at the bottom of the pane. The search
@@ -4088,22 +4341,98 @@ void DeckWindow::LayoutListPane(int x, int y, int w, int h)
 	// content. Keep the table columns out of that strip even when the bar is
 	// currently hidden, otherwise long lists cover the hotkey/menu cells.
 	const int scrollbarW = 10;
-	const int columnW = contentW - scrollbarW;
-	const int fixed = mColumns[0] + mColumns[1] + mColumns[3];
-	mColumns[2] = columnW - fixed;
-	if (mColumns[2] < 60)
-		mColumns[2] = 60;
+	// m197/m198: 4px of breathing room on the right, so the far-right hotkey
+	// button never sits flush against the scrollbar.
+	const int columnW = contentW - scrollbarW - 4;
+	// All seven columns must fit inside columnW - the vertical scrollbar owns
+	// the last 10px and FLTK clips anything past it. m200: the two glyph
+	// columns are no longer hard-coded 36px either - their captions
+	// (运行/菜单) plus the reserved sort slot are measured like every other
+	// column, so a sort arrow can never be clipped there. NAME is the only
+	// elastic one: a long script name must not push the numbers out of view.
+	// m198: a narrow pane costs the NAME first, and the hotkey button (a full
+	// "Ctrl+Alt+F" inside a bordered combo) is the last column we ever shrink.
+	const int baseStatic[7] = { 56, 56, 300, 48, 48, 56, 136 };
+	const int minStatic[7]  = { 56, 56, 120, 48, 48, 56, 112 };
+	int base[7], minimum[7];
+	for (int i = 0; i < 7; ++i)
+	{
+		// m202 step 1: the caption + ↑/↓ slot is the hard MINIMUM. It comes
+		// from kHeaderFloor[] before the window is shown, and from the exact
+		// measured mHeaderNeed once fl_width() is available.
+		minimum[i] = minStatic[i];
+		if (minimum[i] < kHeaderFloor[i])
+			minimum[i] = kHeaderFloor[i];
+		if (minimum[i] < mHeaderNeed[i])
+			minimum[i] = mHeaderNeed[i];
+		// m202 step 2: the preferred width compares that floor with the
+		// widest piece of information in the column.
+		base[i] = baseStatic[i] > minimum[i] ? baseStatic[i] : minimum[i];
+		if (base[i] < mColumnNeed[i])
+			base[i] = mColumnNeed[i];
+	}
+	mColumns[0] = base[0];
+	mColumns[1] = base[1];
+	const int rest = columnW - mColumns[0] - mColumns[1];
+	const int baseSum = base[2] + base[3] + base[4] + base[5] + base[6];
+	int widths[5] = { base[2], base[3], base[4], base[5], base[6] };
+	if (rest >= baseSum)
+	{
+		widths[0] = rest - (baseSum - base[2]); // name takes all the slack
+	}
+	else
+	{
+		int shrink = baseSum - rest;
+		// Plain comparisons, not std::min: windows.h defines min/max macros.
+		// Name first: it has no intrinsic width and can give up the most.
+		const int nameRoom = widths[0] - minimum[2];
+		const int nameTake = shrink < nameRoom ? shrink : nameRoom;
+		widths[0] -= nameTake;
+		shrink -= nameTake;
+		for (int i = 1; i < 4 && shrink > 0; ++i) // the three metrics
+		{
+			const int room = widths[i] - minimum[2 + i];
+			const int take = shrink < room ? shrink : room;
+			widths[i] -= take;
+			shrink -= take;
+		}
+		if (shrink > 0) // only then touch the hotkey button
+		{
+			const int room = widths[4] - minimum[6];
+			const int take = shrink < room ? shrink : room;
+			widths[4] -= take;
+		}
+	}
+	for (int i = 0; i < 5; ++i)
+		mColumns[2 + i] = widths[i];
 
-	const int textX = x + 3;
+	// m199: captions must share the browser's item origin. mList sits at x + 1
+	// with FL_FLAT_BOX, so Fl_Browser_::bbox().x() == x + 1 - the very same X
+	// item_draw() and the hit test use. The old x + 3 put every caption 2px to
+	// the right of the cells it labels.
+	const int textX = x + 1;
 	const int headerY = y + 2;
 	const int frameH = (y + h) - headerY;
 	mListFrame->resize(x, headerY, w, frameH > 0 ? frameH : 0);
 	mListBorder->resize(x, headerY, w, frameH > 0 ? frameH : 0);
 	mHeaderBar->resize(x + 1, headerY + 1, contentW, headerH);
-	mCaptionStatus->resize(textX, headerY + 1, mColumns[0], headerH);
-	mCaptionMenu->resize(textX + mColumns[0], headerY + 1, mColumns[1], headerH);
-	mCaptionName->resize(textX + mColumns[0] + mColumns[1], headerY + 1, mColumns[2] - 4, headerH);
-	mCaptionHotkey->resize(textX + mColumns[0] + mColumns[1] + mColumns[2], headerY + 1, mColumns[3] - 4, headerH);
+	const int capPlayX = textX;
+	const int capMenuX = capPlayX + mColumns[0];
+	const int capNameX = capMenuX + mColumns[1];
+	const int capCpuX = capNameX + mColumns[2];
+	const int capGpuX = capCpuX + mColumns[3];
+	const int capMemoryX = capGpuX + mColumns[4];
+	const int capHotkeyX = capMemoryX + mColumns[5];
+	// m202: every caption owns its full column rect and left-aligns inside it.
+	// kHeaderFloor[] plus the measured mHeaderNeed reserve kInset + label +
+	// the ↑/↓ slot, so the marker always fits. One rule, no -4/-10 fudges.
+	mCaptionStatus->resize(capPlayX, headerY + 1, mColumns[0], headerH);
+	mCaptionMenu->resize(capMenuX, headerY + 1, mColumns[1], headerH);
+	mCaptionName->resize(capNameX, headerY + 1, mColumns[2], headerH);
+	mCaptionCpu->resize(capCpuX, headerY + 1, mColumns[3], headerH);
+	mCaptionGpu->resize(capGpuX, headerY + 1, mColumns[4], headerH);
+	mCaptionMemory->resize(capMemoryX, headerY + 1, mColumns[5], headerH);
+	mCaptionHotkey->resize(capHotkeyX, headerY + 1, mColumns[6], headerH);
 
 	const int listY = headerY + 1 + headerH;
 	const int browserY = listY + topGap;
@@ -4724,8 +5053,98 @@ bool DeckWindow::IsRunning(const ScriptRow &aRow) const
 }
 
 // The view is the store with the rows that fail the filter taken out. The store
-// is kept in name order (AddScript sorts it), so there is one order and no mode
-// to remember.
+// is kept in name order (AddScript sorts it). m199 adds one VIEW order on top:
+// clicking a caption sorts mVisible, never mScripts, so sessions, the editor
+// and the gate hooks keep their indices no matter how the rows are arranged.
+
+// Numeric columns sort by the snapshot taken at click time (mSortKeys), NOT the
+// live reading - a live key would reshuffle the rows on every 2 s sample.
+int DeckWindow::CompareRows(int a, int b) const
+{
+	const ScriptRow &ra = mScripts[(size_t)a];
+	const ScriptRow &rb = mScripts[(size_t)b];
+	int cmp = 0;
+	switch (mSortColumn)
+	{
+	case 0: case 1: // 运行 / 菜单: running first (both glyph columns mean state)
+	{
+		const bool runA = mSessionResources.find(ra.session) != mSessionResources.end();
+		const bool runB = mSessionResources.find(rb.session) != mSessionResources.end();
+		cmp = (runA == runB) ? 0 : (runA ? -1 : 1);
+		break;
+	}
+	case 3: case 4: case 5: // CPU / GPU / 内存
+	{
+		const auto ia = mSortKeys.find(a);
+		const auto ib = mSortKeys.find(b);
+		const double va = ia == mSortKeys.end() ? -1.0 : ia->second;
+		const double vb = ib == mSortKeys.end() ? -1.0 : ib->second;
+		cmp = va < vb ? -1 : (va > vb ? 1 : 0);
+		break;
+	}
+	case 6: // 快捷键
+		cmp = _stricmp(BindingOf(ra).c_str(), BindingOf(rb).c_str());
+		break;
+	default: // 2 = 脚本
+		cmp = _stricmp(ra.name.c_str(), rb.name.c_str());
+		break;
+	}
+	if (cmp != 0)
+		return cmp;
+	return _stricmp(ra.name.c_str(), rb.name.c_str()); // stable tie-break
+}
+
+void DeckWindow::SortByColumn(int aColumn)
+{
+	if (aColumn < 0 || aColumn > 6)
+		return;
+	if (mSortColumn == aColumn)
+		mSortDesc = !mSortDesc;
+	else
+	{
+		mSortColumn = aColumn;
+		mSortDesc = false;
+	}
+	mSortKeys.clear();
+	if (mSortColumn >= 3 && mSortColumn <= 5)
+	{
+		const int which = mSortColumn - 3;
+		for (size_t i = 0; i < mScripts.size(); ++i)
+		{
+			const auto it = mSessionResources.find(mScripts[i].session);
+			if (it == mSessionResources.end())
+				continue;
+			const ResourceSample &s = it->second;
+			double value = 0.0;
+			switch (which)
+			{
+			case 0: value = s.cpuPercent; break;
+			case 1: value = s.gpuPercent; break;
+			default: value = (double)(s.privateWorkingSetBytes
+				? s.privateWorkingSetBytes : s.workingSetBytes);
+			}
+			mSortKeys[(int)i] = value;
+		}
+	}
+	UpdateSortCaptions();
+	mLastLabels.clear(); // the view order changed: force a full rebuild
+	RefreshList();
+}
+
+void DeckWindow::UpdateSortCaptions()
+{
+	// m200: labels are never touched. Only the marker state changes, and the
+	// marker is drawn in a slot the column width already accounts for - so
+	// toggling sort cannot move text, clip the arrow or resize the column.
+	Fl_Box *caps[7] = {mCaptionStatus, mCaptionMenu, mCaptionName,
+		mCaptionCpu, mCaptionGpu, mCaptionMemory, mCaptionHotkey};
+	for (int i = 0; i < 7; ++i)
+	{
+		auto *cap = static_cast<DeckHeaderBox *>(caps[i]);
+		if (cap)
+			cap->SetSort(i == mSortColumn ? (mSortDesc ? -1 : 1) : 0);
+	}
+}
 
 void DeckWindow::RebuildView()
 {
@@ -4735,6 +5154,17 @@ void DeckWindow::RebuildView()
 	{
 		if (MatchesFilter(i))
 			indices.push_back((int)i);
+	}
+
+	// stable_sort keeps the natural name order for ties.
+	if (mSortColumn >= 0)
+	{
+		std::stable_sort(indices.begin(), indices.end(),
+			[this](int a, int b)
+			{
+				const int cmp = CompareRows(a, b);
+				return mSortDesc ? cmp > 0 : cmp < 0;
+			});
 	}
 
 	mVisible = std::move(indices);
@@ -4801,16 +5231,13 @@ void DeckWindow::UpdateStatus()
 			++running;
 	}
 
-	// m192 P3: one official AutoHotkey kernel EXE, spawned once per session -
-	// no fork, no in-process DLL. mReady means Engine::Load found a usable
-	// kernel path, so the wording is 就绪/不可用 rather than 载入/未载入.
-	// The number itself still comes from the PE version resource
-	// (KernelVersionOf), never from a constant here.
-	std::string engine = "AutoHotkey";
-	if (mKernelSummary.empty())
-		engine += mReady ? " 就绪" : " 不可用";
-	else
-		engine += " " + mKernelSummary + (mReady ? std::string() : std::string(" (不可用)"));
+	// m202: ONE parameter names the kernel everywhere (status bar, About box,
+	// MCP help text). No "AutoHotkey" prefix - the number alone is what the
+	// user asked for. ctest kernel_version asserts the parameter still matches
+	// the shipped PE, so this string can never quietly drift from the binary.
+	std::string engine = ahkdeck::KernelVersionString();
+	if (!mReady)
+		engine += " (不可用)";
 	std::string text = "引擎: " + engine;
 	text += "   |   脚本: " + std::to_string((int)mScripts.size());
 	if (mVisible.size() != mScripts.size())
@@ -4827,9 +5254,35 @@ void DeckWindow::UpdateStatus()
 	mStatus->copy_label(text.c_str());
 }
 
+// m196: one snapshot per 2 s tick. TrackSessions() has already refreshed
+// CachedSessions(), so every Running session's pid is current. The sampler
+// returns one reading per pid plus the host+children total; the list cells and
+// the status bar come from this SAME snapshot, which is what makes the status
+// line literally "the host plus the numbers in these rows".
+void DeckWindow::SampleResources()
+{
+	std::vector<uint32_t> pids;
+	std::vector<DWORD> ids;
+	for (const Session &session : CachedSessions())
+	{
+		// Session::threadId is a legacy name: m192 stores the child pid there.
+		if (session.state != SessionState::Running || !session.threadId)
+			continue;
+		pids.push_back((uint32_t)session.threadId);
+		ids.push_back(session.id);
+	}
+	const ResourceSnapshot snapshot = mResourceSampler.SampleWithChildren(pids);
+	mSessionResources.clear();
+	for (size_t i = 0; i < snapshot.children.size() && i < ids.size(); ++i)
+		if (snapshot.children[i].valid)
+			mSessionResources[ids[i]] = snapshot.children[i].sample;
+	mResourceText = FormatResources(snapshot.total);
+}
+
 void DeckWindow::RefreshList()
 {
 	RebuildView();
+	MeasureColumnNeeds();
 
 	std::vector<std::string> labels;
 	labels.reserve(mVisible.size());
@@ -4837,14 +5290,17 @@ void DeckWindow::RefreshList()
 	for (const int index : mVisible)
 	{
 		const ScriptRow &row = mScripts[(size_t)index];
-		// Four columns, separated by the browser's column character: the state
-		// Status and gear are drawn, not written: an empty first field for the
-		// traffic light, an empty second for the gear button.
-		std::string label = "\t\t";
-		label += DisplayNameOf(row.name);
-		label += "\t";
-		const std::string binding = BindingOf(row);
-		label += HotkeyDisplayText(binding);
+		// m198: seven columns - play | menu | name | CPU | GPU | memory | hotkey.
+		// Only the name and the hotkey carry browser text. The first two fields
+		// are drawn glyphs, the three numbers are painted right-aligned by
+		// DeckBrowser::item_draw (ResourceCellText is their one source), so five
+		// fields are empty. A changed reading no longer changes any label -
+		// SampleResources() just redraws the browser.
+		std::string label = "\t\t"; // play, menu
+		// m202: the same ellipsised name the highlighted/edited redraw uses.
+		label += DisplayNameAt(index);
+		label += "\t\t\t\t"; // CPU, GPU, memory, then into hotkey
+		label += HotkeyDisplayText(BindingOf(row));
 		labels.push_back(std::move(label));
 	}
 
@@ -4854,6 +5310,23 @@ void DeckWindow::RefreshList()
 	if (labels == mLastLabels && mVisible == mLastVisible)
 	{
 		if (mList) mList->redraw();
+		UpdateStatus();
+		SyncEditorRunButton();
+		return;
+	}
+
+	// m196: the resource cells move every 2 s. Rebuilding the whole browser on
+	// that beat would drop the gear hover, the focus line and the scroll
+	// position, so when only the label text changed, replace it in place.
+	if (mVisible == mLastVisible && mLastLabels.size() == labels.size() &&
+		mList->size() == (int)labels.size())
+	{
+		mUpdatingList = true;
+		for (size_t i = 0; i < labels.size(); ++i)
+			mList->text((int)i + 1, labels[i].c_str());
+		mUpdatingList = false;
+		mLastLabels = std::move(labels);
+		mList->redraw();
 		UpdateStatus();
 		SyncEditorRunButton();
 		return;
@@ -6835,11 +7308,130 @@ std::string DeckWindow::ScriptNameAt(int aIndex) const
 	return mScripts[(size_t)aIndex].name;
 }
 
+std::string DeckWindow::DisplayNameAt(int aIndex, int aReservePx)
+{
+	if (aIndex < 0 || (size_t)aIndex >= mScripts.size())
+		return std::string();
+	const std::string name = DisplayNameOf(mScripts[(size_t)aIndex].name);
+	// fl_width() needs a live font/DC; before the window is shown the design
+	// width is all we have. The 2 s beat re-measures as soon as it exists.
+	if (!shown())
+		return name;
+	// Column 2 is the name. 8px = the browser's own 3px inset + a right gap;
+	// aReservePx is the " *" that the editing row paints after the name.
+	const int avail = mColumns[2] - 8 - aReservePx;
+	return EllipsizeName(name, avail);
+}
+
 std::string DeckWindow::ScriptBindingAt(int aIndex) const
 {
 	if (aIndex < 0 || (size_t)aIndex >= mScripts.size())
 		return std::string();
 	return BindingOf(mScripts[(size_t)aIndex]);
+}
+
+// m197: the list's three metric cells and nothing else read from here. Keeping
+// the text in one place means the painted number and the status bar's total
+// always come from the same ResourceSnapshot - they cannot disagree.
+std::string DeckWindow::ResourceCellText(int aIndex, int aWhich) const
+{
+	if (aIndex < 0 || (size_t)aIndex >= mScripts.size() || aWhich < 0 || aWhich > 2)
+		return std::string();
+	const auto it = mSessionResources.find(mScripts[(size_t)aIndex].session);
+	if (it == mSessionResources.end())
+		return std::string(); // not running: a blank cell, never a misleading 0
+	const ResourceSample &sample = it->second;
+	switch (aWhich)
+	{
+	case 0:
+		return std::to_string((int)std::lround(sample.cpuPercent)) + "%";
+	case 1:
+		return sample.gpuPercent >= 0.0
+			? std::to_string((int)std::lround(sample.gpuPercent)) + "%"
+			: std::string("-"); // this machine exposes no GPU counter
+	default:
+		return FormatBytes(sample.privateWorkingSetBytes
+			? sample.privateWorkingSetBytes : sample.workingSetBytes);
+	}
+}
+
+// m199: the four right-hand columns follow their content. Measure the widest
+// visible value (header included) at the size it is actually drawn with, add
+// padding, round up to an 8px grid, and only grow until a REAL resize. That
+// last rule is what stops a 2 s reading of 9% -> 10% from jiggling the table.
+void DeckWindow::MeasureColumnNeeds()
+{
+	// fl_width() needs a live font/DC. Before the window is shown the captions
+	// keep their design widths; the 2 s beat re-measures as soon as it exists.
+	if (!shown())
+		return;
+	// m202 step 1: every column's FLOOR is its own caption text plus the
+	// ↑/↓ slot that is always reserved (the label never changes, so this
+	// number is stable no matter which way the list is sorted). The slot is
+	// measured with the caption's own font, so a wider glyph or a larger
+	// header font widens the column automatically.
+	int header[7] = { 0, 0, 0, 0, 0, 0, 0 };
+	int need[7] = { 0, 0, 0, 0, 0, 0, 0 };
+	Fl_Box *caps[7] = {mCaptionStatus, mCaptionMenu, mCaptionName,
+		mCaptionCpu, mCaptionGpu, mCaptionMemory, mCaptionHotkey};
+	for (int i = 0; i < 7; ++i)
+	{
+		if (!caps[i])
+			continue;
+		const int font = caps[i]->labelfont();
+		const int size = caps[i]->labelsize();
+		fl_font(font, size);
+		const char *text = caps[i]->label() ? caps[i]->label() : "";
+		header[i] = DeckHeaderBox::kInset + (int)std::ceil(fl_width(text))
+			+ DeckHeaderBox::SortSlot(font, size);
+		need[i] = header[i]; // start the preferred width at the floor
+	}
+	// m202 step 2: compare with the widest cell in each column - three metric
+	// readings (s9) and the hotkey binding (s10). Glyph columns carry icons,
+	// so their floor is also their preferred width.
+	for (const int index : mVisible)
+	{
+		if (index < 0 || (size_t)index >= mScripts.size())
+			continue;
+		for (int which = 0; which < 3; ++which)
+		{
+			const std::string text = ResourceCellText(index, which);
+			if (text.empty())
+				continue;
+			fl_font(FL_HELVETICA, SubTextSize());
+			const int px = DeckHeaderBox::kInset
+				+ (int)std::ceil(fl_width(text.c_str())) + 4;
+			if (px > need[3 + which])
+				need[3 + which] = px;
+		}
+		fl_font(FL_HELVETICA, TextSize());
+		const std::string hk = HotkeyDisplayText(BindingOf(mScripts[(size_t)index]));
+		const int px = DeckHeaderBox::kInset
+			+ (int)std::ceil(fl_width(hk.c_str())) + 4;
+		if (px > need[6])
+			need[6] = px;
+	}
+	// Glyph columns need no extra pad; the hotkey cell is a bordered combo
+	// with a 6px inset on each side, hence the larger one.
+	const int padding[7] = { 4, 4, 4, 4, 4, 4, 20 };
+	bool grew = false;
+	for (int i = 0; i < 7; ++i)
+	{
+		const int headerWant = ((header[i] + padding[i] + 7) / 8) * 8;
+		const int want = ((need[i] + padding[i] + 7) / 8) * 8;
+		if (headerWant > mHeaderNeed[i])
+		{
+			mHeaderNeed[i] = headerWant;
+			grew = true;
+		}
+		if (want > mColumnNeed[i])
+		{
+			mColumnNeed[i] = want;
+			grew = true;
+		}
+	}
+	if (grew && mPaneW > 0)
+		LayoutListPane(mPaneX, mPaneY, mPaneW, mPaneH);
 }
 
 void DeckWindow::ShowShortcutDialog()
@@ -7321,19 +7913,6 @@ void DeckWindow::UpdateTrayTip()
 	mLastTrayTip = tip;
 	mHooks.UpdateTrayTip(tip);
 }
-
-void DeckWindow::UpdateKernelSummary()
-{
-	// m192 P3: the engine is now out-of-process and the in-process DLL is gone.
-	// The status bar must read the very EXE Engine::Load resolves (optionally
-	// overridden by AHKDECK_KERNEL), not the retired AutoHotkey64.dll.
-	std::wstring kernel = ExeDirectory() + L"\\AutoHotkey64.exe";
-	wchar_t override[MAX_PATH] = {0};
-	if (GetEnvironmentVariableW(L"AHKDECK_KERNEL", override, MAX_PATH) > 0)
-		kernel = override;
-	mKernelSummary = KernelVersionOf(kernel);
-}
-
 
 void DeckWindow::OnSelect(Fl_Widget *, void *aSelf)
 {
@@ -7959,14 +8538,16 @@ void DeckWindow::OnTick(void *aSelf)
 		self->mLastTrayCheck = now;
 		self->mHooks.EnsureTrayIcon();
 	}
-	// m107: the resource numbers move slowly, and the sampler's GPU query wants
-	// a second collection between readings - so this runs on the same 2 s beat
-	// rather than on every 100 ms tick.
+	// m107/m196/m197: one 2 s beat for the whole snapshot - the GPU query wants
+	// a second collection between readings, and the per-pid CPU histories are
+	// deltas over exactly this interval. The metric cells are painted from
+	// mSessionResources, so a changed reading only needs RefreshList() to
+	// redraw the browser and update the status line; no row is rebuilt.
 	if (now - self->mLastResourceCheck >= 2000)
 	{
 		self->mLastResourceCheck = now;
-		self->mResourceText = FormatResources(self->mResourceSampler.Sample());
-		self->UpdateStatus();
+		self->SampleResources();
+		self->RefreshList();
 	}
 	if (self->mEditDirty && !self->mToolEditPending && !self->mEditPath.empty() &&
 		now - self->mLastAutoSave >= (ULONGLONG)self->mAutoSaveMs)
@@ -8083,6 +8664,10 @@ void DeckWindow::InstallFrame()
 	// The outer rect just grew by the 1px non-client strip; lay the client out
 	// against the real client size Win32 now reports.
 	Layout();
+	// m202: now that shown() is true, RefreshList() -> MeasureColumnNeeds() can
+	// measure real glyphs, replace the compile-time header floors and re-
+	// ellipsise names before the first frame (not 2 s later on the tick).
+	RefreshList();
 }
 
 // View > 圆角窗口 / 窗口阴影. Both switches are live: the region is re-applied

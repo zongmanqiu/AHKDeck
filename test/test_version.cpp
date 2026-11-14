@@ -44,6 +44,14 @@ int main()
     Expect(std::strcmp(ahkdeck::VersionString(), expected.c_str()) == 0,
            "VersionString() == major.minor.patch", file, __LINE__);
 
+    // m202: the kernel version has its own single source. A hand-typed
+    // "2.0.31" in the status bar or About box would drift on the next kernel
+    // upgrade, so callers use KernelVersionString() and this pins its shape.
+    Expect(std::strcmp(ahkdeck::KernelVersionString(), ahkdeck::kKernelVersion) == 0,
+           "KernelVersionString() returns kKernelVersion", file, __LINE__);
+    Expect(std::strlen(ahkdeck::KernelVersionString()) >= 5,
+           "kernel version is not empty", file, __LINE__);
+
     if (g_failures == 0) {
         std::printf("test_version: all checks passed (%s)\n", ahkdeck::VersionString());
         return 0;

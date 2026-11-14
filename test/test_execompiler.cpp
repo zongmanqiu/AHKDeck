@@ -35,7 +35,11 @@ void Check(bool aCondition, const char *aWhat)
 
 void Skip(const char *aWhat)
 {
-	std::printf("skip %s\n", aWhat);
+	// m195: a uniform marker. 5_test.bat captures `ctest -V` and the shipping
+	// gate counts these lines - a branch that never ran must never hide behind
+	// a green ctest summary. Keep the word "skip" out of ordinary diagnostics
+	// so only real skipped branches are counted.
+	std::printf("AHKDECK_SKIP: %s\n", aWhat);
 }
 
 bool HasFile(const std::wstring &aPath)

@@ -70,9 +70,16 @@ full.bat                 :: 一键全链路
 ## 测试范围
 
 [5_test.bat](5_test.bat) 先检查 AHK_H 专有名称（历史静态名单：官方内核没有这些内置名，防止脚本再用到）、控制台归属、下拉项分隔及窗口装饰约束，
-再运行 `ctest --output-on-failure -LE gui`。设置 `AHKDECK_GATE_UI=1` 后追加 GUI 标签测试。
+再运行 `ctest -V --output-on-failure -LE gui`，输出落到 `.temp/cmake_build/gate_ctest_verbose.log`。
+**m195 的跳过审计**：`shipping_gate/gate_no_skip.ps1` 先跑 `-SelfTest`（坏样本必须判红、好样本必须判绿、空日志必须判红），
+再扫描真实日志里的 `AHKDECK_SKIP:` 标记——条件分支被跳过即判失败，绿色 ctest 摘要不再等于通过；
+日志里没有 ctest 摘要行也判失败，防止重定向坏掉后假绿。设置 `AHKDECK_GATE_UI=1` 后追加 GUI 标签测试。
+**m202 的版本一致性**：`kernel_version` 断言 `core/Version.h::kKernelVersion` 与 `ahkversion.h` 的
+`RAW_AHK_VERSION`／`AHK_VERSION_N`、`deps.txt` 的 tag、出货 `AutoHotkey64.exe` 的 ProductVersion 四处一致；
+`kernel_version_selftest` 用两份污染样本反证该门禁会变红。升级官方内核时，改完参数必须同步改这三处，
+门禁会拦住漏改。默认非 GUI 门禁共 23 项。
 测试注册以 [CMakeLists.txt](../CMakeLists.txt) 为准；Python 不可用时 MCP 测试不会注册。
-默认流水线并不运行所有 `test/` 脚本；手动 UI 冒烟和成品对拍需单独调用并满足各自前置条件。
+默认流水线不含 `gui` 标签用例，也不运行所有 `test/` 脚本；手动 UI 冒烟和成品对拍需单独调用并满足各自前置条件。
 
 ## 打包
 

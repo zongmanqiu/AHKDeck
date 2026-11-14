@@ -450,6 +450,10 @@ public:
 		const std::string title = std::string("AHKDeck ") + VersionString();
 		const std::string copyright = "Copyright © 2026 邱宗满";
 		const std::string license = "依据 GPL-2.0 协议许可";
+		// m202: the same kernel-version parameter the status bar prints. One
+		// edit in core/Version.h updates both; ctest kernel_version keeps it
+		// equal to the shipped AutoHotkey64.exe.
+		const std::string engine = std::string("内核 AutoHotkey ") + KernelVersionString();
 		// Same URLs the README advertises, so the window and the project page
 		// can never disagree about where the source lives.
 		const std::string repoGitee = "https://gitee.com/qiuzongman/AHKDeck";
@@ -459,16 +463,20 @@ public:
 		const std::string scriptsGithub =
 			"https://github.com/zongmanqiu/ahk-v2-scripts";
 
+		// m202: slot 1 was the empty line left by m091. Filling it with the
+		// kernel version keeps the line COUNT and therefore kRepoLineIndex /
+		// kScriptsLineIndex exactly where they were - an empty line and a
+		// body line advance y by the same 24px, so no layout shifts.
 		std::vector<std::string> lines = {
-			title,                          // 1. name + version
-			"",                             // 2. blank (m091: the slogan is gone)
-			copyright,                      // 3. copyright w/ author
-			license,                        // 4. license
-			"",                             // 5. blank
-			"",                             // 6. 项目仓库 row (RepoLinksWidget)
-			"",                             // 7. 脚本仓库 row (RepoLinksWidget)
-			"",                             // 8. blank
-			"赞助",                         // 9. sponsor
+			title,                          // 0. name + product version
+			engine,                         // 1. kernel version (same parameter as the status bar)
+			copyright,                      // 2. copyright w/ author
+			license,                        // 3. license
+			"",                             // 4. blank
+			"",                             // 5. 项目仓库 row (RepoLinksWidget)
+			"",                             // 6. 脚本仓库 row (RepoLinksWidget)
+			"",                             // 7. blank
+			"赞助",                         // 8. sponsor
 		};
 
 		begin();

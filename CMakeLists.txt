@@ -12,7 +12,7 @@ if(CMAKE_GENERATOR MATCHES "Makefiles")
     set(CMAKE_DEPENDS_USE_COMPILER FALSE)
 endif()
 
-project(AHKDeck VERSION 0.3.3 LANGUAGES C CXX RC)
+project(AHKDeck VERSION 0.3.4 LANGUAGES C CXX RC)
 
 # Static CRT (/MT): the shipped exe must run with ZERO VC++ redistributable
 # dependencies ("单 exe 即装即用"). CMP0091 NEW lets CMAKE_MSVC_RUNTIME_LIBRARY
@@ -550,6 +550,21 @@ add_test(NAME single_kernel_selftest COMMAND powershell -NoProfile -ExecutionPol
     -File "${CMAKE_SOURCE_DIR}/test/shipping_gate/gate_single_kernel.ps1"
     -BuildDir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
     -KernelDir "${CMAKE_SOURCE_DIR}/../.temp/kernel_official"
+    -SelfTest)
+
+# m202: core/Version.h::kKernelVersion is the single source for every place
+# the product names the official kernel. This gate asserts it still matches
+# the pinned upstream tag (deps.txt), the ahkversion.h patch (string + numeric
+# tuple) and the ProductVersion of the shipped AutoHotkey64.exe. -SelfTest
+# poisons two of those copies and demands the checker go red.
+add_test(NAME kernel_version COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+    -File "${CMAKE_SOURCE_DIR}/test/shipping_gate/gate_kernel_version.ps1"
+    -Root "${CMAKE_SOURCE_DIR}"
+    -BuildDir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+add_test(NAME kernel_version_selftest COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+    -File "${CMAKE_SOURCE_DIR}/test/shipping_gate/gate_kernel_version.ps1"
+    -Root "${CMAKE_SOURCE_DIR}"
+    -BuildDir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
     -SelfTest)
 
 # ----------------------------------------------------------------------------

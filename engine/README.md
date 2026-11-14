@@ -36,7 +36,9 @@
 ## 三条不可动的边界
 
 1. **子进程隔离是结构性的**：每个会话一个进程 ＋ Job Object，脚本崩溃/`ExitProcess` 不再拖死宿主；
-   宿主异常退出时系统回收全部子进程。
+   宿主异常退出时系统回收全部子进程。**m195**：`CreateJobObjectW` / `SetInformationJobObject` /
+   `AssignProcessToJobObject` 三处返回值全部检查，任一失败即终止子进程、关闭句柄并落一条 fatal 记录，
+   不放行「没有兜底」的会话——否则宿主退出会留下孤儿解释器，正是 Job Object 要消灭的东西。
 2. **错误汇保持轻量**：`PumpRawFiles` 只做增量抽取、加锁入队，不在 UI 线程做文件 I/O；
    E4 防风暴规则保留（`severity` 为 `fail`/`critical` → `StopSession`），`warn`/`fail_or_ok` 不触发停止。
 3. **托盘桥不许省**：`AHKDECK_NO_TRAY=1` 只收起子进程的托盘图标；菜单快照与 `WM_COMMAND` 回传让

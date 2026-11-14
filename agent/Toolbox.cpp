@@ -2,6 +2,7 @@
 
 #include "core/AppPaths.h"
 #include "core/TextFile.h"
+#include "core/Version.h"
 #include "engine/DeckEngine.h"
 
 #include <windows.h>
@@ -1069,8 +1070,12 @@ std::vector<ToolDef> Toolbox::Definitions() const
 	{
 		ToolDef d;
 		d.name = "lookup_help";
+		// m202: the kernel version is one parameter, not a typed-out number.
+		// The 2.0.30 above is different on purpose - that is the handbook the
+		// bundled help-index.json was generated from, not the running kernel.
 		d.description = "查 AutoHotkey v2 的函数、内建变量与对象的官方语法：签名、每个参数的类型和含义、"
-			"返回值、示例。数据来自随包的 help-index.json（356 页，取自官方 2.0.30 手册，内核为 2.0.31），"
+			"返回值、示例。数据来自随包的 help-index.json（356 页，取自官方 2.0.30 手册，内核为 "
+			+ std::string(ahkdeck::KernelVersionString()) + "），"
 			"不是凭记忆生成的，所以和你正在跑的内核一致。"
 			"**写 AHK 代码前，只要不确定函数名、参数顺序、某个参数留空会怎样，就先查它。**"
 			"凭记忆写出来的 API 常常语法合法、语义错（参数位置颠倒、选项名拼错、把格式串当初始值），"

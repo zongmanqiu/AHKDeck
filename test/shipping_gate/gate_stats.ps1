@@ -65,8 +65,10 @@ if ($lines.Count -ne 1) {
         $cpu = [double]$obj.cpu_percent
         if ($cpu -lt 0 -or $cpu -gt 100) { Add-Failure ("cpu_percent out of range: $cpu") }
 
-        # A running AHKDeck process holds at least a kernel DLL and the FLTK
-        # window; under 1 MB would mean psapi returned garbage.
+        # A running AHKDeck process holds the FLTK window and its own heap;
+        # under 1 MB would mean psapi returned garbage. (m192 retired the
+        # in-process kernel DLL: scripts are child processes now, summed into
+        # the total_* fields below.)
         $ws = [int64]$obj.working_set_bytes
         if ($ws -lt 1048576) { Add-Failure ("working_set_bytes too small: $ws") }
         if ([int64]$obj.private_bytes -lt 0) { Add-Failure ('private_bytes is negative') }
@@ -93,6 +95,23 @@ if ($lines.Count -ne 1) {
         if ($text -notmatch '(KB|MB|GB)') { Add-Failure ('text carries no byte unit: ' + $text) }
         if ($gpu -ge 0 -and $text -notmatch 'GPU') { Add-Failure ('text omits a GPU reading that exists: ' + $text) }
         if ($gpu -lt 0 -and $text -match 'GPU') { Add-Failure ('text shows a GPU reading that does not exist: ' + $text) }
+
+        # m196: --stats starts no children, so the status-bar total MUST equal
+        # the host reading. This is the machine check for "host + sum(children)"
+        # being the very same numbers the per-script list columns show - a
+        # status bar that silently measures only the host would fail here.
+        if ([int]$obj.children -ne 0) {
+            Add-Failure ('children = ' + $obj.children + ', expected 0')
+        }
+        if ([double]$obj.total_cpu_percent -ne [double]$obj.cpu_percent) {
+            Add-Failure ('total_cpu_percent ' + $obj.total_cpu_percent + ' != cpu_percent ' + $obj.cpu_percent)
+        }
+        if ([int64]$obj.total_private_working_set_bytes -ne [int64]$obj.private_working_set_bytes) {
+            Add-Failure 'total_private_working_set_bytes differs from the host reading'
+        }
+        if ([double]$obj.total_gpu_percent -ne [double]$obj.gpu_percent) {
+            Add-Failure ('total_gpu_percent ' + $obj.total_gpu_percent + ' != gpu_percent ' + $obj.gpu_percent)
+        }
 
         Write-Output ('reading: ' + $lines[0])
     }

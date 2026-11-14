@@ -6,10 +6,13 @@
 #include <psapi.h>
 #include <tlhelp32.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -27,29 +30,33 @@ uint64_t FileTime100ns(const FILETIME &aTime)
 	return value.QuadPart;
 }
 
-// Kernel + user time of this process, in 100 ns units (the unit CpuPercent
-// expects from both sides).
-uint64_t ProcessCpu100ns()
+// Kernel + user time in 100 ns units, plus the process creation time. The
+// latter is the guard against pid reuse: a dead child's pid can be handed to
+// an unrelated process, and blindly subtracting the old CPU total would then
+// print a bogus spike (or a huge negative delta).
+bool ProcessTimes(HANDLE aProcess, uint64_t &aCpu, uint64_t &aCreated)
 {
 	FILETIME created;
 	FILETIME exited;
 	FILETIME kernel;
 	FILETIME user;
-	if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user))
-		return 0;
-	return FileTime100ns(kernel) + FileTime100ns(user);
+	if (!GetProcessTimes(aProcess, &created, &exited, &kernel, &user))
+		return false;
+	aCpu = FileTime100ns(kernel) + FileTime100ns(user);
+	aCreated = FileTime100ns(created);
+	return true;
 }
 
-// GetProcessMemoryInfo exposes no thread count, and the documented way to count
-// threads of the current process is a Toolhelp snapshot. It is ~ms work, taken
-// once per couple of seconds, so the cost is not worth a private peak API.
-uint32_t CountOwnThreads()
+// One Toolhelp snapshot covers the whole machine, so counting threads for the
+// host and every child costs one walk rather than one walk per process.
+std::map<uint32_t, uint32_t> ThreadsByPid(const std::set<uint32_t> &aPids)
 {
-	const DWORD pid = GetCurrentProcessId();
-	uint32_t count = 0;
+	std::map<uint32_t, uint32_t> result;
+	for (uint32_t pid : aPids)
+		result[pid] = 0;
 	HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
 	if (snapshot == INVALID_HANDLE_VALUE)
-		return 0;
+		return result;
 	THREADENTRY32 entry;
 	std::memset(&entry, 0, sizeof(entry));
 	entry.dwSize = sizeof(entry);
@@ -58,51 +65,66 @@ uint32_t CountOwnThreads()
 		do
 		{
 			// The owner field is only valid once dwSize covers it (Win32 rule).
-			if (entry.dwSize >=
-				FIELD_OFFSET(THREADENTRY32, th32OwnerProcessID) + sizeof(entry.th32OwnerProcessID) &&
-				entry.th32OwnerProcessID == pid)
-				++count;
+			if (entry.dwSize <
+				FIELD_OFFSET(THREADENTRY32, th32OwnerProcessID) + sizeof(entry.th32OwnerProcessID))
+				continue;
+			auto it = result.find((uint32_t)entry.th32OwnerProcessID);
+			if (it != result.end())
+				++it->second;
 		} while (Thread32Next(snapshot, &entry));
 	}
 	CloseHandle(snapshot);
-	return count;
+	return result;
 }
 
-// Sums this process's GPU engine utilization. Instance names look like
-// "pid_1234_luid_0x..._phys_0_eng_0_engtype_3D", so the pid prefix is the
-// filter. -1 means "the counter could not be read at all", not "0% GPU".
-double GpuPercentOfOwnProcess(PDH_HCOUNTER aCounter)
+// A single PDH collect exposes every GPU engine instance on the machine;
+// instance names look like "pid_1234_luid_0x..._engtype_3D". Parse the pid
+// prefix and group by the processes we were asked about. Returns false only
+// when the counter itself cannot be read (<0 GPU semantics); an absent pid in
+// the map means a legitimate 0% GPU for that process.
+bool GpuByPid(PDH_HCOUNTER aCounter, const std::vector<uint32_t> &aPids,
+	std::map<uint32_t, double> &aOut)
 {
 	DWORD size = 0;
 	DWORD count = 0;
 	PDH_STATUS status = PdhGetFormattedCounterArrayW(aCounter, PDH_FMT_DOUBLE,
 		&size, &count, nullptr);
 	if (status != PDH_MORE_DATA || size == 0)
-		return -1.0;
+		return false;
 
 	std::vector<BYTE> buffer(size);
 	PPDH_FMT_COUNTERVALUE_ITEM_W items =
 		reinterpret_cast<PPDH_FMT_COUNTERVALUE_ITEM_W>(buffer.data());
 	status = PdhGetFormattedCounterArrayW(aCounter, PDH_FMT_DOUBLE, &size, &count, items);
 	if (status != ERROR_SUCCESS)
-		return -1.0;
+		return false;
 
-	const std::wstring prefix = L"pid_" + std::to_wstring(GetCurrentProcessId()) + L"_";
-	double total = 0.0;
+	std::set<uint32_t> wanted(aPids.begin(), aPids.end());
+	wanted.insert((uint32_t)GetCurrentProcessId());
+	for (uint32_t pid : wanted)
+		aOut[pid] = 0.0;
 	for (DWORD i = 0; i < count; ++i)
 	{
-		if (!items[i].szName)
+		const wchar_t *name = items[i].szName;
+		if (!name || std::wcsncmp(name, L"pid_", 4) != 0)
 			continue;
-		if (std::wcsncmp(items[i].szName, prefix.c_str(), prefix.size()) != 0)
+		wchar_t *end = nullptr;
+		const unsigned long pid = std::wcstoul(name + 4, &end, 10);
+		if (end == name + 4 || !end || *end != L'_' || pid == 0)
+			continue;
+		auto it = aOut.find((uint32_t)pid);
+		if (it == aOut.end())
 			continue;
 		if (items[i].FmtValue.CStatus != PDH_CSTATUS_VALID_DATA &&
 			items[i].FmtValue.CStatus != PDH_CSTATUS_NEW_DATA)
 			continue;
-		total += items[i].FmtValue.doubleValue;
+		it->second += items[i].FmtValue.doubleValue;
 	}
-	// A process can touch several engines; the sum can exceed 100, and a
-	// status line saying "GPU 180%" would be noise, so it is clamped.
-	return total > 100.0 ? 100.0 : total;
+	// A process can touch several engines; 180% would be noise in a list cell.
+	for (auto &entry : aOut)
+		if (entry.second > 100.0)
+			entry.second = 100.0;
+	return true;
 }
 
 // Task Manager's "Memory" column is the PRIVATE working set: the pages this
@@ -111,23 +133,22 @@ double GpuPercentOfOwnProcess(PDH_HCOUNTER aCounter)
 // every page, QueryWorkingSetEx says whether each one is shared.
 //
 // Returns 0 when the walk fails; the caller then falls back to the total rather
-// than printing "0MB".
-uint64_t OwnPrivateWorkingSetBytes(PSIZE_T aTotalWorkingSet)
+// than printing "0MB". For another process the handle needs
+// PROCESS_QUERY_INFORMATION | PROCESS_VM_READ (OpenProcess in the caller).
+uint64_t PrivateWorkingSetBytes(HANDLE aProcess, SIZE_T aTotalWorkingSet)
 {
-	const HANDLE process = GetCurrentProcess();
-
 	SYSTEM_INFO info;
 	std::memset(&info, 0, sizeof(info));
 	GetSystemInfo(&info);
 	const SIZE_T pageSize = info.dwPageSize ? info.dwPageSize : 4096;
 
 	// One pointer per page, plus slack for a set that grew between the two calls.
-	const SIZE_T pageCount = (SIZE_T)(*aTotalWorkingSet / pageSize) + 64;
+	const SIZE_T pageCount = aTotalWorkingSet / pageSize + 64;
 	std::vector<PVOID> pages(pageCount, nullptr);
 	const SIZE_T bufferBytes = pageCount * sizeof(PVOID);
 	if (bufferBytes > 0xFFFFFFFFu)
 		return 0;
-	if (!QueryWorkingSet(process, pages.data(), (DWORD)bufferBytes))
+	if (!QueryWorkingSet(aProcess, pages.data(), (DWORD)bufferBytes))
 		return 0;
 
 	std::vector<PSAPI_WORKING_SET_EX_INFORMATION> entries;
@@ -148,7 +169,7 @@ uint64_t OwnPrivateWorkingSetBytes(PSIZE_T aTotalWorkingSet)
 	const SIZE_T entryBytes = entries.size() * sizeof(PSAPI_WORKING_SET_EX_INFORMATION);
 	if (entryBytes > 0xFFFFFFFFu)
 		return 0;
-	if (!QueryWorkingSetEx(process, entries.data(), (DWORD)entryBytes))
+	if (!QueryWorkingSetEx(aProcess, entries.data(), (DWORD)entryBytes))
 		return 0;
 
 	uint64_t privatePages = 0;
@@ -158,6 +179,57 @@ uint64_t OwnPrivateWorkingSetBytes(PSIZE_T aTotalWorkingSet)
 			++privatePages;
 	}
 	return privatePages * (uint64_t)pageSize;
+}
+
+// One process, one sample. aHistory is that process's previous CPU reading;
+// aPrevWall/aWall are shared by the whole snapshot so every CPU percentage is
+// measured over exactly the same interval.
+ResourceSample SampleOne(HANDLE aProcess, ResourceSampler::CpuHistory &aHistory,
+	uint64_t aPrevWall, uint64_t aWall, unsigned aCores,
+	double aGpuPercent, uint32_t aThreads)
+{
+	ResourceSample sample;
+	PROCESS_MEMORY_COUNTERS_EX counters;
+	std::memset(&counters, 0, sizeof(counters));
+	if (GetProcessMemoryInfo(aProcess,
+		reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&counters), sizeof(counters)))
+	{
+		sample.workingSetBytes = counters.WorkingSetSize;
+		sample.privateBytes = counters.PrivateUsage;
+		sample.privateWorkingSetBytes = PrivateWorkingSetBytes(aProcess, counters.WorkingSetSize);
+	}
+	DWORD handles = 0;
+	if (GetProcessHandleCount(aProcess, &handles))
+		sample.handleCount = handles;
+	sample.threadCount = aThreads;
+	sample.gpuPercent = aGpuPercent;
+
+	uint64_t cpu = 0;
+	uint64_t created = 0;
+	if (ProcessTimes(aProcess, cpu, created))
+	{
+		// No delta on the first sighting, or when the pid was recycled: the
+		// cumulative counter belongs to a different process in that case.
+		if (aPrevWall != 0 && aHistory.cpu100ns != 0 && aHistory.created100ns == created)
+			sample.cpuPercent = CpuPercent(aHistory.cpu100ns, aPrevWall, cpu, aWall, aCores);
+		aHistory.cpu100ns = cpu;
+		aHistory.created100ns = created;
+	}
+	return sample;
+}
+
+void AddInto(ResourceSample &aTotal, const ResourceSample &aPart)
+{
+	aTotal.cpuPercent += aPart.cpuPercent;
+	aTotal.workingSetBytes += aPart.workingSetBytes;
+	aTotal.privateWorkingSetBytes += aPart.privateWorkingSetBytes;
+	aTotal.privateBytes += aPart.privateBytes;
+	aTotal.threadCount += aPart.threadCount;
+	aTotal.handleCount += aPart.handleCount;
+	if (aTotal.gpuPercent < 0.0 || aPart.gpuPercent < 0.0)
+		aTotal.gpuPercent = -1.0;
+	else
+		aTotal.gpuPercent += aPart.gpuPercent;
 }
 
 } // namespace
@@ -239,40 +311,92 @@ ResourceSampler::~ResourceSampler()
 
 ResourceSample ResourceSampler::Sample()
 {
-	ResourceSample sample;
+	return SampleWithChildren(std::vector<uint32_t>{}).host;
+}
 
-	PROCESS_MEMORY_COUNTERS_EX counters;
-	std::memset(&counters, 0, sizeof(counters));
-	if (GetProcessMemoryInfo(GetCurrentProcess(),
-		reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&counters), sizeof(counters)))
-	{
-		sample.workingSetBytes = counters.WorkingSetSize;
-		sample.privateBytes = counters.PrivateUsage;
-		sample.privateWorkingSetBytes = OwnPrivateWorkingSetBytes(&counters.WorkingSetSize);
-	}
-	DWORD handles = 0;
-	if (GetProcessHandleCount(GetCurrentProcess(), &handles))
-		sample.handleCount = handles;
-	sample.threadCount = CountOwnThreads();
-
+ResourceSnapshot ResourceSampler::SampleWithChildren(const std::vector<uint32_t> &aChildPids)
+{
+	ResourceSnapshot snapshot;
 	// GetTickCount64 is monotonic and costs nothing; a wall clock that jumps
-	// with NTP would make one sample read as a spike.
+	// with NTP would make one sample read as a spike. One reading for the whole
+	// fleet, so every CPU delta covers the same interval.
 	const uint64_t wall = GetTickCount64() * 10000ULL;
-	const uint64_t cpu = ProcessCpu100ns();
-	if (mPrevWall100ns != 0)
-		sample.cpuPercent = CpuPercent(mPrevCpu100ns, mPrevWall100ns, cpu, wall, mCores);
-	mPrevWall100ns = wall;
-	mPrevCpu100ns = cpu;
+	const uint64_t prevWall = mPrevWall100ns;
 
+	// GPU: one collect, grouped by pid. No Sleep here: this runs on the UI thread.
+	std::map<uint32_t, double> gpu;
+	bool gpuOk = false;
 	if (mQuery && mGpuCounter)
 	{
-		// One collect per sample; the query keeps the previous collect, so the
-		// second sample onwards is a real reading. No Sleep here: this runs on
-		// the UI thread.
 		PdhCollectQueryData(static_cast<PDH_HQUERY>(mQuery));
-		sample.gpuPercent = GpuPercentOfOwnProcess(static_cast<PDH_HCOUNTER>(mGpuCounter));
+		gpuOk = GpuByPid(static_cast<PDH_HCOUNTER>(mGpuCounter), aChildPids, gpu);
 	}
-	return sample;
+	auto gpuOf = [&](uint32_t pid) -> double {
+		if (!gpuOk)
+			return -1.0;
+		auto it = gpu.find(pid);
+		return it == gpu.end() ? 0.0 : it->second;
+	};
+
+	// Threads: one snapshot for the host plus every requested child.
+	std::set<uint32_t> wanted(aChildPids.begin(), aChildPids.end());
+	const uint32_t hostPid = (uint32_t)GetCurrentProcessId();
+	wanted.insert(hostPid);
+	const std::map<uint32_t, uint32_t> threads = ThreadsByPid(wanted);
+	auto threadsOf = [&](uint32_t pid) -> uint32_t {
+		auto it = threads.find(pid);
+		return it == threads.end() ? 0u : it->second;
+	};
+
+	snapshot.host = SampleOne(GetCurrentProcess(), mHostCpu, prevWall, wall, mCores,
+		gpuOf(hostPid), threadsOf(hostPid));
+
+	for (uint32_t pid : aChildPids)
+	{
+		ChildResource child;
+		child.pid = pid;
+		// PROCESS_VM_READ is required by QueryWorkingSet/QueryWorkingSetEx for a
+		// different process. Our children are same-user, same-integrity, so this
+		// normally succeeds; a race with a session ending just leaves a blank cell.
+		HANDLE process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
+		if (process)
+		{
+			auto it = mChildCpu.find(pid);
+			if (it == mChildCpu.end())
+				it = mChildCpu.emplace(pid, CpuHistory{}).first;
+			child.sample = SampleOne(process, it->second, prevWall, wall, mCores,
+				gpuOf(pid), threadsOf(pid));
+			child.valid = true;
+			CloseHandle(process);
+		}
+		snapshot.children.push_back(child);
+	}
+
+	// Forget sessions that ended, so a stale history can never be reused when
+	// Windows hands the same pid to a new process. The creation-time check in
+	// SampleOne is the second line of defence.
+	for (auto it = mChildCpu.begin(); it != mChildCpu.end(); )
+	{
+		const bool live = std::find(aChildPids.begin(), aChildPids.end(), it->first)
+			!= aChildPids.end();
+		if (live)
+			++it;
+		else
+			it = mChildCpu.erase(it);
+	}
+	mPrevWall100ns = wall;
+
+	snapshot.total = snapshot.host;
+	for (const ChildResource &child : snapshot.children)
+		if (child.valid)
+			AddInto(snapshot.total, child.sample);
+	// Percentages are shares of the machine; summing processes can cross 100.
+	// Plain comparisons, not std::min: windows.h defines min/max as macros.
+	if (snapshot.total.cpuPercent > 100.0)
+		snapshot.total.cpuPercent = 100.0;
+	if (snapshot.total.gpuPercent > 100.0)
+		snapshot.total.gpuPercent = 100.0;
+	return snapshot;
 }
 
 } // namespace ahkdeck

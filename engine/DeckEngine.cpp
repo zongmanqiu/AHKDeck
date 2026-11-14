@@ -1203,14 +1203,47 @@ DWORD Engine::StartSession(const std::wstring &aScriptPath, const std::vector<st
 	// Kill-on-close job: the OS reaps every script the moment the host dies -
 	// the guarantee the in-process kernel gave for free ("one process image"),
 	// rebuilt with one API call.
-	HANDLE job = CreateJobObjectW(nullptr, nullptr);
-	if (job)
+	// m195: every step is checked. A session that is NOT inside a working
+	// kill-on-close job would outlive the host - exactly the orphan the job was
+	// added to prevent - so fail closed instead of running unguarded. Environments
+	// that deny job objects now get a clear fatal record, not silent leftovers.
+	HANDLE job = nullptr;
+	const auto jobFailed = [&](const char *aStep, DWORD aError) -> DWORD
 	{
-		JOBOBJECT_EXTENDED_LIMIT_INFORMATION info = {};
-		info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-		SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info, sizeof(info));
-		AssignProcessToJobObject(job, pi.hProcess);
-	}
+		TerminateProcess(pi.hProcess, 2);
+		CloseHandle(pi.hProcess);
+		CloseHandle(pi.hThread);
+		if (stdoutRead)
+			CloseHandle(stdoutRead);
+		if (job)
+			CloseHandle(job);
+		{
+			std::lock_guard<std::mutex> lock(mErrorMutex);
+			mErrors.push_back(MakeSyntheticRecord(sessionId,
+				std::string("the session has no kill-on-close guard (") + aStep +
+				" failed, win32 error " + std::to_string(aError) + ")"));
+		}
+		mErrorCv.notify_one();
+
+		std::lock_guard<std::mutex> lock(mSessionsMutex);
+		Entry &stored = mSessions[sessionId];
+		stored.pub.state = SessionState::Finished;
+		stored.pub.rc = 2;
+		stored.pub.fatal = true;
+		return sessionId;
+	};
+
+	job = CreateJobObjectW(nullptr, nullptr);
+	if (!job)
+		return jobFailed("CreateJobObjectW", GetLastError());
+
+	JOBOBJECT_EXTENDED_LIMIT_INFORMATION info = {};
+	info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+	if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info, sizeof(info)))
+		return jobFailed("SetInformationJobObject", GetLastError());
+	if (!AssignProcessToJobObject(job, pi.hProcess))
+		return jobFailed("AssignProcessToJobObject", GetLastError());
+	CloseHandle(pi.hThread); // the child's main thread is not needed after the assignment
 
 	HANDLE reader = nullptr;
 	if (stdoutRead)

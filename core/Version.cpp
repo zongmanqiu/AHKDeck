@@ -21,4 +21,12 @@ const char* VersionString()
     return text.c_str();
 }
 
+const char* KernelVersionString()
+{
+    // m201: a plain constant is enough here (no string building). The function
+    // keeps the call sites independent of how the constant is stored, and lets
+    // test_version assert the shape of the single source.
+    return kKernelVersion;
+}
+
 } // namespace ahkdeck
