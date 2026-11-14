@@ -122,8 +122,10 @@ bool Contains(const std::string &aHaystack, const std::string &aNeedle)
 	return aHaystack.find(aNeedle) != std::string::npos;
 }
 
-// Heartbeat lines are "n|tick|osThreadId". Reading the id from the script's own
-// pen is how the gate proves the writer thread IS the session's kernel thread.
+// Heartbeat lines are "n|tick|osProcessId" (m192: the session IS a child
+// process, so the writer's identity the gate can verify is the pid). Reading
+// the id from the script's own pen is how the gate proves the writer process
+// IS the session's child.
 bool HeartbeatThread(const std::string &aText, std::string &aThread)
 {
 	size_t first = aText.find('|');
@@ -205,27 +207,29 @@ bool AllFinished(Engine &aEngine)
 	return true;
 }
 
-// Independent of the engine's table: asks the kernel object directly whether that
-// thread is still executing. A session whose thread died without being reaped
-// would otherwise hide behind a "running" state.
-bool ThreadAlive(DWORD aThreadId)
+// m192: a session IS a child process now, so "is it really alive" is a process
+// question, not an OpenThread question: ask the process object directly. A
+// session whose child died without being reaped would otherwise hide behind a
+// "running" state.
+bool ThreadAlive(DWORD aPid)
 {
-	if (!aThreadId)
+	if (!aPid)
 		return false;
-	HANDLE h = OpenThread(SYNCHRONIZE | THREAD_QUERY_INFORMATION, FALSE, aThreadId);
+	HANDLE h = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, aPid);
 	if (!h)
 		return false;
-	bool alive = WaitForSingleObject(h, 0) != WAIT_OBJECT_0;
+	DWORD rc = 0;
+	bool alive = GetExitCodeProcess(h, &rc) && rc == STILL_ACTIVE;
 	CloseHandle(h);
 	return alive;
 }
 
-// The kernel shows a script's tray menu as a top-level menu window (#32768) on
-// that script thread, so the gate can read "did the menu pop, on whose thread,
-// and where" without asking the script to report anything.
+// The kernel shows a script's tray menu as a top-level menu window (#32768).
+// m192: that window lives in the session's CHILD process, so the gate reads
+// "did the menu pop, in whose process, and where" by pid - the pid is the
+// session id's twin (Session::threadId).
 struct MenuSearch
 {
-	DWORD threadId = 0;
 	DWORD processId = 0;
 	HWND found = nullptr;
 	int count = 0;
@@ -235,28 +239,24 @@ BOOL CALLBACK EnumMenuWindow(HWND aHwnd, LPARAM aParam)
 {
 	MenuSearch *search = reinterpret_cast<MenuSearch *>(aParam);
 	DWORD pid = 0;
-	const DWORD tid = GetWindowThreadProcessId(aHwnd, &pid);
+	GetWindowThreadProcessId(aHwnd, &pid);
 	if (pid != search->processId || !IsWindowVisible(aHwnd))
 		return TRUE;
 	wchar_t className[32] = {0};
 	if (GetClassNameW(aHwnd, className, 32) == 0 || wcscmp(className, L"#32768") != 0)
 		return TRUE;
 	++search->count;
-	if (!search->found && (!search->threadId || tid == search->threadId))
+	if (!search->found)
 		search->found = aHwnd;
 	return TRUE;
 }
 
-// The menu window of one thread, or (when aThreadId is 0) any menu of this
-// process; aCount receives how many menus the process owns in total.
-HWND FindMenuOfThread(DWORD aThreadId, int *aCount = nullptr)
+// The menu window of one session's process.
+HWND FindMenuOfProcess(DWORD aPid)
 {
 	MenuSearch own;
-	own.threadId = aThreadId;
-	own.processId = GetCurrentProcessId();
+	own.processId = aPid;
 	EnumWindows(EnumMenuWindow, reinterpret_cast<LPARAM>(&own));
-	if (aCount)
-		*aCount = own.count;
 	return own.found;
 }
 
@@ -370,7 +370,7 @@ int main()
 	Check(longA.state == SessionState::Running,
 		"A4 the resident script was still running when its neighbours ended");
 	Check(ThreadAlive(longA.threadId),
-		"A4b and its kernel thread is really alive (no neighbour tore it down)");
+		"A4b and its process is really alive (no neighbour tore it down)");
 
 	std::vector<ErrorRecord> boomRecs = colA.of(sBoom);
 	Check(boomRecs.size() == 1, "A5 exactly one record landed on boom's session");
@@ -379,7 +379,7 @@ int main()
 		const ErrorRecord &r = boomRecs[0];
 		Check(r.message == "m011-boom", "A6 boom's message survived routing");
 		Check(r.phase == "runtime" && r.severity == "fail", "A7 boom kept its runtime/fail class");
-		Check(r.thread == (int)boomA.threadId, "A8 boom's record carries boom's own thread id");
+		Check(r.thread == (int)boomA.threadId, "A8 boom's record carries the session's process id");
 		Check(Contains(r.json, "\"session\":" + std::to_string(sBoom)),
 			"A9 the JSONL line carries \"session\" for the journal");
 	}
@@ -402,7 +402,7 @@ int main()
 	Check(early.lines >= 1, "A14 the resident script is really ticking");
 	std::string beatThread;
 	Check(HeartbeatThread(early.text, beatThread) && beatThread == std::to_string(longA.threadId),
-		"A15 the heartbeat writer IS the session's kernel thread");
+		"A15 the heartbeat writer IS the session's process");
 	Sleep(600);
 	Beats mid = SampleBeats("a.log");
 	Check(mid.lines > early.lines, "A16 the heartbeat keeps growing while the session lives");
@@ -472,7 +472,8 @@ int main()
 	Session bad;
 	engine.GetSession(sBad, bad);
 	Check(badDone, "B1 the unparsable script finished on its own");
-	Check(bad.threadId == 0, "B2 it never owned a kernel thread");
+	Check(bad.threadId != 0,
+		"B2 the load-failing script got a real child process (reaped, rc=2)");
 	Check(bad.rc == 2, "B3 load failure reports the official code 2");
 	std::vector<ErrorRecord> badRecs = colB.of(sBad);
 	Check(badRecs.size() == 1 && badRecs[0].phase == "load" && badRecs[0].severity == "fail",
@@ -536,7 +537,7 @@ int main()
 	Check(!timerRecs.empty() && Contains(timerRecs[0].message, "m011-timer-boom"),
 		"E1 the timer error landed on its own session");
 	Check(!timerRecs.empty() && timerRecs[0].thread == (int)timerSession.threadId,
-		"E2 a timer tick shares the script thread, so thread routing stays exact");
+		"E2 the timer's record carries the session's process id");
 	Check(SessionFinished(engine, sTimer), "E3 the fatal record ended the session (official Exit, no box)");
 	// m011 measured the pre-fix shape of this: a repeating timer re-raising the
 	// same failure 70 times in 10 s (17 KB) because only the dialog vanished.
@@ -571,9 +572,9 @@ int main()
 	engine.GetSession(sTrayB, sessionB);
 	Check(windowA != windowB, "F3 and the two windows are not the same window");
 	DWORD ownerProcess = 0;
-	const DWORD ownerThread = GetWindowThreadProcessId(windowA, &ownerProcess);
-	Check(ownerThread == sessionA.threadId && ownerProcess == GetCurrentProcessId(),
-		"F4 that window belongs to this session's kernel thread, in this process");
+	GetWindowThreadProcessId(windowA, &ownerProcess);
+	Check(ownerProcess == sessionA.threadId,
+		"F4 that window belongs to this session's process (m192: the child)");
 
 	// Pin the pointer away from the screen edges first: TrackPopupMenu flips
 	// the menu when it does not fit, and a user moving the mouse during ctest
@@ -585,13 +586,13 @@ int main()
 	PostMessageW(windowA, 0x0404 /*AHK_NOTIFYICON*/, 1, WM_RBUTTONUP);
 	HWND menuA = nullptr;
 	bool menuUp = RunUntil(engine, colF, 5000, [&] {
-		menuA = FindMenuOfThread(sessionA.threadId);
+		menuA = FindMenuOfProcess(sessionA.threadId);
 		return menuA != nullptr;
 	});
 	Check(menuUp, "F5 the kernel popped that session's own tray menu, with no script-side help");
-	const DWORD menuThread = menuA ? GetWindowThreadProcessId(menuA, nullptr) : 0;
-	Check(menuThread == sessionA.threadId,
-		"F6 the menu runs on that session's kernel thread, not the host's");
+	const DWORD menuProcess = menuA ? [&] { DWORD p = 0; GetWindowThreadProcessId(menuA, &p); return p; }() : 0;
+	Check(menuProcess == sessionA.threadId,
+		"F6 the menu runs in that session's process (m192: the child)");
 	RECT menuRect = {};
 	if (menuA)
 		GetWindowRect(menuA, &menuRect);
@@ -612,10 +613,16 @@ int main()
 			+ std::to_string(dyTop) + ", dyBottom " + std::to_string(dyBottom)
 			+ (dyBottom >= -2 && dyBottom <= 8 ? ", flipped above" : "") + ")").c_str());
 
-	int menusWhileAOpen = 0;
-	FindMenuOfThread(0, &menusWhileAOpen);
-	Check(menusWhileAOpen == 1,
-		"F8 the neighbour session popped nothing (one menu window in the process, not two)");
+	// m192: the menus pop in the children, so count across BOTH child pids.
+	{
+		MenuSearch a, b;
+		a.processId = sessionA.threadId;
+		b.processId = sessionB.threadId;
+		EnumWindows(EnumMenuWindow, reinterpret_cast<LPARAM>(&a));
+		EnumWindows(EnumMenuWindow, reinterpret_cast<LPARAM>(&b));
+		Check(a.count + b.count == 1,
+			"F8 the neighbour session popped nothing (one menu window between the two children)");
+	}
 
 	// A menu is tracked in a modal loop owned by the script thread, and
 	// WM_CANCELMODE posted from another process does not close it (measured). The
@@ -631,12 +638,19 @@ int main()
 	PostMessageW(windowB, 0x0404, 1, WM_RBUTTONUP);
 	HWND menuB = nullptr;
 	bool secondMenu = RunUntil(engine, colF, 5000, [&] {
-		menuB = FindMenuOfThread(sessionB.threadId);
+		menuB = FindMenuOfProcess(sessionB.threadId);
 		return menuB != nullptr && menuB != menuA;
 	});
 	Check(secondMenu, "F10 the second session answers for itself, with its own menu window");
 	PostMessageW(windowB, 0x8003, 0, 0);
-	RunUntil(engine, colF, 3000, [&] { return FindMenuOfThread(0) == nullptr; });
+	RunUntil(engine, colF, 3000, [&] {
+		MenuSearch a, b;
+		a.processId = sessionA.threadId;
+		b.processId = sessionB.threadId;
+		EnumWindows(EnumMenuWindow, reinterpret_cast<LPARAM>(&a));
+		EnumWindows(EnumMenuWindow, reinterpret_cast<LPARAM>(&b));
+		return a.count + b.count == 0;
+	});
 
 	engine.StopSession(sTrayA);
 	RunUntil(engine, colF, 8000, [&] { return SessionFinished(engine, sTrayA); });
@@ -667,10 +681,14 @@ int main()
 	Check(gWindowsUp, "G2 both have windows (front-target exists for the fallback branch)");
 	HMENU emptyMenu = nullptr;
 	HMENU fullMenu = nullptr;
-	bool menusReady = RunUntil(engine, colG, 5000, [&] {
+	// The snapshot is taken as soon as the child answers - which can beat the
+	// script's own auto-exec adding its items. The UI re-pulls the snapshot on
+	// every tray open (m132 behaviour across the process split), so the gate
+	// does the same: wait until the control's count is actually >= 1.
+	bool menusReady = RunUntil(engine, colG, 8000, [&] {
 		emptyMenu = engine.TrayMenu(sNoMenu);
 		fullMenu = engine.TrayMenu(sWithMenu);
-		return emptyMenu != nullptr && fullMenu != nullptr;
+		return emptyMenu != nullptr && fullMenu != nullptr && GetMenuItemCount(fullMenu) >= 1;
 	});
 	Check(menusReady, "G3 the kernel hands out the tray menu even after A_TrayMenu.Delete()");
 	Check(emptyMenu && GetMenuItemCount(emptyMenu) == 0,

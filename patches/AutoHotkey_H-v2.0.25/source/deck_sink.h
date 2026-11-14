@@ -33,6 +33,19 @@ extern bool g_DeckIsolatedScripts;
 // Returns false (and does nothing) when no sink is installed.
 // aWarn distinguishes #Warn-style warnings from errors; aErrorType carries the
 // upstream severity (FAIL / CRITICAL_ERROR / FAIL_OR_OK) untouched.
+//
+// Record shape (m175 added the last three):
+//   ts, thread, seq, kind(error|warn), phase(load|runtime), severity
+//   file (absolute path, host folds it to a leaf), line
+//   message ("...")            - the dialog's headline
+//   extra   ("..." | "")       - the dialog's "Specifically:" text
+//   func    ("Inner" | "")     - the function that was running
+//   source  ("    x := n / 0") - the text of the failing line, no line number
+//   stack   ("" | "file.ahk (11) : [Inner] ...\r\n> timer\r\n")
+//                              - call stack, top frame first, leaf file names
+// The three new fields exist because file+line alone cannot answer "which
+// usage is wrong, and how did execution get here" - the run copy may live in
+// .temp and a #Include'd frame is a different file entirely.
 bool DeckNotifyError(LPCTSTR aMessage, LPCTSTR aExtra, Line *aLine, int aErrorType, bool aWarn);
 
 // m061: the second seam. FileAppend's stdout target ("*") has no stdout handle

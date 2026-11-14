@@ -1,22 +1,30 @@
 @echo off
 REM ============================================================================
-REM build_kernel.bat - build the patched AHK_H kernel DLL (ASCII only)
+REM build_kernel.bat - build the ONE patched official AutoHotkey kernel (m192 P4)
 REM ----------------------------------------------------------------------------
 REM Outputs (directory contract from AGENTS.md):
-REM   .temp\kernel\AutoHotkey64.dll      <- canonical kernel, copied into .build
-REM   .temp\kernel_build\                <- MSBuild intermediates (never in .3rd)
+REM   .temp\kernel_official\AutoHotkey64.exe  <- the single shipped interpreter
+REM   .temp\kernel_build\official_*          <- MSBuild intermediates (never .3rd)
 REM
-REM Configuration: MT_ReleaseDll (the DLL form that supports in-process script
-REM threads). Always build through the SLN: lib_pcre / lib_double have no
-REM ReleaseDll configuration of their own and a direct vcxproj build fails with
-REM MSB8013.
+REM m192 P4: the AHK_H pair is RETIRED - MT_ReleaseDll (AutoHotkey64.dll, the
+REM in-process kernel) and MT_Release (the tools\ compile base). The engine now
+REM spawns the official EXE once per session and ExeCompiler bundles scripts
+REM into a copy of that very EXE, so one build serves both and the package
+REM carries exactly two PE files. The AHK_H source tree and its patch archive
+REM stay in .3rd / patches for history and the m004 parity gate; they are no
+REM longer built, staged or shipped.
 REM
-REM The build leaves asm/lib staging dirs inside .3rd (temp\<platform>, 
-REM source\lib_*\temp); they are deleted here so .3rd stays source-only.
+REM The official v2.0.31 source carries four env-gated patches from
+REM patches\AutoHotkey-v2.0.31: version fallback, JSON error/warning sink,
+REM NO_TRAY + tray-menu dump, and their startup hook. With no AHKDECK_* env
+REM vars set, behaviour is byte-identical to upstream. See that README.
+REM
+REM The build leaves asm/lib staging dirs inside .3rd; they are deleted here so
+REM .3rd stays source-only.
 REM
 REM Environment:
 REM   AHKDECK_CHAINED=1       suppress "press any key"
-REM   AHKDECK_FORCE_KERNEL=1  rebuild even when the DLL looks up to date
+REM   AHKDECK_FORCE_KERNEL=1  rebuild even when the exe looks up to date
 REM ============================================================================
 
 setlocal enabledelayedexpansion
@@ -28,36 +36,36 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo ======================================
-echo    AHKDeck  [4a/5] kernel DLL
+echo    AHKDeck  [4a/5] official kernel
 echo ======================================
 echo.
 
-set "KERNEL_SRC=%THIRDPARTY%\AutoHotkey_H-v2.0.25"
-set "KERNEL_OUT=%PROJECT_ROOT%\.temp\kernel"
-set "KERNEL_DLL=%KERNEL_OUT%\AutoHotkey64.dll"
+set "OFFICIAL_SRC=%THIRDPARTY%\AutoHotkey-v2.0.31-src"
+set "OFFICIAL_OUT=%PROJECT_ROOT%\.temp\kernel_official"
+set "OFFICIAL_EXE=%OFFICIAL_OUT%\AutoHotkey64.exe"
 set "KERNEL_BUILD=%PROJECT_ROOT%\.temp\kernel_build"
 
-if not exist "%KERNEL_SRC%\AutoHotkeyx.sln" (
-    echo   [ERROR] .3rd\AutoHotkey_H-v2.0.25 is missing - run 2_download.bat
+if not exist "%OFFICIAL_SRC%\AutoHotkeyx.sln" (
+    echo   [ERROR] .3rd\AutoHotkey-v2.0.31-src is missing - run 2_download.bat
     if not "!AHKDECK_CHAINED!"=="1" pause
     exit /b 1
 )
 
-REM ---- up-to-date check: any patch newer than the DLL forces a rebuild --------
-set "KERNEL_NEED=0"
-if not exist "%KERNEL_DLL%" (
-    set "KERNEL_NEED=1"
+REM ---- up-to-date check: the EXE must be newer than every patch --------------
+set "OFFICIAL_NEED=0"
+if not exist "%OFFICIAL_EXE%" (
+    set "OFFICIAL_NEED=1"
 ) else (
-    set "KERNEL_TS="
-    for %%A in ("%KERNEL_DLL%") do set "KERNEL_TS=%%~tA"
-    for %%f in ("%PATCHES%\AutoHotkey_H-v2.0.25\source\*") do (
-        if "%%~tf" gtr "!KERNEL_TS!" set "KERNEL_NEED=1"
+    set "OFFICIAL_TS="
+    for %%A in ("%OFFICIAL_EXE%") do set "OFFICIAL_TS=%%~tA"
+    for %%f in ("%PATCHES%\AutoHotkey-v2.0.31\source\*") do (
+        if "%%~tf" gtr "!OFFICIAL_TS!" set "OFFICIAL_NEED=1"
     )
 )
-if "!AHKDECK_FORCE_KERNEL!"=="1" set "KERNEL_NEED=1"
+if "!AHKDECK_FORCE_KERNEL!"=="1" set "OFFICIAL_NEED=1"
 
-if "!KERNEL_NEED!"=="0" (
-    echo   kernel DLL is up to date
+if "!OFFICIAL_NEED!"=="0" (
+    echo   official kernel is up to date
     goto :done
 )
 
@@ -81,33 +89,32 @@ if not exist "!MSBUILD_EXE!" (
     exit /b 1
 )
 
-mkdir "%KERNEL_OUT%" 2>nul
-mkdir "%KERNEL_BUILD%\obj" 2>nul
+mkdir "%OFFICIAL_OUT%" 2>nul
+mkdir "%KERNEL_BUILD%\official_obj" 2>nul
 
-echo   building kernel - MT_ReleaseDll / x64...
+echo   building official kernel - Release / x64...
 REM OutDir/IntDir must end in a backslash (cl.exe's /Fo needs it), so the quoted
-REM value ends with a doubled backslash: the pair resolves to one literal "\" and
-REM lets the closing quote terminate the argument.
-"%MSBUILD_EXE%" "%KERNEL_SRC%\AutoHotkeyx.sln" /p:Configuration=MT_ReleaseDll /p:Platform=x64 /p:OutDir="%KERNEL_BUILD%\bin\\" /p:IntDir="%KERNEL_BUILD%\obj\\" /m /v:minimal
+REM value ends with a doubled backslash: the pair resolves to one literal "\".
+"%MSBUILD_EXE%" "%OFFICIAL_SRC%\AutoHotkeyx.sln" /p:Configuration=Release /p:Platform=x64 /p:OutDir="%KERNEL_BUILD%\official_bin\\" /p:IntDir="%KERNEL_BUILD%\official_obj\\" /m /v:minimal
 if !ERRORLEVEL! neq 0 (
-    echo   [ERROR] kernel build failed
+    echo   [ERROR] official kernel build failed
     if not "!AHKDECK_CHAINED!"=="1" pause
     exit /b 1
 )
 
-if not exist "%KERNEL_BUILD%\bin\AutoHotkey64.dll" (
-    echo   [ERROR] kernel build produced no AutoHotkey64.dll
+if not exist "%KERNEL_BUILD%\official_bin\AutoHotkey64.exe" (
+    echo   [ERROR] official kernel build produced no AutoHotkey64.exe
     if not "!AHKDECK_CHAINED!"=="1" pause
     exit /b 1
 )
-copy /y "%KERNEL_BUILD%\bin\AutoHotkey64.dll" "%KERNEL_DLL%" >nul
+copy /y "%KERNEL_BUILD%\official_bin\AutoHotkey64.exe" "%OFFICIAL_EXE%" >nul
 
 REM ---- .3rd must stay source-only ------------------------------------------
-for /d /r "%KERNEL_SRC%" %%D in (temp) do (
+for /d /r "%OFFICIAL_SRC%" %%D in (temp) do (
     if exist "%%D" rmdir /s /q "%%D"
 )
 
-echo   kernel DLL: .temp\kernel\AutoHotkey64.dll
+echo   official kernel: .temp\kernel_official\AutoHotkey64.exe
 echo.
 
 :done

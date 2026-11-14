@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/Theme.h"
+#include "ui/UiMetrics.h"
 
 #include <FL/Fl_Choice.H>
 #include <FL/Fl_Menu_Item.H>
@@ -99,16 +100,12 @@ public:
 
 	void draw() override
 	{
-		Fl_Color fill = color();
 		// A deactivated button is a permanent-but-unavailable action: no hover
-		// or press fill until it is activated again.
-		if (active() && (Fl::belowmouse() == this || Fl::pushed() == this))
-		{
-			fill = DeckColors().highlight1;
-			if (Fl::pushed() == this)
-				fill = DeckColors().highlight2;
-		}
-		draw_box(box(), fill);
+		// or press fill until it is activated again. The fill rule itself lives
+		// in UiMetrics so hand-painted cells and widgets cannot drift apart.
+		const bool hovered = active() && Fl::belowmouse() == this;
+		const bool pressed = active() && Fl::pushed() == this;
+		draw_box(box(), UiButtonFill(color(), hovered || pressed, pressed));
 		draw_label();
 	}
 
@@ -132,8 +129,8 @@ public:
 
 	void fit() { resize(x(), y(), fitWidth(), h()); }
 
-	static constexpr int kPadX = 12;
-	static constexpr int kMinW = 48;
+	static constexpr int kPadX = kUiButtonPadX;
+	static constexpr int kMinW = kUiButtonMinW;
 };
 
 // Right-aligned row of fitted buttons, vertically centred on `aBarCentreY`

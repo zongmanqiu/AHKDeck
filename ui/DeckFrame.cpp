@@ -24,6 +24,7 @@ namespace
 {
 const wchar_t *kTitleBarProp = L"AHKDeck.TitleBar";
 const wchar_t *kFixedSizeProp = L"AHKDeck.FrameFixedSize";
+const wchar_t *kMinClientHProp = L"AHKDeck.MinClientH";
 constexpr int kMinClientW = 600;
 constexpr int kMinClientH = 400;
 
@@ -31,6 +32,17 @@ LRESULT WINAPI DeckFrameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
 	switch (msg)
 	{
+	case WM_ACTIVATE:
+	{
+		LRESULT ret = nativeSubclass::forward(hwnd, DeckFrameProc, msg, wp, lp);
+		// m185: activation re-orders the layered glow layers. Re-seat every
+		// one behind its own owner so a click inside a dialog cannot bury
+		// them (see WindowShadow.cpp for the owner-side half of the fix).
+		if (LOWORD(wp) != WA_INACTIVE)
+			windowShadow::syncAll();
+		return ret;
+	}
+
 	case WM_SIZE:
 	{
 		LRESULT ret = nativeSubclass::forward(hwnd, DeckFrameProc, msg, wp, lp);
@@ -81,7 +93,18 @@ LRESULT WINAPI DeckFrameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 			mmi->ptMaxSize.y = (work.bottom - work.top) + WindowFrame::NC_PAD;
 		}
 		mmi->ptMinTrackSize.x = kMinClientW + 2 * WindowFrame::NC_PAD;
-		mmi->ptMinTrackSize.y = kMinClientH + WindowFrame::NC_PAD;
+		// m183: the 400px floor belongs to the main window. A short dialog
+		// may opt into a smaller one; Windows was stretching the 300px
+		// subscription manager back to 400 and leaving a wall of empty card.
+		int minClientH = kMinClientH;
+		HANDLE stored = GetPropW(hwnd, kMinClientHProp);
+		if (stored)
+		{
+			const INT_PTR value = reinterpret_cast<INT_PTR>(stored);
+			if (value > 0 && value < 2000)
+				minClientH = (int)value;
+		}
+		mmi->ptMinTrackSize.y = minClientH + WindowFrame::NC_PAD;
 		return 0;
 	}
 
@@ -181,24 +204,26 @@ LRESULT WINAPI DeckFrameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 // button, and everything else - region, ring, glow, icon, repaint - runs the
 // same code, so the two can never drift apart.
 void InstallFrameCommon(Fl_Window *win, DeckTitleBar *titleBar, unsigned int borderColor,
-	bool rounded, bool shadow, bool fixedSize)
+	bool rounded, bool shadow, bool fixedSize, bool onTaskbar, int aMinClientH)
 {
 	HWND hwnd = win ? fl_xid(win) : nullptr;
 	if (!hwnd)
 		return;
 
 	// border(0) makes FLTK create a WS_POPUP | WS_EX_TOOLWINDOW window. The main
-	// window puts itself back on the taskbar; a modal dialog stays off it.
+	// window puts itself back on the taskbar; a modal dialog stays off it -
+	// including a resizable one, where a taskbar button would put a second
+	// entry for a window that is not the application.
 	LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-	if (fixedSize)
-	{
-		exStyle |= WS_EX_TOOLWINDOW;
-		exStyle &= ~WS_EX_APPWINDOW;
-	}
-	else
+	if (onTaskbar)
 	{
 		exStyle &= ~WS_EX_TOOLWINDOW;
 		exStyle |= WS_EX_APPWINDOW;
+	}
+	else
+	{
+		exStyle |= WS_EX_TOOLWINDOW;
+		exStyle &= ~WS_EX_APPWINDOW;
 	}
 	SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exStyle);
 
@@ -209,11 +234,24 @@ void InstallFrameCommon(Fl_Window *win, DeckTitleBar *titleBar, unsigned int bor
 		SetPropW(hwnd, kFixedSizeProp, reinterpret_cast<HANDLE>(1));
 	else
 		RemovePropW(hwnd, kFixedSizeProp);
+	if (aMinClientH > 0)
+		SetPropW(hwnd, kMinClientHProp,
+			reinterpret_cast<HANDLE>(static_cast<INT_PTR>(aMinClientH)));
+	else
+		RemovePropW(hwnd, kMinClientHProp);
 
 	LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
 	style |= WS_SYSMENU;
 	if (!fixedSize)
-		style |= WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+	{
+		style |= WS_THICKFRAME | WS_MAXIMIZEBOX;
+		// No taskbar button means a minimized window cannot be brought back,
+		// so the minimize box only exists where onTaskbar does.
+		if (onTaskbar)
+			style |= WS_MINIMIZEBOX;
+		else
+			style &= ~WS_MINIMIZEBOX;
+	}
 	SetWindowLongPtrW(hwnd, GWL_STYLE, style);
 
 	// Grow the outer rect so the CLIENT area keeps the size the caller asked
@@ -252,13 +290,16 @@ void InstallFrameCommon(Fl_Window *win, DeckTitleBar *titleBar, unsigned int bor
 void InstallDeckFrame(Fl_Window *win, DeckTitleBar *titleBar, unsigned int borderColor,
 	bool rounded, bool shadow)
 {
-	InstallFrameCommon(win, titleBar, borderColor, rounded, shadow, false);
+	InstallFrameCommon(win, titleBar, borderColor, rounded, shadow, false, true, 0);
 }
 
 void InstallDialogFrame(Fl_Window *win, DeckTitleBar *titleBar, unsigned int borderColor,
-	bool rounded, bool shadow)
+	bool rounded, bool shadow, bool aResizable, int aMinClientH)
 {
-	InstallFrameCommon(win, titleBar, borderColor, rounded, shadow, true);
+	// A resizable dialog keeps the dialog's ex-style (no taskbar button) but
+	// gains the sizing frame and the maximize box (m179).
+	InstallFrameCommon(win, titleBar, borderColor, rounded, shadow,
+		!aResizable, false, aMinClientH);
 }
 
 void ToggleDeckMaximize(Fl_Window *win)

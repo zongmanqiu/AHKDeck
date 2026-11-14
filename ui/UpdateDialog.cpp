@@ -1,18 +1,21 @@
 // ui/UpdateDialog.cpp - see ui/UpdateDialog.h
 #include "ui/UpdateDialog.h"
 
+#include "core/AppPaths.h"
+
 #include "ui/DeckTitleBar.h"
-#include "ui/SourceChoice.h"
 #include "ui/Theme.h"
 #include "ui/ThemeWidgets.h"
+#include "ui/UiMetrics.h"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Box.H>
-#include <FL/Fl_Choice.H>
 #include <FL/Fl_Progress.H>
 #include <FL/Fl_Text_Buffer.H>
 #include <FL/Fl_Text_Display.H>
 #include <FL/fl_draw.H>
+
+#include <windows.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -27,10 +30,11 @@ namespace ui
 namespace
 {
 
-// The deck's rhythm (m087): a control is 26px, a row is 26px, a bar is 32px.
-constexpr int kMargin = 16;
-constexpr int kGap = 8;
-constexpr int kRowH = 26;
+// m182: shared facts from UiMetrics. The status strip stays 40px because it
+// wraps two lines, and the notes pane keeps its own fixed height.
+constexpr int kMargin = kUiEdge;
+constexpr int kGap = kUiGap;
+constexpr int kRowH = kUiControl;
 constexpr int kStatusH = 40; // two wrapped lines
 constexpr int kBarW = 120;   // fixed column: the status text always starts after it
 constexpr int kBarH = 18;
@@ -91,13 +95,14 @@ struct Job
 
 UpdateDialog::UpdateDialog(const std::string &aCurrentVersion,
 	const std::string &aUrlGitee, const std::string &aUrlGithub, int aSource,
-	std::function<void(int)> aSaveSource, std::function<bool()> aConfirmRestart)
+	std::function<bool()> aConfirmRestart)
 	: DeckDialog(kWidth, DeckTitleBar::kHeight + 408, "更新"),
 	  mCurrentVersion(aCurrentVersion),
 	  mUrlGitee(aUrlGitee),
 	  mUrlGithub(aUrlGithub),
-	  mSaveSource(std::move(aSaveSource)),
-	  mConfirmRestart(std::move(aConfirmRestart))
+	  mConfirmRestart(std::move(aConfirmRestart)),
+	  mSource(aSource == 1 ? 1 : 0),
+	  mSourceShown(aSource == 1 ? 1 : 0)
 {
 	const ThemeColors &colors = DeckColors();
 	const int top = ContentTop();
@@ -134,10 +139,15 @@ UpdateDialog::UpdateDialog(const std::string &aCurrentVersion,
 	sourceLabel->labelsize(TextSize());
 	sourceLabel->labelcolor(colors.text1);
 
-	// m147: the mirror list and its styling live in SourceChoice.h now, shared
-	// with the script-download dialog.
-	mSource = MakeSourceChoice(kMargin + labelW, y, 110, kRowH,
-		aSource, OnSource, this);
+	// m179: read-only. The official mirror is one global preference
+	// (设置 > 选项… → 官方下载源) shared with the script catalog, so this row
+	// states which one is in force instead of offering a second place to
+	// change it (curseen's call, and the reason it moved there).
+	mSourceText = new Fl_Box(FL_NO_BOX, kMargin + labelW, y, 110, kRowH, nullptr);
+	mSourceText->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+	mSourceText->labelsize(TextSize());
+	mSourceText->labelcolor(HintColour());
+	UpdateSourceLabel();
 
 	mBtnRefresh = new HoverButton(0, y, 0, kRowH, "联网检查");
 	mBtnRefresh->color(colors.background2);
@@ -246,19 +256,29 @@ void UpdateDialog::SetBusy(bool aBusy)
 	mBusy = aBusy;
 	const Fl_Color normal = NormalColour();
 	const Fl_Color dim = HintColour();
-	// Labels only: the click guards in StartCheck()/StartDownload()/OnSource()
-	// are what actually block a second concurrent worker.
+	// Labels only: the click guards in StartCheck()/StartDownload() are what
+	// actually block a second concurrent worker.
 	mBtnRefresh->labelcolor(aBusy ? dim : normal);
-	mSource->textcolor(aBusy ? dim : normal);
-	// m148: SettingsChoice draws its arrow with labelcolor(), so dim that too
-	// or the arrow stays dark while the text goes grey during a check.
-	mSource->labelcolor(aBusy ? dim : normal);
+	mSourceText->labelcolor(aBusy ? dim : normal);
 	mBtnRefresh->redraw();
-	mSource->redraw();
+	mSourceText->redraw();
 	if (aBusy)
 		SetInstallable(false);
 	else
 		SetInstallable(mCanInstall);
+}
+
+// m179: the mirror row is a statement, not a control. A fallback is spelled
+// out because otherwise the row would quietly contradict 选项.
+void UpdateDialog::UpdateSourceLabel()
+{
+	if (!mSourceText)
+		return;
+	mSourceBuf = (mSourceShown == 1) ? "GitHub" : "Gitee";
+	if (mSourceShown != mSource)
+		mSourceBuf += "（回退）";
+	mSourceText->copy_label(mSourceBuf.c_str());
+	mSourceText->redraw();
 }
 
 void UpdateDialog::ShowNotes(const std::string &aText)
@@ -335,7 +355,10 @@ void UpdateDialog::SetInstallable(bool aCan)
 
 std::string UpdateDialog::DownloadUrl() const
 {
-	const bool github = mSource->value() == 1;
+	// m179: the mirror that is in force is the one the last check actually
+	// reached (mSourceShown), not the stored preference - a fallback must not
+	// send the download back to the host that just failed.
+	const bool github = mSourceShown == 1;
 	const std::string &preferred = github ? mManifest.urlGithub : mManifest.urlGitee;
 	if (!preferred.empty())
 		return preferred;
@@ -400,7 +423,7 @@ void UpdateDialog::StartCheck()
 	// Read the fields once on the UI thread: the worker must not touch widgets.
 	const std::string gitee = mUrlGitee;
 	const std::string github = mUrlGithub;
-	const int source = mSource->value();
+	const int source = mSource;
 	const std::string current = mCurrentVersion;
 
 	SetBusy(true);
@@ -464,15 +487,14 @@ void UpdateDialog::ApplyCheckResult(const UpdateCheckResult &aResult)
 	// from.
 	SetStatus(aResult.fromCache ? "上次检查结果（本地缓存）" : "检查完成", false);
 	// A fresh manifest may have come from the FALLBACK mirror (CheckUpdate
-	// tries the selected source first). Move the picker to the source that
-	// actually answered; otherwise the download would use the URL that just
-	// failed.
+	// tries the selected source first). The stored preference is not touched
+	// any more - it lives in 选项 - but the row says which mirror answered and
+	// DownloadUrl() follows it, so the download never retries the host that
+	// just failed.
 	if (aResult.online && !aResult.fromCache)
 	{
-		mSource->value(aResult.sourceUsed == 1 ? 1 : 0);
-		mSource->redraw();
-		if (mSaveSource)
-			mSaveSource(mSource->value());
+		mSourceShown = aResult.sourceUsed == 1 ? 1 : 0;
+		UpdateSourceLabel();
 	}
 	ApplyInstallability(aResult.hasUpdate);
 }
@@ -501,8 +523,12 @@ void UpdateDialog::StartDownload()
 		version.erase(0, 1);
 	if (version.empty())
 		version = "latest";
-	const std::string zipPath = exeDir + "AHKDeck_" + version + ".zip";
-	const std::string batPath = exeDir + "ahkdeck_update.bat";
+	// m177: the package and the updater script are scratch, not install files -
+	// both live under temp\, so an interrupted update leaves no evidence in the
+	// program folder.
+	CreateDirectoryW(AppTempRoot().c_str(), nullptr);
+	const std::string zipPath = exeDir + "temp\\AHKDeck_" + version + ".zip";
+	const std::string batPath = exeDir + "temp\\ahkdeck_update.bat";
 
 	SetBusy(true);
 	SetTransferMode(true);
@@ -594,22 +620,6 @@ void UpdateDialog::StartDownload()
 	{
 		FinishFailure("无法启动下载线程");
 	}
-}
-
-void UpdateDialog::OnSource(Fl_Widget *, void *aData)
-{
-	auto *self = static_cast<UpdateDialog *>(aData);
-	if (self->mBusy)
-		return;
-	const int source = self->mSource->value() == 1 ? 1 : 0;
-	if (self->mSaveSource)
-		self->mSaveSource(source);
-	// The source only decides WHICH URL a package would come from, so
-	// switching it re-evaluates availability - it starts no check or download.
-	if (self->mManifest.version.empty())
-		return;
-	self->ApplyInstallability(
-		CompareVersions(self->mCurrentVersion, self->mManifest.version) > 0);
 }
 
 } // namespace ui

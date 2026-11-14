@@ -47,6 +47,20 @@ DeckDialog::~DeckDialog()
 	windowShadow::detach(this);
 }
 
+void DeckDialog::SetResizable(bool aOn)
+{
+	mResizable = aOn;
+	if (!mTitleBar)
+		return;
+	// The caption and the frame style are one decision made twice (bar + Win32
+	// style); both read mResizable, so they cannot disagree.
+	mTitleBar->setCaption(aOn ? DeckTitleBar::kCaptionMaxClose
+							  : DeckTitleBar::kCaptionCloseOnly);
+	if (!aOn)
+		return;
+	mTitleBar->setOnToggleMaximize([this]() { ToggleDeckMaximize(this); });
+}
+
 void DeckDialog::SetFrameOptions(bool aRounded, bool aShadow)
 {
 	mRounded = aRounded;
@@ -110,7 +124,7 @@ void DeckDialog::InstallFrame()
 {
 	mFrameInstalled = true;
 	InstallDialogFrame(this, mTitleBar, (unsigned int)FrameBorderColour(),
-		mRounded, mShadow);
+		mRounded, mShadow, mResizable, mMinClientHeight);
 }
 
 void DeckDialog::SyncFrame()

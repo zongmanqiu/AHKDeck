@@ -9,7 +9,9 @@
 #include "ui/HotkeyCapture.h"
 #include "ui/HoverMenuBar.h"
 #include "ui/ImeInPlace.h"
+#include "ui/OptionsDialog.h"
 #include "ui/ScriptDownloadDialog.h"
+#include "ui/SubscribeDialog.h"
 #include "ui/ScriptInfoDialog.h"
 #include "ui/UpdateDialog.h"
 #include "ui/WindowFrame.h"
@@ -17,6 +19,7 @@
 
 #include "agent/McpServer.h"
 #include "agent/Toolbox.h"
+#include "core/AppPaths.h"
 #include "core/ExeCompiler.h"
 #include "core/Housekeeping.h"
 #include "core/Hotkeys.h"
@@ -252,7 +255,9 @@ Json JsonObjectMember(const Json &aObject, const char *aKey)
 
 // One row height for every content row: list rows, column captions, search,
 // editor/console/AI headers. The list's 16px font + 5px linespacing is 26.
-constexpr int kRowHeight = 26;
+// m182: aliased to the shared control height so the dialogs and the main
+// window can never disagree about what "one row" is.
+constexpr int kRowHeight = kUiControl;
 
 // m046: the log takes a quarter of the space below the editor toolbar, and the
 // divider is a visible 3px line rather than the old 1px hairline.
@@ -867,6 +872,13 @@ public:
 	// header block plus the facts only the disk knows. Public for the same
 	// reason the two above are: the screenshot hook opens it without a gesture.
 	void ShowScriptInfo(int aIndex);
+	// m177: 设置 > 选项… - public for the screenshot hook, like the three above.
+	void ShowOptions();
+	// m178: 帮助 > 关于 - same reason.
+	void ShowAbout();
+	// m180: 获取脚本 > 订阅 - the subscription list on its own. Public for the
+	// screenshot hook, like the four above.
+	void ShowSubscribeManager();
 	// m097/m098: Help > MCP 接入 - opens docs\MCP接入.md next to the exe.
 	// A dialog would only be a second copy of what that file already says.
 	void OpenMcpDocs();
@@ -1043,7 +1055,10 @@ private:
 		IdCloseScriptEdit,
 		IdRunOrStopEdit,
 		// m146: appended last so every existing command id keeps its value.
-		IdScriptDownload
+		IdScriptDownload,
+		// m177: 脚本/删除 (row menu + menu bar) and 设置/选项….
+		IdDeleteScript,
+		IdOptions
 	};
 
 	void HandleMenu(int aId);
@@ -1111,7 +1126,7 @@ private:
 	void StopSelected();
 	void StopEverything();
 
-	void OpenLogs();
+	void OpenTempFolder();
 	void EditSelectedExternally();
 	void RefreshFromDisk();
 
@@ -1122,7 +1137,7 @@ private:
 	void RebindHotkeys();
 	void LoadHotkeyFile();
 	void HandleIntent(const NativeHooks::Intent &aIntent);
-	// m109: one startup pass over .temp\ / Backups\ / Logs\ (settings.json knob).
+	// m109: one startup pass over temp\ (设置/选项… picks the window, m177).
 	void RunHousekeeping();
 	// m108: the tray menu's 主窗口 action, shared by the tray click and the
 	// window's global hotkey so both entries behave the same.
@@ -1145,6 +1160,18 @@ private:
 	void SaveAndRun();
 	void NewScript();
 	void RenameSelected();
+	// m177: moves the selected script into temp\deleted (no dialog: the move is
+	// recoverable, and the console names the file).
+	void DeleteSelected();
+	// m179: the official mirror and the subscribed catalogs, read once per
+	// window that needs them. `download.source` is the current key; the two
+	// per-dialog keys it replaced are still honoured when present.
+	int OfficialDownloadSource() const;
+	std::vector<CustomCatalogSource> CustomCatalogSources() const;
+	// m180: one writer for scripts.custom. Both entry points (获取脚本 passes it
+	// down to 订阅管理, and the screenshot hook opens 订阅管理 directly) must
+	// produce the same JSON, so the shape is written here once.
+	void SaveCustomSources(const std::vector<CustomCatalogSource> &aSources);
 	void PromptSaveNewScript(bool aRun);
 	void ShowNameDialog(const char *aTitle, const std::string &aInitial,
 		std::function<std::string(const std::string &)> aValidate,
@@ -1213,7 +1240,7 @@ private:
 	static void OnReload(Fl_Widget *, void *aSelf) { static_cast<DeckWindow *>(aSelf)->RefreshFromDisk(); }
 	static void OnNotepad(Fl_Widget *, void *aSelf) { static_cast<DeckWindow *>(aSelf)->EditSelectedExternally(); }
 
-	static void OnLogs(Fl_Widget *, void *aSelf) { static_cast<DeckWindow *>(aSelf)->OpenLogs(); }
+	static void OnLogs(Fl_Widget *, void *aSelf) { static_cast<DeckWindow *>(aSelf)->OpenTempFolder(); }
 	static void OnClear(Fl_Widget *, void *aSelf);
 	static void OnCopy(Fl_Widget *, void *aSelf);
 	static void OnSelect(Fl_Widget *, void *aSelf);
@@ -1405,7 +1432,12 @@ private:
 	bool mWindowShadow = true;
 	// m112: the script list is the deck's spine and is always shown; only the
 	// editor/console column can be folded away.
-	bool mShowEditor = true;
+	// m176: a fresh install starts folded. Double-click on a row runs/stops the
+	// script (m023) and never touches the editor, so the fold costs nothing
+	// there; EnsureEditorVisible() still pulls the column out for the six
+	// actions that genuinely need it (new / open / find / replace / tool write).
+	// A user's saved settings.json wins over this default either way.
+	bool mShowEditor = false;
 	// m112: the two draggable shares (percent). 50/25 reproduce the old fixed
 	// equal-columns / quarter-console layout exactly, so nothing moves on a
 	// fresh install.
@@ -3167,10 +3199,12 @@ const std::vector<DeckWindow::CommandSpec> &DeckWindow::Commands()
 		{IdSave, "save", "文件/保存", "菜单", "保存", FL_CTRL + 's', 0, false},
 		{IdCloseScriptEdit, "closeScript", "文件/关闭脚本", "菜单", "关闭脚本", 0, 0, false},
 		// m149: the sub-menu verb is 打开, so the items are just the places
-		// (日志文件夹 / 配置文件) instead of repeating 打开 twice. The script
+		// (临时文件夹 / 配置文件) instead of repeating 打开 twice. The script
 		// folder is NOT here - its object is the script library, so it sits
 		// with the other library actions under 脚本.
-		{IdLogs, "logs", "文件/打开/日志文件夹", "菜单", "日志文件夹", 0, 0, false},
+		// m177: the folder is temp\ now, not logs\ - it holds every run-time
+		// artefact (logs, backups, scratch, deleted scripts).
+		{IdLogs, "tempFolder", "文件/打开/临时文件夹", "菜单", "临时文件夹", 0, 0, false},
 		{IdOpenConfigFile, "openConfig", "文件/打开/配置文件", "菜单", "配置文件", 0, 0, false},
 		{IdQuit, "quit", "文件/退出", "菜单", "退出", 0, 0, false},
 		{IdEditUndo, "undo", "编辑/撤销", "菜单", "撤销", FL_CTRL + 'z', 0, true},
@@ -3204,9 +3238,11 @@ const std::vector<DeckWindow::CommandSpec> &DeckWindow::Commands()
 		{IdRestart, "restart", "脚本/重启", "菜单", "重启", 0, 0, false},
 		{IdEditSelected, "editSelected", "脚本/编辑", "菜单", "编辑", 0, 0, false},
 		{IdNotepad, "notepad", "脚本/用记事本打开", "菜单", "用记事本打开", 0, 0, false},
-		// m172: the per-script band's last row now; the divider flag moved off
-		// 用记事本打开 to here, keeping the "line below the last row" rule.
-		{IdCompileExe, "compileExe", "脚本/编译为 EXE", "菜单", "编译为 EXE", 0, FL_MENU_DIVIDER, false},
+		// m172: 编译为 EXE ends the destructive half of the per-script band.
+		{IdCompileExe, "compileExe", "脚本/编译为 EXE", "菜单", "编译为 EXE", 0, 0, false},
+		// m177: 删除 closes the per-script band, so the divider that used to sit
+		// under 编译为 EXE moves here (FL_MENU_DIVIDER draws BELOW its item).
+		{IdDeleteScript, "deleteScript", "脚本/删除…", "菜单", "删除…", 0, FL_MENU_DIVIDER, false},
 		{IdStopAll, "stopAll", "脚本/全部停止", "菜单", "全部停止", 0, 0, false},
 		{IdRunAll, "runAll", "脚本/全部运行", "菜单", "全部运行", 0, FL_MENU_DIVIDER, false},
 		// m147: grouping is by the object acted upon, not by whether the action
@@ -3218,6 +3254,9 @@ const std::vector<DeckWindow::CommandSpec> &DeckWindow::Commands()
 		{IdRescan, "rescan", "脚本/重新扫描", "菜单", "重新扫描", 0, 0, false},
 		{IdScriptDownload, "scriptDownload", "脚本/获取脚本…", "菜单", "获取脚本…", 0, 0, false},
 		{IdOpenScriptsFolder, "openScriptsFolder", "脚本/打开脚本文件夹", "菜单", "打开脚本文件夹", 0, 0, false},
+		// m177: 设置 holds the deck's own preferences, and 选项… comes first
+		// because it is the one a new user opens; 快捷键… is the advanced one.
+		{IdOptions, "options", "设置/选项…", "菜单", "选项…", 0, 0, false},
 		{IdHotkeyEdit, "hotkeyEdit", "设置/快捷键…", "菜单", "快捷键…", 0, 0, false},
 		// m092: the About box and the updater live in their own 帮助 group,
 		// after 设置. The key menu.about is unchanged, so existing rebinds
@@ -3660,9 +3699,10 @@ DeckWindow::DeckWindow(Engine &aEngine)
 
 	SyncEditorActions();
 
-	// m109: .temp\ / Backups\ / Logs\ are per-machine scratch space, cleaned once
-	// per launch. The window lives in settings.json (advanced users only), so the
-	// default is written back once to make the key discoverable.
+	// m109/m177: temp\ is per-machine scratch space, cleaned once per launch with
+	// the window 设置/选项… writes. The key still has to exist before the window
+	// is ever opened, so a first run writes the default back - that is also how a
+	// hand-edited settings.json discovers the name.
 	mHousekeepingDays = RetentionDaysFromJson(mConfigRoot);
 	{
 		const Json &existing = mConfigRoot["housekeeping"];
@@ -3684,7 +3724,9 @@ DeckWindow::DeckWindow(Engine &aEngine)
 	else
 	{
 		mReady = true;
-		Append("[engine] kernel ready (in-process, no second process)");
+		// m192 P3: the kernel is a separate EXE now, one child process per
+		// session. The old "in-process, no second process" line was a lie.
+		Append("[engine] 内核就绪（进程外，每个会话一个子进程）");
 	}
 
 
@@ -3695,6 +3737,8 @@ DeckWindow::DeckWindow(Engine &aEngine)
 	RefreshEditorSnapshot();
 
 
+	// m177: temp\ is the one root every run-time artefact lives under;
+	// RunHousekeeping (below) creates it and keeps its four subdirectories.
 	ScanScripts();
 	LoadHotkeyFile();
 	RunHousekeeping();
@@ -3924,7 +3968,7 @@ int DeckWindow::handle(int aEvent)
 		}
 		if (key == FL_F + 11)
 		{
-			OpenLogs();
+			OpenTempFolder();
 			return 1;
 		}
 		if (ctrl && shift && (key == 'c' || key == 'C'))
@@ -4757,16 +4801,16 @@ void DeckWindow::UpdateStatus()
 			++running;
 	}
 
-	// m095: name the fork, not just the number. We embed AutoHotkey_H (a patched
-	// v2 fork), whose build number can differ from the official release, so
-	// "2.0.25" alone would read as upstream AutoHotkey. The number itself still
-	// comes from the DLL's version resource (KernelVersionOf), never from a
-	// constant here.
-	std::string engine = "AutoHotkey_H";
+	// m192 P3: one official AutoHotkey kernel EXE, spawned once per session -
+	// no fork, no in-process DLL. mReady means Engine::Load found a usable
+	// kernel path, so the wording is 就绪/不可用 rather than 载入/未载入.
+	// The number itself still comes from the PE version resource
+	// (KernelVersionOf), never from a constant here.
+	std::string engine = "AutoHotkey";
 	if (mKernelSummary.empty())
-		engine += mReady ? " 就绪" : " 未载入";
+		engine += mReady ? " 就绪" : " 不可用";
 	else
-		engine += " " + mKernelSummary + (mReady ? std::string() : std::string(" (未载入)"));
+		engine += " " + mKernelSummary + (mReady ? std::string() : std::string(" (不可用)"));
 	std::string text = "引擎: " + engine;
 	text += "   |   脚本: " + std::to_string((int)mScripts.size());
 	if (mVisible.size() != mScripts.size())
@@ -5312,19 +5356,22 @@ void DeckWindow::SyncEditorRunButton()
 	mConsoleRun->redraw();
 }
 
-void DeckWindow::OpenLogs()
+void DeckWindow::OpenTempFolder()
 {
-	std::wstring root = mEngine.LogRoot();
+	// m177: the temp root, not logs\. One folder holds the logs, the backups,
+	// the compile/validate scratch and the deleted scripts - showing the user
+	// logs\ only would hide the other three.
+	const std::wstring root = AppTempRoot();
 	if (root.empty())
 	{
-		Append("[ui] 日志目录尚未建立（引擎未加载）");
+		Append("[ui] 无法确定临时目录（程序路径解析失败）");
 		return;
 	}
 	HINSTANCE result = ShellExecuteW(nullptr, L"open", root.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 	if ((INT_PTR)result <= 32)
-		Append("[ui] 无法打开日志目录");
+		Append("[ui] 无法打开临时目录");
 	else
-		Append("[ui] 打开日志目录: " + Utf8(root));
+		Append("[ui] 打开临时目录: " + Utf8(root));
 }
 
 void DeckWindow::EditSelectedExternally()
@@ -5666,6 +5713,106 @@ void DeckWindow::RenameSelected()
 			RebindHotkeys();
 			Append("[ui] 已重命名为 " + leaf);
 		});
+}
+
+// m177: delete = move into temp\deleted, never a hard delete. The user asked
+// for a row action and a menu row that both act on ONE script, and for the
+// folder next to the exe to stay clean. A move gives both: the list loses the
+// row, the file survives (the temp retention pass eventually retires it), and
+// there is no dialog to click through because nothing is destroyed.
+void DeckWindow::DeleteSelected()
+{
+	const int index = SelectedIndex();
+	if (index < 0)
+	{
+		Append("[ui] 先在左侧选一个脚本");
+		return;
+	}
+	const ScriptRow row = mScripts[(size_t)index];
+
+	// The editor holds the same file. Close it first: CloseScript() writes
+	// unsaved edits, so the copy that lands in temp\deleted is the text the user
+	// last saw. If the write fails the script stays in the list untouched.
+	if (!mEditPath.empty() && SamePathI(mEditPath, row.path))
+	{
+		CloseScript();
+		if (!mEditPath.empty() && SamePathI(mEditPath, row.path))
+			return;
+	}
+
+	// A running script must not be moved out from under its own thread.
+	if (IsRunning(row))
+	{
+		if (!mEngine.StopSession(row.session))
+			Append("[ui] " + row.name + " 已经结束或无法停止");
+		InvalidateSessions();
+	}
+
+	const std::wstring dir = AppTempDir(kTempDeleted);
+	if (dir.empty())
+	{
+		Append("[ui] 无法确定临时目录（程序路径解析失败）");
+		return;
+	}
+
+	SYSTEMTIME st;
+	GetLocalTime(&st);
+	char stamp[32];
+	std::snprintf(stamp, sizeof(stamp), "%04u%02u%02u-%02u%02u%02u",
+		st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+
+	// row.name carries the ".ahk" leaf (m132); the stamp goes before the dot so
+	// the copy still opens by double-click.
+	const size_t dot = row.name.find_last_of('.');
+	const std::string stem = dot == std::string::npos ? row.name : row.name.substr(0, dot);
+	const std::string ext = dot == std::string::npos ? std::string(".ahk") : row.name.substr(dot);
+
+	std::wstring target;
+	std::string leafName;
+	for (int attempt = 1; attempt <= 99 && target.empty(); ++attempt)
+	{
+		std::string candidate = stem + "-" + stamp;
+		if (attempt > 1)
+			candidate += "-" + std::to_string(attempt);
+		candidate += ext;
+		const std::wstring path = dir + L"\\" + Wide(candidate);
+		if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES)
+		{
+			target = path;
+			leafName = candidate;
+		}
+	}
+	if (target.empty())
+	{
+		Append("[ui] 临时目录里同名文件太多，删除已取消");
+		return;
+	}
+
+	if (!MoveFileW(row.path.c_str(), target.c_str()))
+	{
+		Append("[ui] 删除失败（" + std::to_string((unsigned long)GetLastError()) +
+			"）：脚本可能正在退出，稍后再试");
+		return;
+	}
+
+	// The binding belonged to the file: dropping it here is what keeps 快捷键
+	// from listing a script that no longer exists.
+	const std::string binding = HotkeyOf(mHotkeys, row.name);
+	if (!binding.empty())
+	{
+		SetHotkeyEntry(mHotkeys, row.name, std::string());
+		std::string error;
+		if (!SaveHotkeys(mHotkeyPath, mHotkeys, error))
+			Append("[hotkey] 删除后保存失败：" + error);
+	}
+	if (!mConsolePath.empty() && SamePathI(mConsolePath, row.path))
+		mConsolePath.clear();
+
+	ScanScripts();
+	RefreshList();
+	RebindHotkeys();
+	Append("[ui] 已删除 " + row.name + "（移到 " +
+		AppTempRelative(kTempDeleted, leafName) + "）");
 }
 
 // m044: close the current script but keep the editor column. Unsaved changes
@@ -6207,8 +6354,8 @@ void DeckWindow::ShowContextMenu(int aIndex)
 	// own tray menu stays on the row's 菜单 (gear) cell.
 	mContextLabels.clear();
 	mContextItems.clear();
-	mContextLabels.reserve(8);
-	mContextItems.reserve(8);
+	mContextLabels.reserve(10);
+	mContextItems.reserve(10);
 	auto add = [this](const char *aLabel, int aId) {
 		mContextLabels.push_back(aLabel);
 		Fl_Menu_Item item = { mContextLabels.back().c_str(), 0, nullptr, (void *)(intptr_t)aId, 0 };
@@ -6222,6 +6369,9 @@ void DeckWindow::ShowContextMenu(int aIndex)
 	// m172: 编译为 EXE joins the per-script actions, right before 信息 (which
 	// stays last - it is the "properties" row, not an action).
 	add("编译为 EXE", 7);
+	// m177: 删除 sits with the other per-script actions. No divider above 信息
+	// (m153's rule still holds: a rule there split the menu in two halves).
+	add("删除…", 8);
 	// m153: no divider above 信息 after all. FL_MENU_DIVIDER on 重命名 drew a
 	// rule that made a five-item menu read as two unrelated halves; Explorer's
 	// 属性 sits in the same list without one.
@@ -6267,6 +6417,9 @@ void DeckWindow::ShowContextMenu(int aIndex)
 		break;
 	case 7: // 编译为 EXE
 		CompileSelected(aIndex);
+		break;
+	case 8: // 删除…
+		DeleteSelected();
 		break;
 	default:
 		break;
@@ -6475,11 +6628,12 @@ void DeckWindow::OpenScriptMenu(int aIndex)
 
 	// m160: a script that emptied its own tray menu (A_TrayMenu.Delete()) turns
 	// the message below into an EMPTY popup - to the kernel it is exactly "the
-	// user right-clicked my tray icon". Ask the kernel for the live HMENU first
-	// (m132's read-only DeckTrayMenu export) and fall back to bringing the
-	// script's window to the front when there is nothing to show. Every entry
-	// lands here - the list context action, the gear cell, the menu-bar command
-	// and the tray "running" fallback - so this one guard covers all of them.
+	// user right-clicked my tray icon". Ask the engine for the live HMENU first
+	// (m192 P3: rebuilt host-side from the child's JSON snapshot, not exported
+	// from an in-process kernel) and fall back to bringing the script's window
+	// to the front when there is nothing to show. Every entry lands here - the
+	// list context action, the gear cell, the menu-bar command and the tray
+	// "running" fallback - so this one guard covers all of them.
 	const HMENU scriptMenu = mEngine.TrayMenu(row.session);
 	if (!scriptMenu || GetMenuItemCount(scriptMenu) == 0)
 	{
@@ -6496,8 +6650,11 @@ void DeckWindow::OpenScriptMenu(int aIndex)
 	// AHK_NOTIFYICON (WM_USER+4) with lParam = WM_RBUTTONUP is the kernel's own
 	// "the user right-clicked my tray icon" path: MainWindowProc calls
 	// mTrayMenu->Display() with no coordinates, and Display() then reads
-	// GetCursorPos itself (.3rd\AutoHotkey_H-v2.0.25\source\script2.cpp:164-192,
-	// util.cpp:1809-1830). That is why no point is passed here: A_TrayMenu.Show(x, y)
+	// GetCursorPos itself (.3rd\AutoHotkey-v2.0.31-src\source\script2.cpp:281-311).
+	// m192 P3: AHKDECK_NO_TRAY only suppresses the icon, NOT this handler, and
+	// the snapshot hook already forced UserMenu::CreateHandle(), so the child
+	// can still display its own menu on this path. That is why no point is
+	// passed here: A_TrayMenu.Show(x, y)
 	// interprets x/y by the script's Menu coord mode, whose default is *Client*
 	// (g.CoordMode = 0), so a screen point handed to it is silently offset by the
 	// foreground window's origin - measured delta (428,331) with a window at
@@ -6706,18 +6863,10 @@ void DeckWindow::ShowUpdateDialog()
 		? update["urlGitee"].AsString() : std::string(kDefaultUpdateUrlGitee);
 	const std::string github = update.Has("urlGithub")
 		? update["urlGithub"].AsString() : std::string(kDefaultUpdateUrlGithub);
-	const int storedSource = update["source"].AsInt(0);
-	const int source = storedSource == 1 ? 1 : 0;
+	// m179: the mirror comes from 选项 → 官方下载源; this dialog only reads it.
+	const int source = OfficialDownloadSource();
 
 	UpdateDialog dialog(VersionString(), gitee, github, source,
-		[this](int aSource) {
-			Json node = JsonObjectMember(mConfigRoot, "update");
-			node.Set("source", Json((double)(aSource == 1 ? 1 : 0)));
-			mConfigRoot.Set("update", node);
-			std::string error;
-			if (!SaveSettings(&error))
-				Append("[settings] 更新源未能写入: " + error);
-		},
 		[this]() { return ConfirmRestartForUpdate(); });
 	dialog.SetFrameOptions(mRoundedCorners, mWindowShadow);
 	dialog.Run();
@@ -6733,16 +6882,13 @@ void DeckWindow::ShowScriptDownloadDialog()
 		? node["manifestGitee"].AsString() : std::string(kDefaultCatalogUrlGitee);
 	const std::string github = node.Has("manifestGithub")
 		? node["manifestGithub"].AsString() : std::string(kDefaultCatalogUrlGithub);
-	const int source = node["source"].AsInt(0) == 1 ? 1 : 0;
+	// m179: the mirror is a global preference now (选项 → 官方下载源); this
+	// window resolves it and never writes it back.
+	const int source = OfficialDownloadSource();
 
 	ScriptDownloadCallbacks callbacks;
-	callbacks.saveSource = [this](int aSource) {
-		Json scripts = JsonObjectMember(mConfigRoot, "scripts");
-		scripts.Set("source", Json((double)(aSource == 1 ? 1 : 0)));
-		mConfigRoot.Set("scripts", scripts);
-		std::string error;
-		if (!SaveSettings(&error))
-			Append("[settings] 脚本来源未能写入: " + error);
+	callbacks.saveCustom = [this](const std::vector<CustomCatalogSource> &aSources) {
+		SaveCustomSources(aSources);
 	};
 	callbacks.refreshScripts = [this]() { RefreshFromDisk(); };
 	callbacks.stopScript = [this](const std::string &aName) {
@@ -6766,7 +6912,9 @@ void DeckWindow::ShowScriptDownloadDialog()
 	};
 	callbacks.log = [this](const std::string &aLine) { Append(aLine); };
 
-	ScriptDownloadDialog dialog(gitee, github, source, callbacks);
+	ScriptDownloadDialog dialog(
+		source == 1 ? ManifestSource::OfficialGithub : ManifestSource::OfficialGitee,
+		source == 1 ? github : gitee, CustomCatalogSources(), callbacks);
 	dialog.SetFrameOptions(mRoundedCorners, mWindowShadow);
 	dialog.Run();
 }
@@ -6900,27 +7048,167 @@ void DeckWindow::RebindHotkeys()
 		Append("[" + UiClock() + "] 全局快捷键已绑定 " + std::to_string(bound) + " 个");
 }
 
+void DeckWindow::ShowAbout()
+{
+	// Modal and self-sizing (it fits its own widest line), so nothing to do
+	// afterwards - unlike ShowOptions, which writes settings back.
+	ShowAboutDialog(mRoundedCorners, mWindowShadow);
+}
+
+void DeckWindow::ShowSubscribeManager()
+{
+	// The window persists through the callback, exactly as it does when opened
+	// from 获取脚本; here the log sink is the only thing that needs the deck.
+	SubscribeCallbacks callbacks;
+	callbacks.save = [this](const std::vector<CustomCatalogSource> &aSources) {
+		SaveCustomSources(aSources);
+	};
+	callbacks.log = [this](const std::string &aLine) { Append(aLine); };
+
+	std::vector<CustomCatalogSource> updated;
+	ShowSubscribeDialog(CustomCatalogSources(), mRoundedCorners, mWindowShadow,
+		callbacks, updated);
+}
+
+int DeckWindow::OfficialDownloadSource() const
+{
+	// 0 = Gitee, 1 = GitHub. One value for four consumers: the script catalog
+	// URL, which mirror a script downloads from, the update manifest URL, and
+	// which release asset the updater takes. Anything unexpected reads as 0.
+	const Json &download = mConfigRoot["download"];
+	if (download.IsObject() && download.Has("source"))
+		return download["source"].AsInt(0) == 1 ? 1 : 0;
+	// Pre-m179 settings: the two dialogs each kept their own copy of the same
+	// preference. Read whichever survived so an existing install is not reset.
+	const Json &update = mConfigRoot["update"];
+	if (update.IsObject() && update.Has("source"))
+		return update["source"].AsInt(0) == 1 ? 1 : 0;
+	const Json &scripts = mConfigRoot["scripts"];
+	if (scripts.IsObject() && scripts.Has("source"))
+		return scripts["source"].AsInt(0) == 1 ? 1 : 0;
+	return 0;
+}
+
+std::vector<CustomCatalogSource> DeckWindow::CustomCatalogSources() const
+{
+	std::vector<CustomCatalogSource> sources;
+	const Json &custom = mConfigRoot["scripts"]["custom"];
+	if (!custom.IsArray())
+		return sources;
+	for (size_t i = 0; i < custom.Size(); ++i)
+	{
+		const Json &item = custom[i];
+		CustomCatalogSource source;
+		if (item.IsObject())
+		{
+			// m180: url plus the name the manifest reported for itself. A bare
+			// string is the m179 shape - still loadable, just uncached (the
+			// 订阅管理 window will show the host until the next fetch).
+			source.url = item["url"].AsString();
+			source.name = item["name"].AsString();
+		}
+		else
+		{
+			source.url = item.AsString();
+		}
+		if (!source.url.empty())
+			sources.push_back(std::move(source));
+	}
+	return sources;
+}
+
+void DeckWindow::SaveCustomSources(const std::vector<CustomCatalogSource> &aSources)
+{
+	Json scripts = JsonObjectMember(mConfigRoot, "scripts");
+	Json list = Json::MakeArray();
+	for (const CustomCatalogSource &source : aSources)
+	{
+		// m180: an object, not a bare URL string - the name the manifest
+		// reported has to survive a restart so 订阅管理 can still title a
+		// source it cannot reach today.
+		Json item = Json::MakeObject();
+		item.Set("url", Json(source.url));
+		if (!source.name.empty())
+			item.Set("name", Json(source.name));
+		list.Push(item);
+	}
+	scripts.Set("custom", list);
+	mConfigRoot.Set("scripts", scripts);
+	std::string error;
+	if (!SaveSettings(&error))
+		Append("[settings] 订阅来源未能写入: " + error);
+}
+
+void DeckWindow::ShowOptions()
+{
+	const int oldSource = OfficialDownloadSource();
+	OptionsResult chosen;
+	if (!ShowOptionsDialog(mHousekeepingDays, oldSource, mRoundedCorners,
+		mWindowShadow, chosen))
+		return;
+
+	const bool daysChanged = chosen.days != mHousekeepingDays;
+	const bool sourceChanged = chosen.source != oldSource;
+	mHousekeepingDays = chosen.days;
+	if (daysChanged || sourceChanged)
+	{
+		std::string error;
+		if (daysChanged)
+		{
+			Json housekeeping = JsonObjectMember(mConfigRoot, "housekeeping");
+			housekeeping.Set("max_age_days", Json((double)chosen.days));
+			mConfigRoot.Set("housekeeping", housekeeping);
+		}
+		if (sourceChanged)
+		{
+			// m179: ONE setting for both manifests and both download paths -
+			// the script catalog and the updater read it, neither writes it.
+			Json download = JsonObjectMember(mConfigRoot, "download");
+			download.Set("source", Json((double)chosen.source));
+			mConfigRoot.Set("download", download);
+		}
+		if (!SaveSettings(&error))
+			Append("[settings] 保存失败：" + error);
+	}
+	if (sourceChanged)
+		Append("[download] 官方下载源：" +
+			std::string(chosen.source == 1 ? "GitHub" : "Gitee"));
+	// Run it now: a user who just picked 7 天 should not have to restart to see
+	// the folder shrink. The same pass reports how many files went.
+	RunHousekeeping();
+	Append("[cleanup] 临时文件保留时长：" +
+		(chosen.days <= 0 ? std::string("永不") : std::to_string(chosen.days) + " 天"));
+}
+
 void DeckWindow::RunHousekeeping()
 {
+	// The four subdirectories are a FIXED layout, but the pass removes any
+	// directory it empties (that is how backups\<timestamp> disappears). So the
+	// layout is restored on the way out - including on the 「永不」 path, where
+	// nothing is pruned but a hand-deleted temp\ still has to come back.
+	const auto restoreLayout = []() { EnsureAppTempLayout(); };
 	if (mHousekeepingDays <= 0)
-		return; // settings.json's housekeeping.max_age_days turned it off
+	{
+		restoreLayout();
+		return;
+	}
 	FILETIME now = {};
 	GetSystemTimeAsFileTime(&now);
 	const std::uint64_t nowTicks = (static_cast<std::uint64_t>(now.dwHighDateTime) << 32) |
 		static_cast<std::uint64_t>(now.dwLowDateTime);
-	const std::wstring base = ExeDirectory();
-	const wchar_t *kDirs[] = {L".temp", L"Backups", L"Logs"};
-	int removed = 0;
-	for (const wchar_t *name : kDirs)
-	{
+	// m177: ONE root, one pass. logs\, backups\, work\ and deleted\ are cleaned
+	// by the same rule; the walk is recursive and skips junctions.
+	const int removed = [nowTicks, this]() {
 		std::string error;
-		removed += PruneOlderThan(base + L"\\" + name, mHousekeepingDays, nowTicks, error);
+		const int count = PruneOlderThan(AppTempRoot(false), mHousekeepingDays, nowTicks, error);
 		if (!error.empty())
-			Append("[cleanup] " + Utf8(std::wstring(name)) + "：" + error);
-	}
+			Append("[cleanup] temp：" + error);
+		return count;
+	}();
+	restoreLayout();
 	if (removed > 0)
 		Append("[" + UiClock() + "] 已清理 " + std::to_string(removed) + " 个超过 " +
-			std::to_string(mHousekeepingDays) + " 天的旧文件");
+			std::to_string(mHousekeepingDays) + " 天的临时文件");
 }
 
 void DeckWindow::ShowFromTray()
@@ -7036,7 +7324,14 @@ void DeckWindow::UpdateTrayTip()
 
 void DeckWindow::UpdateKernelSummary()
 {
-	mKernelSummary = KernelVersionOf(ExeDirectory() + L"\\AutoHotkey64.dll");
+	// m192 P3: the engine is now out-of-process and the in-process DLL is gone.
+	// The status bar must read the very EXE Engine::Load resolves (optionally
+	// overridden by AHKDECK_KERNEL), not the retired AutoHotkey64.dll.
+	std::wstring kernel = ExeDirectory() + L"\\AutoHotkey64.exe";
+	wchar_t override[MAX_PATH] = {0};
+	if (GetEnvironmentVariableW(L"AHKDECK_KERNEL", override, MAX_PATH) > 0)
+		kernel = override;
+	mKernelSummary = KernelVersionOf(kernel);
 }
 
 
@@ -7483,7 +7778,7 @@ void DeckWindow::HandleMenu(int aId)
 	case IdSave: SaveEditor(); break;
 	case IdSaveRun: SaveAndRun(); break;
 	case IdReloadEditor: ReloadEditor(); break;
-	case IdLogs: OpenLogs(); break;
+	case IdLogs: OpenTempFolder(); break;
 	case IdQuit: RequestQuit(); hide(); break;
 	case IdHideTray:
 		if (mHooks.HasTrayIcon())
@@ -7547,6 +7842,8 @@ void DeckWindow::HandleMenu(int aId)
 	case IdRunAll: RunEverything(); break;
 	case IdEditSelected: EditSelected(); break;
 	case IdCompileExe: CompileSelected(SelectedIndex()); break;
+	case IdDeleteScript: DeleteSelected(); break;
+	case IdOptions: ShowOptions(); break;
 	case IdRescan: RefreshFromDisk(); break;
 	case IdScriptDownload: ShowScriptDownloadDialog(); break;
 	case IdOpenScriptsFolder: OpenScriptsFolder(); break;
@@ -7561,7 +7858,7 @@ void DeckWindow::HandleMenu(int aId)
 		break;
 	}
 	case IdAbout:
-		ShowAboutDialog(mRoundedCorners, mWindowShadow);
+		ShowAbout();
 		break;
 	case IdCheckUpdate:
 		ShowUpdateDialog();
@@ -8021,6 +8318,38 @@ int Run(HINSTANCE, bool aServeMcpStdio)
 		if (GetEnvironmentVariableA("AHKDECK_OPEN_SCRIPT_INFO", openInfo,
 			sizeof(openInfo)) > 0)
 			window->ShowScriptInfo(std::atoi(openInfo));
+	}
+
+	// m177 screenshot hook only: open 设置 > 选项… without a gesture.
+	{
+		char openOptions[8] = {0};
+		if (GetEnvironmentVariableA("AHKDECK_OPEN_OPTIONS", openOptions,
+			sizeof(openOptions)) > 0)
+			window->ShowOptions();
+	}
+
+	// m178 screenshot hook only: open 帮助 > 关于 without a gesture.
+	{
+		char openAbout[8] = {0};
+		if (GetEnvironmentVariableA("AHKDECK_OPEN_ABOUT", openAbout,
+			sizeof(openAbout)) > 0)
+			window->ShowAbout();
+	}
+
+	// m180 screenshot hook only: open 获取脚本 without a gesture.
+	{
+		char openDownload[8] = {0};
+		if (GetEnvironmentVariableA("AHKDECK_OPEN_DOWNLOAD", openDownload,
+			sizeof(openDownload)) > 0)
+			window->ShowScriptDownloadDialog();
+	}
+
+	// m180 screenshot hook only: open 订阅管理 without a gesture.
+	{
+		char openSubscribe[8] = {0};
+		if (GetEnvironmentVariableA("AHKDECK_OPEN_SUBSCRIBE", openSubscribe,
+			sizeof(openSubscribe)) > 0)
+			window->ShowSubscribeManager();
 	}
 
 	// m082 gate hook (test-only): put a Scripts file into the editing area

@@ -1,19 +1,36 @@
-// deck engine - in-process AutoHotkey_H host: one session per script.
+// deck engine - out-of-process AutoHotkey host: one session per child process.
 //
-// One script = one kernel thread inside *this* process. No child process, no
-// second task-manager entry: closing the host closes every script, because the
-// kernel threads die with the process image that owns them.
+// m192: the kernel is the official AutoHotkey interpreter built as a plain EXE
+// (patches/AutoHotkey-v2.0.31), started as a child of this host. One script =
+// one process: closing the host closes every script through the session's job
+// object (KILL_ON_JOB_CLOSE), and a script that crashes can no longer take the
+// host down with it - the property the in-process kernel never had.
 //
-// A Session is the unit the UI and the AI both see: an id, the script it runs,
-// a state, an exit code and exactly one JSONL of kernel records. m011 keeps the
-// session bookkeeping here (not in the CLI) so every consumer routes records the
-// same way - a second copy of that logic in the UI would be a second truth.
+// The public surface is the m011 one, unchanged on purpose: the UI, the MCP
+// agent and the journal gate all keep speaking the same vocabulary (session id,
+// state, rc, one JSONL per session, PopRecord routing). Only the transport
+// underneath changed:
 //
-// Errors never reach a modal dialog: the patched kernel (see
-// patches/AutoHotkey_H-v2.0.25/source/deck_sink.h) hands one UTF-8 JSON line to
-// OnError() on the failing thread. That callback only enqueues - PopRecord()
-// attributes the line to a session, appends it to that session's JSONL and
-// returns it, so no consumer has to redo the routing.
+//   errors/warnings   kernel patch 2 (AHKDECK_ERROR_FILE) appends UTF-8 JSON
+//                     lines to a per-session raw file under temp\work; the
+//                     engine pumps it, attributes each record to its session
+//                     and writes the same JSONL the in-process kernel produced.
+//   FileAppend "*"    the child's stdout (STARTF_USESTDHANDLES pipe); a per-
+//                     session reader thread wraps each line as a "stdout"
+//                     record, the same shape the H kernel's output sink gave.
+//   tray menu         kernel patch 4 (AHKDECK_DUMP_MENU): the host asks the
+//                     child's main window for a JSON snapshot of the live tray
+//                     menu and rebuilds it as a host-owned HMENU, so the deck's
+//                     merged tray submenu (m132) survives the process split.
+//                     Clicks travel back as WM_COMMAND to the same window -
+//                     the path the kernel itself uses for its default item.
+//   stop              WM_CLOSE to the child's main window (the kernel's own
+//                     close path); TerminateJobObject only when no window is
+//                     left to close.
+//
+// Errors never reach a modal dialog: the patched kernel writes them to the raw
+// file instead. Records still funnel through one queue, PopRecord attributes
+// and logs them, so no consumer has to redo the routing.
 //
 // Direction: engine depends on core; core never includes engine.
 
@@ -36,14 +53,20 @@ struct ErrorRecord
 {
 	std::string json;     // kernel line with "session":<id> inserted, verbatim in the JSONL
 	std::string ts;       // local time, ISO-ish with milliseconds
-	std::string kind;     // "error" | "warn"
+	std::string kind;     // "error" | "warn" | "stdout" | "log"
 	std::string phase;    // "load" | "runtime"
 	std::string severity; // "fail" | "critical" | "fail_or_ok" | "warn"
 	std::string file;     // script file name as the official dialog shows it
 	std::string message;
 	std::string extra;    // "Specifically:" text (may be empty)
+	// m175: what the dialog shows but file+line cannot carry. A run copy lives
+	// in .temp and a #Include'd frame is another file, so "line 11" alone often
+	// does not identify the code the caller has in front of it.
+	std::string func;     // function that was running ("" at load time)
+	std::string source;   // text of the failing line, no line number
+	std::string stack;    // call stack, top frame first, leaf file names; "\r\n" separated
 	DWORD session = 0;    // owning session; 0 = could not be attributed
-	int thread = 0;
+	int thread = 0;       // the child process id in the m192 engine
 	int seq = 0;
 	int line = 0;
 	// The record has been written to its session's JSONL. The log write and the
@@ -55,8 +78,8 @@ struct ErrorRecord
 
 enum class SessionState
 {
-	Running,  // kernel thread alive (still executing even after StopSession)
-	Stopping, // WM_QUIT posted, not reaped yet
+	Running,  // child process alive
+	Stopping, // WM_CLOSE posted, not reaped yet
 	Finished  // reaped: rc is valid
 };
 
@@ -65,8 +88,8 @@ struct Session
 	DWORD id = 0;
 	std::wstring path;   // script path exactly as StartSession was given it
 	std::string name;    // base name, UTF-8 (console + journal label)
-	std::string logPath; // relative logs\<name>-<id>-<timestamp>.jsonl
-	DWORD threadId = 0;  // kernel script thread; 0 when it never started
+	std::string logPath; // relative temp\logs\<name>-<id>-<timestamp>.jsonl (m177)
+	DWORD threadId = 0;  // m192: the child process id; 0 when it never started
 	SessionState state = SessionState::Running;
 	DWORD rc = 0;        // official exit code, valid once Finished
 	bool fatal = false;  // a "fail" record landed on this session
@@ -77,11 +100,11 @@ class Engine
 public:
 	static Engine &Instance();
 
-	// Loads the patched kernel and installs the error sink.
-	// On failure aError explains why (relative paths only, never a machine path).
+	// Locates the kernel executable (AHKDECK_KERNEL override, else next to the
+	// host). On failure aError explains why (relative paths only).
 	bool Load(std::string &aError);
 	void Unload();
-	bool IsLoaded() const { return mModule != nullptr; }
+	bool IsLoaded() const { return !mKernelPath.empty(); }
 
 	// The absolute log root pinned by Load() (m011). The UI opens this exact
 	// directory instead of rebuilding a relative "logs" path: a running script
@@ -89,21 +112,20 @@ public:
 	// Empty until Load() succeeds.
 	const std::wstring &LogRoot() const { return mLogRoot; }
 
-	// Starts one script as one session and returns its id (> 0). A script that
-	// cannot even be read or parsed still gets a session, finished with the
+	// Starts one script as one child process and returns its id (> 0). A script
+	// that cannot even be opened still gets a session, finished with the
 	// official load-failure code 2, so its error record has a home. aError stays
 	// non-empty while the session runs only if its JSONL could not be created.
 	DWORD StartSession(const std::wstring &aScriptPath, const std::vector<std::wstring> &aArgs,
 		std::string &aError);
 
-	// Validates one script file with the kernel's own /validate mode (m103):
-	// the command-line parser runs LoadFromFile and returns before a single
-	// statement executes. Two hard facts decide where this may be called:
-	//   * the kernel exposes no other validate entry (no COM method, no export);
-	//   * once any source file has been loaded, the COM Main refuses with
-	//     ERROR_NOT_SUPPORTED - so this belongs in a FRESH process, which is why
-	//     the deck spawns itself as a short-lived helper (agent/Toolbox).
-	// Returns the kernel exit code (0 = parses, 2 = load failure, 1 = no kernel);
+	// Validates one script file with the kernel's own /validate switch:
+	// LoadFromFile parses and returns before a single statement executes.
+	// m192: the kernel is a plain EXE again, so validate is one short-lived
+	// child (no fresh-process constraint, no COM Main re-entry). The child runs
+	// with AHKDECK_ERROR_FILE set, so load errors come back as the same JSON
+	// records a session would produce. Returns the kernel exit code
+	// (0 = parses, 2 = load failure, 1 = no kernel);
 	// aRecords receives the load errors without log routing (there is no session).
 	int ValidateFile(const std::wstring &aScriptPath, std::string &aError,
 		std::vector<ErrorRecord> &aRecords);
@@ -114,26 +136,28 @@ public:
 	std::vector<Session> Sessions() const;
 	static const char *StateName(SessionState aState);
 
-	// The session's script-thread main window, or nullptr when there is none
-	// (unknown id, never started, or already finished). That window is what the
-	// kernel dispatches OnMessage() through, so the deck's menu bridge (m023) is
-	// posted here: it replaces v1.3's WinExist("ahk_pid " pid), which cannot work
-	// now that every session lives in one process.
+	// The session's main window (class "AutoHotkey", process = the child), or
+	// nullptr when there is none. That window is what the kernel dispatches
+	// OnMessage() through, so the deck's menu bridge (m023) is posted here -
+	// and the tray bridge's WM_COMMAND clicks land on exactly the same path.
 	HWND FindScriptWindow(DWORD aSessionId) const;
 
-	// m132: the session's live tray menu, so the deck's tray menu can nest the
-	// script's own menu as a real submenu. Read-only - the handle belongs to the
-	// script thread. nullptr when the session is unknown, finished, or the
-	// kernel in use has no DeckTrayMenu export.
+	// m132: the session's live tray menu as a HOST-OWNED HMENU, rebuilt from the
+	// JSON snapshot kernel patch 4 writes on demand. The engine keeps exactly
+	// one menu per session and destroys it on the next request or when the
+	// session goes away. nullptr when the session is unknown, finished, or the
+	// child did not answer in time (a script busy in a long operation cannot
+	// pump messages; the next tick tries again).
 	HMENU TrayMenu(DWORD aSessionId) const;
 
-	// Blocks until the session's kernel thread exits; writes its official exit
+	// Blocks until the session's child process exits; writes its official exit
 	// code (load failure = 2, same as AutoHotkey.exe) into aExitCode once it has
 	// finished. Returns false while still running, or when aSessionId is unknown.
 	bool WaitSession(DWORD aSessionId, DWORD aTimeoutMs, DWORD *aExitCode);
 
-	// Stops the way the kernel itself does it: PostThreadMessage(WM_QUIT) ->
-	// message loop -> clean TerminateApp. StopSession returns false when the
+	// Stops the way the kernel itself does it: WM_CLOSE to the child's main
+	// window -> OnExit -> clean exit. When there is no window left to close,
+	// TerminateJobObject is the last resort. StopSession returns false when the
 	// session is already finished; StopAll returns how many it signalled.
 	bool StopSession(DWORD aSessionId);
 	size_t StopAll();
@@ -164,34 +188,42 @@ private:
 	Engine(const Engine &) = delete;
 	Engine &operator=(const Engine &) = delete;
 
-	static void __stdcall OnError(const char *aJson);
-	// m061: FileAppend's stdout target, same queue and same attribution rules.
-	static void __stdcall OnOutput(const char *aJson);
-	static void __stdcall OnThreadStarted(void *aCtx);
-
-	// Waits until the kernel's report about a failed load has arrived. The
-	// kernel raises it from the script thread, which can be a moment AFTER
-	// NewThread() gave up on that thread - and the first load of a cold kernel
-	// takes long enough for the caller to read the log before the record
-	// exists. Without this wait, "the script failed" and "the script said
-	// nothing" look the same to the caller (m083).
-	bool WaitForLoadRecord(const std::wstring &aScriptPath, DWORD aTimeoutMs);
-
-	// Routes one record to its session, writes it to that session's JSONL and
-	// applies the "a failure stops the script" rule. The caller holds
-	// mSessionsMutex; the return value is the thread to ask to stop, or 0.
-	DWORD PublishRecord(ErrorRecord &aRecord);
-
+	// One child process: the interpreter exe running one script, its own job
+	// object (host exit = every script gone), a raw error JSONL the kernel
+	// patch appends to, and a stdout pipe a reader thread drains.
 	struct Entry
 	{
 		Session pub;
-		HANDLE thread = nullptr; // owned; closed when the session is reaped
-		bool started = false;    // the kernel called our start callback
-		void *ctx = nullptr;     // StartCtx (see DeckEngine.cpp), owned by the entry
-		std::wstring logFull;    // absolute, resolved against mLogRoot
-		std::ofstream log;       // pub.logPath
-		size_t logBytes = 0;     // bytes in log; m106 rotation threshold
+		HANDLE process = nullptr;  // owned; closed when the session is reaped
+		HANDLE job = nullptr;      // owned; closed with the process
+		DWORD pid = 0;
+		bool started = false;      // the child process was actually created
+		std::wstring rawPath;      // absolute: temp\work\<...>-errors.jsonl (kernel appends)
+		ULONGLONG rawOffset = 0;   // bytes already pumped into the queue
+		std::wstring menuPath;     // absolute: temp\work\<...>-menu.json (patch 4 target)
+		HANDLE stdoutRead = nullptr;   // owned pipe end; closing it ends the reader
+		HANDLE stdoutThread = nullptr; // owned reader thread
+		std::string stdoutPending;     // partial line across ReadFile boundaries
+		std::wstring logFull;          // absolute, resolved against mLogRoot
+		std::ofstream log;             // pub.logPath
+		size_t logBytes = 0;           // bytes in log; m106 rotation threshold
 	};
+
+	// Reads the child's stdout pipe. One thread per session: ReadFile blocks,
+	// and that is the point - no polling, and closing the read handle ends it.
+	static unsigned __stdcall StdoutThread(void *aArg);
+	void EnqueueStdout(Entry &aEntry, const std::string &aLine);
+
+	// Reads every session's raw error file from rawOffset on, parses complete
+	// lines and enqueues them. Called by every consumer before it looks at the
+	// queue - the child appends asynchronously, so without the pump an early
+	// reader would see an empty log and conclude the script said nothing (m083).
+	void PumpRawFiles();
+
+	// Routes one record to its session, writes it to that session's JSONL and
+	// applies the "a failure stops the script" rule. The caller holds
+	// mSessionsMutex; the return value is the session to ask to stop, or 0.
+	DWORD PublishRecord(ErrorRecord &aRecord);
 
 	// All four assume mSessionsMutex is held.
 	DWORD Route(const ErrorRecord &aRecord) const;
@@ -203,7 +235,11 @@ private:
 	void RotateLog(Entry &aEntry);
 	void ReapLocked(Entry &aEntry) const;
 
-	HMODULE mModule = nullptr;
+	// m132: (re)builds the host-owned HMENU from a JSON snapshot. The caller
+	// holds mSessionsMutex; the returned menu is stored in mMenus.
+	HMENU BuildMenuLocked(DWORD aSessionId, const std::wstring &aSnapshotPath);
+
+	std::wstring mKernelPath; // the official interpreter exe, patched
 	// The log root, absolute, captured in Load(): an AHK script's A_WorkingDir is
 	// the *process* cwd, so the first script that starts flips it (m011 reading:
 	// session logs started landing in the script's own folder). Nothing the host
@@ -214,19 +250,11 @@ private:
 	// m106: per-session JSONL cap, from AHKDECK_LOG_CAP (the gate sets it small);
 	// 8 MB keeps a heartbeat script's log two-files-small without touching code.
 	size_t mLogCap = 8u * 1024u * 1024u;
-	// DeckNewThread, not the public 3-parameter NewThread: only the 5-parameter
-	// form wires the start callback, which both proves the script loaded and
-	// yields a race-free thread handle.
-	DWORD(__stdcall *mNewThread)(LPWSTR, LPWSTR, LPWSTR, void (*)(void *), void *) = nullptr;
-	BOOL(__stdcall *mAhkReady)(DWORD) = nullptr;
-	void(__stdcall *mSetErrorSink)(void(__stdcall *)(const char *)) = nullptr;
-	void(__stdcall *mSetOutputSink)(void(__stdcall *)(const char *)) = nullptr;
-	void(__stdcall *mSetIsolation)(bool) = nullptr;
-	void *(__stdcall *mTrayMenu)(DWORD) = nullptr; // m132, optional: DeckTrayMenu
 
 	mutable std::mutex mSessionsMutex;
 	std::map<DWORD, Entry> mSessions;    // key = session id, ascending
-	std::map<DWORD, DWORD> mThreadIndex; // kernel thread id -> session id (kept after finish)
+	std::map<DWORD, DWORD> mThreadIndex; // child pid -> session id (kept after finish)
+	mutable std::map<DWORD, HMENU> mMenus; // session id -> host-owned tray menu (m132)
 	DWORD mNextSessionId = 1;
 
 	std::string mUnattributedDisplay; // logs\_unattributed-<timestamp>.jsonl, for the console

@@ -138,9 +138,9 @@ try {
         if ($len2 -le $len1) { throw "heartbeat did not grow" }
     }
     else {
-        # m083: the logs live next to the EXE (the deck is portable), not in the
-        # project root. The old path only worked when the exe sat in the root.
-        $logDir = Join-Path (Split-Path -Parent (Resolve-Path $Exe).Path) "Logs"
+        # m083/m177: the logs live under the exe's temp\ root (the deck is
+        # portable), not in the project root.
+        $logDir = Join-Path (Split-Path -Parent (Resolve-Path $Exe).Path) "temp\logs"
         $log = Get-ChildItem $logDir -Filter "ui-boom-*.jsonl" |
             Sort-Object LastWriteTime | Select-Object -Last 1
         if (-not $log) { throw "no JSONL for ui-boom in $logDir" }

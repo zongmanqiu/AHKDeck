@@ -1,6 +1,7 @@
 // core/Updater.cpp - see core/Updater.h. FLTK-free on purpose.
 #include "core/Updater.h"
 
+#include "core/AppPaths.h"
 #include "core/Json.h"
 #include "core/TextFile.h"
 
@@ -570,6 +571,7 @@ void WriteCacheManifest(const std::string &aRawJson)
 	const std::wstring path = Utf8ToWide(UpdateCachePathUtf8());
 	if (path.empty())
 		return;
+	CreateDirectoryW(AppTempRoot().c_str(), nullptr); // first run: the folder may not exist yet
 	std::string error;
 	WriteTextDocument(path, aRawJson, TextEncoding::Utf8NoBom, false, nullptr, error);
 }
@@ -613,7 +615,8 @@ int CompareVersions(const std::string &aCurrent, const std::string &aLatest)
 
 std::string UpdateCachePathUtf8()
 {
-	return GetExeDirUtf8() + "update.cache.json";
+	// m177: a cache is scratch, so it lives under temp\ with the rest of it.
+	return GetExeDirUtf8() + "temp\\update.cache.json";
 }
 
 bool ReadCachedManifest(UpdateManifest &aOut, long long &aAgeSeconds)
@@ -720,8 +723,12 @@ bool WriteUpdateBat(const std::string &aExeDirUtf8,
 	bat += line("set \"APP=" + app + "\"");
 	bat += line("set \"APPD=" + appNoSlash + "\"");
 	bat += line("set \"ZIP=" + zip + "\"");
-	bat += line("set \"EXT=" + app + "ahkdeck_update_tmp\"");
-	bat += line("set \"LOG=" + app + "ahkdeck_update.log\"");
+	// m177: the update's own scratch is not part of the install. Extract dir,
+	// log and rollback copy all live under temp\, so a finished update leaves
+	// the program folder with the same five names it had before.
+	bat += line("set \"EXT=" + app + "temp\\update\\extracted\"");
+	bat += line("set \"LOG=" + app + "temp\\logs\\update.log\"");
+	bat += line("mkdir \"!APPD!\\temp\\logs\" 2>nul");
 	bat += line("set \"FAIL=0\"");
 	bat += line(">>\"!LOG!\" echo =============================================");
 	bat += line(">>\"!LOG!\" echo AHKDeck Updater %DATE% %TIME%");
@@ -752,10 +759,10 @@ bool WriteUpdateBat(const std::string &aExeDirUtf8,
 	// user sees; a half-copied install with a broken exe is a bricked machine.
 	bat += line("echo Backing up the current build...");
 	bat += line(">>\"!LOG!\" echo backup");
-	bat += line("if exist \"!APPD!\\ahkdeck_backup\" rmdir /s /q \"!APPD!\\ahkdeck_backup\" 2>nul");
-	bat += line("mkdir \"!APPD!\\ahkdeck_backup\" 2>nul");
-	bat += line("if exist \"!APP!AHKDeck.exe\" copy /y \"!APP!AHKDeck.exe\" \"!APPD!\\ahkdeck_backup\\AHKDeck.exe\" >nul 2>&1");
-	bat += line("if exist \"!APPD!\\Scripts\" robocopy \"!APPD!\\Scripts\" \"!APPD!\\ahkdeck_backup\\Scripts\" /e /njh /njs /ndl /nc /ns /np /r:1 /w:1 >>\"!LOG!\" 2>&1");
+	bat += line("if exist \"!APPD!\\temp\\backups\\update\" rmdir /s /q \"!APPD!\\temp\\backups\\update\" 2>nul");
+	bat += line("mkdir \"!APPD!\\temp\\backups\\update\" 2>nul");
+	bat += line("if exist \"!APP!AHKDeck.exe\" copy /y \"!APP!AHKDeck.exe\" \"!APPD!\\temp\\backups\\update\\AHKDeck.exe\" >nul 2>&1");
+	bat += line("if exist \"!APPD!\\Scripts\" robocopy \"!APPD!\\Scripts\" \"!APPD!\\temp\\backups\\update\\Scripts\" /e /njh /njs /ndl /nc /ns /np /r:1 /w:1 >>\"!LOG!\" 2>&1");
 
 	// Extract, then locate the payload (a zip may wrap everything in one or
 	// two folders).
@@ -801,8 +808,8 @@ bool WriteUpdateBat(const std::string &aExeDirUtf8,
 	bat += line("if \"!FAIL!\"==\"1\" (");
 	bat += line("  echo Rolling back...");
 	bat += line("  >>\"!LOG!\" echo rollback");
-	bat += line("  if exist \"!APPD!\\ahkdeck_backup\\AHKDeck.exe\" copy /y \"!APPD!\\ahkdeck_backup\\AHKDeck.exe\" \"!APP!AHKDeck.exe\" >>\"!LOG!\" 2>&1");
-	bat += line("  if exist \"!APPD!\\ahkdeck_backup\\Scripts\" robocopy \"!APPD!\\ahkdeck_backup\\Scripts\" \"!APPD!\\Scripts\" /e /njh /njs /ndl /nc /ns /np /r:1 /w:1 >>\"!LOG!\" 2>&1");
+	bat += line("  if exist \"!APPD!\\temp\\backups\\update\\AHKDeck.exe\" copy /y \"!APPD!\\temp\\backups\\update\\AHKDeck.exe\" \"!APP!AHKDeck.exe\" >>\"!LOG!\" 2>&1");
+	bat += line("  if exist \"!APPD!\\temp\\backups\\update\\Scripts\" robocopy \"!APPD!\\temp\\backups\\update\\Scripts\" \"!APPD!\\Scripts\" /e /njh /njs /ndl /nc /ns /np /r:1 /w:1 >>\"!LOG!\" 2>&1");
 	bat += line(")");
 
 	// Clean up ONLY on success: a failed robocopy keeps the package so a retry

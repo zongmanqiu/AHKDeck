@@ -167,8 +167,10 @@ if "!FLTK_NEED!"=="1" (
 )
 echo.
 
-REM ---- [3.5/4] kernel DLL -----------------------------------------------------------
-REM 4a in build_kernel.bat: patched AHK_H ReleaseDll -> .temp\kernel\AutoHotkey64.dll
+REM ---- [3.5/4] official kernel -------------------------------------------------------
+REM m192 P4: build_kernel.bat builds ONE thing - the patched official v2.0.31
+REM interpreter EXE (Release|x64 -> .temp\kernel_official\AutoHotkey64.exe).
+REM The AHK_H DLL and the tools\ compile base are retired.
 set "AHKDECK_CHAINED_SAVE=!AHKDECK_CHAINED!"
 set "AHKDECK_CHAINED=1"
 call "%SCRIPT_DIR%build_kernel.bat"
@@ -221,19 +223,22 @@ if !ERRORLEVEL! neq 0 (
     exit /b 1
 )
 
-REM ---- ship the kernel next to the exe ----------------------------------------------
-REM One directory, two files: AHKDeck.exe + the patched interpreter it hosts.
-if exist "%PROJECT_ROOT%\.temp\kernel\AutoHotkey64.dll" (
-    copy /y "%PROJECT_ROOT%\.temp\kernel\AutoHotkey64.dll" "%OUTPUT_DIR%\AutoHotkey64.dll" >nul
-    set "KERNEL_SHIPPED=%OUTPUT_DIR%\AutoHotkey64.dll"
-) else (
-    echo   [WARN] .temp\kernel\AutoHotkey64.dll missing - --run will not work
-    set "KERNEL_SHIPPED=(missing)"
+REM ---- ship the ONE kernel next to the exe ------------------------------------------
+REM CMake's POST_BUILD staged .temp\kernel_official\AutoHotkey64.exe here. That
+REM same file is what the engine spawns AND what ExeCompiler bundles into, so
+REM there is no DLL and no tools\ base any more. Retire the two m190 shapes if
+REM an older build left them behind, then fail closed if the kernel is absent.
+if exist "%OUTPUT_DIR%\AutoHotkey64.dll" del /f /q "%OUTPUT_DIR%\AutoHotkey64.dll"
+if exist "%OUTPUT_DIR%\tools" rmdir /s /q "%OUTPUT_DIR%\tools"
+if not exist "%OUTPUT_DIR%\AutoHotkey64.exe" (
+    echo   [ERROR] AutoHotkey64.exe missing next to AHKDeck.exe - kernel build/staging failed
+    if not "!AHKDECK_CHAINED!"=="1" pause
+    exit /b 1
 )
 
 echo.
 echo   AHKDeck.exe       : %OUTPUT_DIR%\AHKDeck.exe
-echo   kernel DLL       : !KERNEL_SHIPPED!
+echo   kernel EXE        : %OUTPUT_DIR%\AutoHotkey64.exe  (official 2.0.31 + m192 patches; also the compile base)
 echo   fltk.lib          : %FLTK_BUILD_DIR%\lib\fltk.lib
 echo   Scripts folder    : %OUTPUT_DIR%\Scripts\ ensured by the deck_scripts target (CMakeLists.txt)
 echo.

@@ -31,6 +31,18 @@ public:
 	// y where content begins (just below the caption bar).
 	int ContentTop() const;
 
+	// m179: a dialog whose content genuinely grows with the window (获取脚本)
+	// can be resized and maximized. Call before ShowCentered(): the frame is
+	// installed at show time, so this decides the window STYLE, not just the
+	// caption. Minimize stays off - these dialogs have no taskbar button.
+	void SetResizable(bool aOn);
+	bool Resizable() const { return mResizable; }
+
+	// m183: opt into a smaller minimum client height than the frame's
+	// 400px floor. Only a genuinely short dialog should call this; the
+	// main window keeps the shared minimum. Call before ShowCentered().
+	void SetMinClientHeight(int aH) { mMinClientHeight = aH; }
+
 	// The owner's persisted View switches. A dialog reads them; it never
 	// decides. Pass them again when the user toggles 视图/窗口圆角 or 阴影.
 	void SetFrameOptions(bool aRounded, bool aShadow);
@@ -64,6 +76,8 @@ private:
 	bool mRounded = true;
 	bool mShadow = true;
 	bool mFrameInstalled = false;
+	bool mResizable = false;
+	int mMinClientHeight = 0;
 };
 
 } // namespace ui

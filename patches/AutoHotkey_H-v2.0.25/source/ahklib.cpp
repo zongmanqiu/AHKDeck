@@ -113,6 +113,95 @@ static void DeckTimestamp(char *aBuf, int aCap)
 		st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
 }
 
+// m175: the leaf of a path. The record never carries a machine path - the host
+// owns that rule (m010) and a stack frame is one more place to leak one.
+static LPCTSTR DeckLeaf(LPCTSTR aPath)
+{
+	if (!aPath)
+		return _T("");
+	LPCTSTR leaf = aPath;
+	for (LPCTSTR p = aPath; *p; ++p)
+		if (*p == _T('\\') || *p == _T('/'))
+			leaf = p + 1;
+	return leaf;
+}
+
+// Line::ToText always ends the line it prints, even with aCRLF=false. One
+// field, one line: strip the tail so "source" is exactly the code and a stack
+// row does not grow a blank line under it.
+static void DeckTrimTail(LPTSTR aText)
+{
+	if (!aText)
+		return;
+	size_t n = _tcslen(aText);
+	while (n && (aText[n - 1] == _T('\r') || aText[n - 1] == _T('\n')
+		|| aText[n - 1] == _T(' ') || aText[n - 1] == _T('\t')))
+		aText[--n] = _T('\0');
+}
+
+// m175: the call stack, top frame first, one frame per line:
+//
+//     file.ahk (11) : [Inner] x := n / 0
+//     file.ahk (7) : [Outer] Inner(3)
+//     > timer
+//
+// This is the same information the official error dialog prints under "Call
+// stack", and it is the only way a caller learns *how* the failing line was
+// reached - a line number alone cannot tell "this ran from a GUIDropFiles
+// handler" from "this ran at startup". Bounded: a deep recursion must not turn
+// one error record into a megabyte of text.
+static void DeckStackText(LPTSTR aBuf, int aCap)
+{
+	if (!aBuf || aCap < 8)
+		return;
+	*aBuf = _T('\0');
+#ifdef CONFIG_DEBUGGER
+	if (!g_Debugger || !g_script || !g_script->mIsReadyToExecute)
+		return;
+	LPTSTR p = aBuf;
+	int left = aCap - 3;
+	for (DbgStack::Entry *se = g_Debugger->mStack.mTop - 1;
+		se >= g_Debugger->mStack.mBottom; --se)
+	{
+		Line *ln = se->line ? se->line : g_script->mCurrLine;
+		TCHAR row[768], code[256];
+		code[0] = _T('\0');
+		if (ln)
+		{
+			ln->ToText(code, _countof(code), false, 0, false, false);
+			DeckTrimTail(code);
+		}
+		int n;
+		if (se->type == DbgStack::SE_Thread)
+			n = _sntprintf_s(row, _countof(row), _TRUNCATE, _T("> %s"),
+				se->desc ? se->desc : _T("thread"));
+		else if (ln)
+		{
+			LPCTSTR frame_file = (ln->mFileIndex >= 0 && ln->mFileIndex < Line::sSourceFileCount)
+				? Line::sSourceFile[ln->mFileIndex] : nullptr;
+			n = _sntprintf_s(row, _countof(row), _TRUNCATE, _T("%s (%i) : [%s] %s"),
+				DeckLeaf(frame_file), (int)ln->mLineNumber, se->Name(), code);
+		}
+		else
+			n = _sntprintf_s(row, _countof(row), _TRUNCATE, _T("[%s]"), se->Name());
+		if (n <= 0)
+			break;
+		if (n >= left)
+		{
+			_sntprintf_s(p, (size_t)left + 1, _TRUNCATE, _T("..."));
+			break;
+		}
+		memcpy(p, row, n * sizeof(TCHAR));
+		p += n;
+		left -= n;
+		*p++ = _T('\r');
+		*p++ = _T('\n');
+		left -= 2;
+		*p = _T('\0');
+	}
+#endif
+}
+
 bool DeckNotifyError(LPCTSTR aMessage, LPCTSTR aExtra, Line *aLine, int aErrorType, bool aWarn)
 {
 	if (!s_DeckErrorSink)
@@ -146,6 +235,24 @@ bool DeckNotifyError(LPCTSTR aMessage, LPCTSTR aExtra, Line *aLine, int aErrorTy
 	DeckUtf8(file, file_utf8, _countof(file_utf8));
 	DeckTimestamp(ts, _countof(ts));
 
+	// m175: everything a human reads off the error dialog, so a caller that is
+	// not looking at a screen gets the same answer: the text of the failing
+	// line, the function that was running, and the frames that led there.
+	TCHAR source_buf[512], stack_buf[1536];
+	source_buf[0] = _T('\0');
+	if (aLine)
+	{
+		aLine->ToText(source_buf, _countof(source_buf), false, 0, false, false);
+		DeckTrimTail(source_buf);
+	}
+	DeckStackText(stack_buf, _countof(stack_buf));
+	LPCTSTR func = (g && g->CurrentFunc) ? g->CurrentFunc->mName : _T("");
+
+	char func_utf8[256], source_utf8[2048], stack_utf8[4096];
+	DeckUtf8(func ? func : _T(""), func_utf8, _countof(func_utf8));
+	DeckUtf8(source_buf, source_utf8, _countof(source_utf8));
+	DeckUtf8(stack_buf, stack_utf8, _countof(stack_utf8));
+
 	int seq = (int)InterlockedIncrement(&s_DeckErrorSeq);
 	unsigned thread = (unsigned)GetCurrentThreadId();
 
@@ -161,6 +268,12 @@ bool DeckNotifyError(LPCTSTR aMessage, LPCTSTR aExtra, Line *aLine, int aErrorTy
 	DeckPutEscaped(json, _countof(json), n, message);
 	DeckPut(json, _countof(json), n, "\",\"extra\":\"");
 	DeckPutEscaped(json, _countof(json), n, extra);
+	DeckPut(json, _countof(json), n, "\",\"func\":\"");
+	DeckPutEscaped(json, _countof(json), n, func_utf8);
+	DeckPut(json, _countof(json), n, "\",\"source\":\"");
+	DeckPutEscaped(json, _countof(json), n, source_utf8);
+	DeckPut(json, _countof(json), n, "\",\"stack\":\"");
+	DeckPutEscaped(json, _countof(json), n, stack_utf8);
 	DeckPut(json, _countof(json), n, "\"}");
 
 	s_DeckErrorSink(json);

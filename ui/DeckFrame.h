@@ -25,11 +25,14 @@ class DeckTitleBar;
 void InstallDeckFrame(Fl_Window *win, DeckTitleBar *titleBar, unsigned int borderColor,
 	bool rounded, bool shadow);
 
-// The same frame for a dialog: no sizing grips, no minimize/maximize, no
-// taskbar button. One plumbing body serves both, so a dialog can never grow a
-// different border, ring or glow from the main window.
+// The same frame for a dialog: no taskbar button. One plumbing body serves
+// both, so a dialog can never grow a different border, ring or glow from the
+// main window. m179: `aResizable` turns on the sizing frame and the maximize
+// box for a dialog whose content genuinely gets bigger (获取脚本); the taskbar
+// button stays off, and so does minimize - a window with no taskbar button
+// cannot be restored once minimized.
 void InstallDialogFrame(Fl_Window *win, DeckTitleBar *titleBar, unsigned int borderColor,
-	bool rounded, bool shadow);
+	bool rounded, bool shadow, bool aResizable = false, int aMinClientH = 0);
 
 // Maximize / restore through the native zoom state (the title bar button and
 // the system menu both land here).

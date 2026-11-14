@@ -1,13 +1,26 @@
 #include "engine/DeckEngine.h"
 
+#include "core/AppPaths.h"
+
 #include <atomic>
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <process.h>
 
 namespace ahkdeck {
+
+// The stdout reader thread's argument. One shared type: a local struct in each
+// function would be a different type each time, and a pointer across that
+// boundary is a bug waiting for a compiler update.
+struct StdoutCtx
+{
+	Engine *engine;
+	DWORD sessionId;
+};
 
 // ---------------------------------------------------------------------------
 // Minimal JSON reader for the kernel's fixed record layout.
@@ -131,6 +144,9 @@ static void ParseRecord(const std::string &aJson, ErrorRecord &aRec)
 	GetString(aJson, "file", aRec.file);
 	GetString(aJson, "message", aRec.message);
 	GetString(aJson, "extra", aRec.extra);
+	GetString(aJson, "func", aRec.func);
+	GetString(aJson, "source", aRec.source);
+	GetString(aJson, "stack", aRec.stack);
 	GetInt(aJson, "thread", aRec.thread);
 	GetInt(aJson, "seq", aRec.seq);
 	GetInt(aJson, "line", aRec.line);
@@ -140,51 +156,17 @@ static void ParseRecord(const std::string &aJson, ErrorRecord &aRec)
 
 namespace {
 
-// Passed to the kernel's start callback (which runs ON the script thread) so we
-// can grab a handle race-free: by the time NewThread() returns, the script may
-// already have finished, and OpenThread() on a dead thread id fails.
-struct StartCtx
-{
-	HANDLE thread = nullptr;
-	DWORD id = 0;
-	bool started = false;
-};
-
-// The kernel gives every script thread its own main window: g_hWnd and
-// g_WindowClassMain are thread_local (.3rd\AutoHotkey_H-v2.0.25\source\globaldata.cpp:493)
-// and the window is created with the class WINDOW_CLASS_MAIN == "AutoHotkey"
-// (source\script.cpp:1027, source\defines.h:54). Script GUIs use the *other*
-// class ("AutoHotkeyGUI"), so an exact class match is what separates the two -
-// and it is the window OnMessage() dispatches through, which is why the deck's
-// menu bridge (m023) has to be posted there and not to any window of the script.
+// The kernel gives every script process one main window of its own: the class
+// is WINDOW_CLASS_MAIN == "AutoHotkey" (source\script.cpp registers it) and
+// script GUIs use the *other* class ("AutoHotkeyGUI"), so an exact class match
+// is what separates the two. It is the window OnMessage() dispatches through -
+// which is why the deck's menu bridge (m023) posts there, and why kernel patch
+// 4's AHKDECK_DUMP_MENU and the stop path (WM_CLOSE) go to the same window.
 constexpr wchar_t kScriptWindowClass[] = L"AutoHotkey";
 
-struct ScriptWindowSearch
-{
-	DWORD threadId = 0;
-	DWORD processId = 0;
-	HWND found = nullptr;
-};
-
-BOOL CALLBACK EnumScriptWindow(HWND aHwnd, LPARAM aParam)
-{
-	ScriptWindowSearch *search = reinterpret_cast<ScriptWindowSearch *>(aParam);
-	wchar_t className[64] = {0};
-	if (GetClassNameW(aHwnd, className, 64) == 0 || wcscmp(className, kScriptWindowClass) != 0)
-		return TRUE;
-
-	// EnumThreadWindows already restricts the candidate to our script thread, but
-	// a thread id can be recycled by another process after the thread dies, and a
-	// second AHK instance on this machine has a window of the same class. Both
-	// sides must agree before the deck posts to it.
-	DWORD windowProcessId = 0;
-	const DWORD windowThreadId = GetWindowThreadProcessId(aHwnd, &windowProcessId);
-	if (windowThreadId != search->threadId || windowProcessId != search->processId)
-		return TRUE;
-
-	search->found = aHwnd;
-	return FALSE;
-}
+// Kernel patch 4 (patches/AutoHotkey-v2.0.31, script2.cpp): the deck asks the
+// child's main window for a JSON snapshot of its live tray menu.
+constexpr UINT kDeckDumpMenu = WM_APP + 0x1DE0;
 
 std::string Utf8Of(const std::wstring &aWide)
 {
@@ -280,8 +262,9 @@ std::string LocalTimestamp()
 	return buf;
 }
 
-// A record for a failure the kernel never saw (the script file could not even be
-// read). It carries the kernel's fields except "seq", which that counter owns.
+// A record for a failure the kernel never saw (the script file could not even
+// be opened, or the child could not be started). It carries the kernel's
+// fields except "seq", which that counter owns.
 ErrorRecord MakeSyntheticRecord(DWORD aSessionId, const std::string &aMessage)
 {
 	ErrorRecord rec;
@@ -296,47 +279,6 @@ ErrorRecord MakeSyntheticRecord(DWORD aSessionId, const std::string &aMessage)
 		+ "\",\"thread\":0,\"kind\":\"error\",\"phase\":\"load\",\"severity\":\"fail\""
 		+ ",\"file\":\"?\",\"line\":0,\"message\":\"" + JsonEscape(aMessage) + "\",\"extra\":\"\"}";
 	return rec;
-}
-
-// Reads a script file the way the official engine does: UTF-8 (with or without
-// BOM) or UTF-16LE (BOM). The kernel's NewThread() runs script *text*, not a
-// path - the path only feeds A_ScriptDir / A_ScriptName / #Include resolution.
-bool ReadScriptText(const std::wstring &aPath, std::wstring &aText, std::string &aError)
-{
-	HANDLE file = CreateFileW(aPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-	if (file == INVALID_HANDLE_VALUE)
-	{
-		aError = "script file could not be opened";
-		return false;
-	}
-
-	std::string bytes;
-	char chunk[4096];
-	DWORD got = 0;
-	while (ReadFile(file, chunk, sizeof(chunk), &got, nullptr) && got)
-		bytes.append(chunk, got);
-	CloseHandle(file);
-
-	size_t begin = 0;
-	bool utf16 = false;
-	if (bytes.size() >= 3 && bytes[0] == '\xEF' && bytes[1] == '\xBB' && bytes[2] == '\xBF')
-		begin = 3; // UTF-8 BOM
-	else if (bytes.size() >= 2 && bytes[0] == '\xFF' && bytes[1] == '\xFE')
-		begin = 2, utf16 = true; // UTF-16LE BOM
-
-	if (utf16)
-	{
-		aText.assign(reinterpret_cast<const wchar_t *>(bytes.data() + begin),
-			(bytes.size() - begin) / 2);
-		return true;
-	}
-
-	int n = MultiByteToWideChar(CP_UTF8, 0, bytes.data() + begin, (int)(bytes.size() - begin), nullptr, 0);
-	aText.assign((size_t)n, L'\0');
-	MultiByteToWideChar(CP_UTF8, 0, bytes.data() + begin, (int)(bytes.size() - begin),
-		aText.data(), n);
-	return true;
 }
 
 std::wstring QuoteArg(const std::wstring &aArg)
@@ -354,6 +296,350 @@ std::wstring QuoteArg(const std::wstring &aArg)
 	return out;
 }
 
+// The child needs the host's whole environment plus the three AHKDECK_* knobs.
+// CreateProcess takes a full block, not overrides - and the block must be
+// sorted by name (case-insensitive), or CreateProcess fails with
+// ERROR_INVALID_PARAMETER. So collect every entry, drop our own names, add
+// ours, sort, join.
+std::vector<wchar_t> BuildChildEnvironment(const std::wstring &aErrorFile,
+	const std::wstring &aMenuFile)
+{
+	std::vector<std::pair<std::wstring, std::wstring>> entries;
+	wchar_t *env = GetEnvironmentStringsW();
+	if (env)
+	{
+		for (wchar_t *p = env; *p;)
+		{
+			std::wstring entry = p;
+			const size_t eq = entry.find(L'=');
+			if (eq != std::wstring::npos && !entry.empty()
+				&& entry.compare(0, 8, L"AHKDECK_") != 0)
+				entries.emplace_back(entry.substr(0, eq), entry.substr(eq + 1));
+			p += entry.size() + 1;
+		}
+		FreeEnvironmentStringsW(env);
+	}
+	entries.emplace_back(L"AHKDECK_ERROR_FILE", aErrorFile);
+	entries.emplace_back(L"AHKDECK_MENU_FILE", aMenuFile);
+	entries.emplace_back(L"AHKDECK_NO_TRAY", L"1");
+	// m194: A_AhkPath must name the host, not the kernel EXE. The official
+	// scripts use InStr(A_AhkPath, "AHKDeck.exe") to tell "hosted" from
+	// "standalone"; when it names the kernel they re-show their own tray icon
+	// (A_IconHidden := false) and the merged tray menu loses its purpose.
+	// The script.cpp patch reads this and restores the in-process DLL semantics.
+	wchar_t hostExe[MAX_PATH] = {0};
+	if (GetModuleFileNameW(nullptr, hostExe, MAX_PATH))
+		entries.emplace_back(L"AHKDECK_HOST_EXE", hostExe);
+	std::sort(entries.begin(), entries.end(),
+		[](const std::pair<std::wstring, std::wstring> &a,
+			const std::pair<std::wstring, std::wstring> &b)
+		{
+			// Case-insensitive by name; names are unique after the drop above.
+			const size_t n = std::min<size_t>(a.first.size(), b.first.size());
+			for (size_t i = 0; i < n; ++i)
+			{
+				const wchar_t l = towupper(a.first[i]);
+				const wchar_t r = towupper(b.first[i]);
+				if (l != r)
+					return l < r;
+			}
+			return a.first.size() < b.first.size();
+		});
+	std::wstring block;
+	for (const auto &e : entries)
+		block += e.first + L"=" + e.second + L'\0';
+	block += L'\0'; // the block itself is double-NUL terminated
+	return std::vector<wchar_t>(block.begin(), block.end());
+}
+
+// Reads a file (or a file prefix) as one UTF-8 blob. The child appends JSON
+// lines with FILE_APPEND_DATA; the pump reads from its last offset on.
+bool ReadFileRange(const std::wstring &aPath, ULONGLONG aOffset, std::string &aOut,
+	ULONGLONG &aNewSize)
+{
+	aOut.clear();
+	HANDLE file = CreateFileW(aPath.c_str(), GENERIC_READ,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (file == INVALID_HANDLE_VALUE)
+		return false;
+	LARGE_INTEGER size;
+	if (!GetFileSizeEx(file, &size))
+	{
+		CloseHandle(file);
+		return false;
+	}
+	aNewSize = (ULONGLONG)size.QuadPart;
+	if (aNewSize <= aOffset)
+	{
+		CloseHandle(file);
+		return true;
+	}
+	LARGE_INTEGER from;
+	from.QuadPart = (LONGLONG)aOffset;
+	SetFilePointerEx(file, from, nullptr, FILE_BEGIN);
+	char chunk[4096];
+	DWORD got = 0;
+	while (ReadFile(file, chunk, sizeof(chunk), &got, nullptr) && got)
+		aOut.append(chunk, got);
+	CloseHandle(file);
+	return true;
+}
+
+// Reads one whole file for the tray-menu snapshot.
+bool ReadWholeFile(const std::wstring &aPath, std::string &aOut)
+{
+	HANDLE file = CreateFileW(aPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (file == INVALID_HANDLE_VALUE)
+		return false;
+	char chunk[4096];
+	DWORD got = 0;
+	while (ReadFile(file, chunk, sizeof(chunk), &got, nullptr) && got)
+		aOut.append(chunk, got);
+	CloseHandle(file);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Menu snapshot parser + HMENU builder (m132 across the process split).
+// The kernel patch writes {"items":[...]} where an item is
+//   {"id":N,"text":"...","checked":b,"enabled":b,"radio":b,"default":b,
+//    "items":[...]}   or   {"separator":true}
+// ---------------------------------------------------------------------------
+
+struct MenuItemData
+{
+	UINT id = 0;
+	std::wstring text;
+	bool separator = false;
+	bool checked = false;
+	bool enabled = true;
+	bool radio = false;
+	bool def = false;
+	std::vector<MenuItemData> items;
+};
+
+struct MenuParser
+{
+	const char *p = nullptr;
+	const char *end = nullptr;
+
+	void SkipWs()
+	{
+		while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n'))
+			++p;
+	}
+
+	bool Expect(char c)
+	{
+		SkipWs();
+		if (p < end && *p == c)
+		{
+			++p;
+			return true;
+		}
+		return false;
+	}
+
+	std::wstring ReadString()
+	{
+		SkipWs();
+		std::string raw;
+		if (p >= end || *p != '"')
+			return std::wstring();
+		++p;
+		while (p < end && *p != '"')
+		{
+			if (*p == '\\' && p + 1 < end)
+			{
+				raw += *p++;
+				raw += *p++;
+				continue;
+			}
+			raw += *p++;
+		}
+		if (p < end)
+			++p; // closing quote
+		return WideOf(JsonUnescape(raw));
+	}
+
+	bool ReadBool()
+	{
+		SkipWs();
+		if (p + 4 <= end && memcmp(p, "true", 4) == 0)
+		{
+			p += 4;
+			return true;
+		}
+		if (p + 5 <= end && memcmp(p, "false", 5) == 0)
+			p += 5;
+		return false;
+	}
+
+	UINT ReadUint()
+	{
+		SkipWs();
+		UINT v = 0;
+		while (p < end && *p >= '0' && *p <= '9')
+			v = v * 10 + (UINT)(*p++ - '0');
+		return v;
+	}
+
+	// Reads one object into aOut; unknown keys are skipped so the patch can add
+	// fields later without breaking the host.
+	bool ReadItem(MenuItemData &aOut)
+	{
+		if (!Expect('{'))
+			return false;
+		for (;;)
+		{
+			SkipWs();
+			if (p < end && *p == '}')
+			{
+				++p;
+				return true;
+			}
+			std::wstring key = ReadString();
+			if (!Expect(':'))
+				return false;
+			SkipWs();
+			if (key == L"id")
+				aOut.id = ReadUint();
+			else if (key == L"text")
+				aOut.text = ReadString();
+			else if (key == L"separator")
+				aOut.separator = ReadBool();
+			else if (key == L"checked")
+				aOut.checked = ReadBool();
+			else if (key == L"enabled")
+				aOut.enabled = ReadBool();
+			else if (key == L"radio")
+				aOut.radio = ReadBool();
+			else if (key == L"default")
+				aOut.def = ReadBool();
+			else if (key == L"items")
+				ReadItems(aOut.items);
+			else
+				SkipValue();
+			SkipWs();
+			if (p < end && *p == ',')
+			{
+				++p;
+				continue;
+			}
+		}
+	}
+
+	void ReadItems(std::vector<MenuItemData> &aOut)
+	{
+		if (!Expect('['))
+			return;
+		for (;;)
+		{
+			SkipWs();
+			if (p >= end)
+				return;
+			if (*p == ']')
+			{
+				++p;
+				return;
+			}
+			MenuItemData item;
+			if (ReadItem(item))
+				aOut.push_back(std::move(item));
+			SkipWs();
+			if (p < end && *p == ',')
+				++p;
+		}
+	}
+
+	void SkipValue()
+	{
+		SkipWs();
+		if (p >= end)
+			return;
+		if (*p == '"')
+		{
+			(void)ReadString();
+			return;
+		}
+		if (*p == '{' || *p == '[')
+		{
+			char open = *p, close = open == '{' ? '}' : ']';
+			int depth = 0;
+			while (p < end)
+			{
+				if (*p == '"')
+				{
+					(void)ReadString();
+					continue;
+				}
+				if (*p == open)
+					++depth;
+				else if (*p == close && --depth == 0)
+				{
+					++p;
+					return;
+				}
+				++p;
+			}
+			return;
+		}
+		while (p < end && *p != ',' && *p != '}')
+			++p;
+	}
+};
+
+HMENU BuildMenuTree(const std::vector<MenuItemData> &aItems)
+{
+	HMENU menu = CreatePopupMenu();
+	if (!menu)
+		return nullptr;
+	int index = 0;
+	for (const MenuItemData &item : aItems)
+	{
+		if (item.separator)
+		{
+			AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+			++index;
+			continue;
+		}
+		HMENU sub = nullptr;
+		UINT flags = MF_STRING;
+		if (!item.items.empty())
+		{
+			sub = BuildMenuTree(item.items);
+			if (!sub)
+				continue;
+			flags |= MF_POPUP;
+		}
+		if (!item.enabled)
+			flags |= MF_GRAYED;
+		if (item.checked)
+			flags |= MF_CHECKED;
+		if (sub)
+			AppendMenuW(menu, flags, (UINT_PTR)sub, item.text.c_str());
+		else if (item.id)
+			AppendMenuW(menu, flags, item.id, item.text.c_str());
+		else
+			AppendMenuW(menu, flags | MF_GRAYED, 0, item.text.c_str());
+		if (item.radio)
+		{
+			// Radio appearance is a TYPE bit, not an AppendMenu flag: the bullet
+			// only renders when the item is also checked.
+			MENUITEMINFOW mi = {sizeof(mi)};
+			mi.fMask = MIIM_FTYPE;
+			mi.fType = MFT_RADIOCHECK;
+			SetMenuItemInfoW(menu, (UINT)index, TRUE, &mi);
+		}
+		if (item.def)
+			SetMenuDefaultItem(menu, (UINT)index, TRUE);
+		++index;
+	}
+	return menu;
+}
+
 } // namespace
 
 Engine &Engine::Instance()
@@ -365,8 +651,7 @@ Engine &Engine::Instance()
 
 Engine::~Engine()
 {
-	if (mModule)
-		Unload();
+	Unload();
 }
 
 const char *Engine::StateName(SessionState aState)
@@ -381,14 +666,13 @@ const char *Engine::StateName(SessionState aState)
 
 bool Engine::Load(std::string &aError)
 {
-	if (mModule)
+	if (!mKernelPath.empty())
 		return true;
 
-	std::wstring dllPath;
 	wchar_t buf[MAX_PATH] = {0};
 	if (GetEnvironmentVariableW(L"AHKDECK_KERNEL", buf, MAX_PATH) > 0)
 	{
-		dllPath = buf;
+		mKernelPath = buf;
 	}
 	else
 	{
@@ -401,55 +685,23 @@ bool Engine::Load(std::string &aError)
 		std::wstring dir(buf);
 		size_t slash = dir.find_last_of(L'\\');
 		dir.resize(slash == std::wstring::npos ? 0 : slash + 1);
-		dllPath = dir + L"AutoHotkey64.dll";
+		mKernelPath = dir + L"AutoHotkey64.exe";
 	}
 
-	mModule = LoadLibraryW(dllPath.c_str());
-	if (!mModule)
+	if (GetFileAttributesW(mKernelPath.c_str()) == INVALID_FILE_ATTRIBUTES)
 	{
-		aError = "AutoHotkey64.dll could not be loaded (missing next to AHKDeck.exe or blocked)";
+		aError = "AutoHotkey64.exe was not found (missing next to AHKDeck.exe or blocked)";
+		mKernelPath.clear();
 		return false;
 	}
-
-	mNewThread = reinterpret_cast<decltype(mNewThread)>(GetProcAddress(mModule, "DeckNewThread"));
-	mAhkReady = reinterpret_cast<decltype(mAhkReady)>(GetProcAddress(mModule, "ahkReady"));
-	mSetErrorSink = reinterpret_cast<decltype(mSetErrorSink)>(GetProcAddress(mModule, "DeckSetErrorSink"));
-	// m061: FileAppend's stdout target. The kernel hands us one JSON line; without
-	// this export the console cannot see what a script prints.
-	mSetOutputSink = reinterpret_cast<decltype(mSetOutputSink)>(GetProcAddress(mModule, "DeckSetOutputSink"));
-	mSetIsolation = reinterpret_cast<decltype(mSetIsolation)>(GetProcAddress(mModule, "DeckSetScriptIsolation"));
-	// m132: optional. Without it the tray menu still works, it just shows a
-	// script's menu in a second popup instead of as a real submenu.
-	mTrayMenu = reinterpret_cast<decltype(mTrayMenu)>(GetProcAddress(mModule, "DeckTrayMenu"));
-
-	if (!mNewThread || !mSetErrorSink || !mSetOutputSink || !mSetIsolation)
-	{
-		aError = "AutoHotkey64.dll is not an AHKDeck-capable kernel (patched build required)";
-		FreeLibrary(mModule);
-		mModule = nullptr;
-		return false;
-	}
-
-	// Install once; the sink is process-wide inside the kernel.
-	mSetErrorSink(&Engine::OnError);
-	mSetOutputSink(&Engine::OnOutput);
-	// Every script thread here must behave like a standalone script (the official
-	// AutoHotkey.exe), not like a secondary thread of one multi-script process.
-	mSetIsolation(true);
 
 	// m051: portable layout - logs live next to the exe, never in the process
-	// cwd or %LOCALAPPDATA%. Resolve while the host owns the path; the first
-	// script thread changes the process working directory.
-	wchar_t exePath[MAX_PATH] = {0};
-	DWORD exeLen = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-	if (exeLen > 0 && exeLen < MAX_PATH)
+	// cwd or %LOCALAPPDATA%. Resolve while the host owns the path; a script
+	// child inherits the cwd but the host's own paths are already absolute.
+	// m177: they live under the one temp\ root; see core/AppPaths.h.
+	mLogRoot = AppTempDir(kTempLogs);
+	if (!mLogRoot.empty())
 	{
-		wchar_t *slash = wcsrchr(exePath, L'\\');
-		if (slash)
-			*slash = 0;
-		mLogRoot = std::wstring(exePath) + L"\\Logs";
-		CreateDirectoryW(mLogRoot.c_str(), nullptr);
-
 		// m106: the cap is an env knob only (no settings entry): the gate runs
 		// with a tiny value, a user never has to know it exists.
 		wchar_t capText[32] = {0};
@@ -466,13 +718,24 @@ bool Engine::Load(std::string &aError)
 
 void Engine::Unload()
 {
-	HMODULE module = mModule;
-	if (!module)
-		return;
 	StopAll();
 
-	// Scripts must be gone before FreeLibrary: unloading code that a live
-	// thread is executing in would crash the host.
+	// Give every child a bounded chance to exit cleanly (it got WM_CLOSE from
+	// StopAll), then terminate the leftovers - a hung script must not keep the
+	// host alive at exit (the m012 lesson, now cheap to enforce: the child is
+	// an object we own, not a thread inside us).
+	{
+		std::lock_guard<std::mutex> lock(mSessionsMutex);
+		for (auto &it : mSessions)
+		{
+			Entry &entry = it.second;
+			if (entry.started && entry.pub.state != SessionState::Finished)
+			{
+				if (entry.job)
+					TerminateJobObject(entry.job, 2);
+			}
+		}
+	}
 	std::vector<DWORD> ids;
 	{
 		std::lock_guard<std::mutex> lock(mSessionsMutex);
@@ -482,152 +745,202 @@ void Engine::Unload()
 	for (DWORD id : ids)
 	{
 		DWORD rc = 0;
-		WaitSession(id, 5000, &rc);
+		WaitSession(id, 3000, &rc);
 	}
 
-	bool stillRunning = false;
+	std::lock_guard<std::mutex> lock(mSessionsMutex);
+	for (auto &it : mSessions)
 	{
-		std::lock_guard<std::mutex> lock(mSessionsMutex);
-		for (auto &it : mSessions)
+		Entry &entry = it.second;
+		if (entry.stdoutThread)
 		{
-			if (it.second.thread)
-				CloseHandle(it.second.thread);
-			delete static_cast<StartCtx *>(it.second.ctx);
-			if (it.second.pub.state != SessionState::Finished)
-				stillRunning = true;
+			// The reader exits when its pipe end closes (in ReapLocked or below).
+			if (WaitForSingleObject(entry.stdoutThread, 2000) != WAIT_OBJECT_0)
+				TerminateThread(entry.stdoutThread, 1);
+			CloseHandle(entry.stdoutThread);
+			entry.stdoutThread = nullptr;
 		}
-		mSessions.clear();
-		mThreadIndex.clear();
+		if (entry.stdoutRead)
+		{
+			CloseHandle(entry.stdoutRead);
+			entry.stdoutRead = nullptr;
+		}
+		if (entry.process)
+		{
+			CloseHandle(entry.process);
+			entry.process = nullptr;
+		}
+		if (entry.job)
+		{
+			CloseHandle(entry.job);
+			entry.job = nullptr;
+		}
+		if (entry.log.is_open())
+			entry.log.close();
 	}
-	(void)stillRunning; // nothing can undo a live script here; the module stays mapped either way
-	mModule = nullptr;
-	mNewThread = nullptr;
-	mAhkReady = nullptr;
-	mSetErrorSink = nullptr;
-	mSetOutputSink = nullptr;
-	mSetIsolation = nullptr;
-	// Never FreeLibrary the kernel. AHK_H's detach path tears the remaining script
-	// threads down while the caller holds the loader lock, which is not a state
-	// this host ever needs: the OS reclaims the module at process exit, where the
-	// same detach runs with lpvReserved set and no threads left to wait for.
-	// Unloading is therefore not a feature here.
-	//
-	// Attribution, stated as measured and not as a story: the ~1-in-40 "host writes
-	// the record, then never exits" hang was last seen before two changes landed
-	// (this one, and the OpenThread retry that stops a handleless session from
-	// spinning the consumer forever). The follow-up arm measured 0 hangs in 200
-	// runs, so the defect no longer reproduces - but nothing here separates which
-	// change mattered. See .plan/m012-宿主退出挂起.md.
+	for (auto &it : mMenus)
+	{
+		if (it.second)
+			DestroyMenu(it.second);
+	}
+	mMenus.clear();
+	mSessions.clear();
+	mThreadIndex.clear();
+	mKernelPath.clear();
 }
 
-int Engine::ValidateFile(const std::wstring &aScriptPath, std::string &aError,
-	std::vector<ErrorRecord> &aRecords)
+unsigned __stdcall Engine::StdoutThread(void *aArg)
 {
-	aRecords.clear();
-	if (!Load(aError))
-		return 1;
+	StdoutCtx *ctx = static_cast<StdoutCtx *>(aArg);
+	Engine *engine = ctx->engine;
+	const DWORD sessionId = ctx->sessionId;
+	delete ctx;
 
-	// The kernel's only validate-only entry is its own command line string:
-	// "/validate" makes LoadFromFile parse the script and return 0 (or 2 on a
-	// load failure) before InitForExecution, so no statement ever runs
-	// (script.cpp: mValidateThenExit). Main is the DLL's equivalent of
-	// AutoHotkey.exe's WinMain, which is why the caller must be a fresh process.
-	using MainProc = int(__stdcall *)(int, wchar_t **);
-	MainProc mainProc = reinterpret_cast<MainProc>(GetProcAddress(mModule, "Main"));
-	if (!mainProc)
+	for (;;)
 	{
-		aError = "AutoHotkey64.dll has no Main export; validate is unavailable";
-		return 1;
-	}
+		HANDLE pipe = nullptr;
+		{
+			std::lock_guard<std::mutex> lock(engine->mSessionsMutex);
+			auto it = engine->mSessions.find(sessionId);
+			if (it == engine->mSessions.end())
+				return 0; // session reaped/unloaded
+			pipe = it->second.stdoutRead;
+		}
+		if (!pipe)
+			return 0; // reaped: read end closed
 
-	wchar_t exePath[MAX_PATH] = {0};
-	if (!GetModuleFileNameW(nullptr, exePath, MAX_PATH))
-	{
-		aError = "cannot resolve the host executable path";
-		return 1;
-	}
-	// argv[0] is the name the kernel puts in its own messages; the file to parse
-	// is argv[2].
-	wchar_t *argv[3] = {exePath, const_cast<wchar_t *>(L"/validate"),
-		const_cast<wchar_t *>(aScriptPath.c_str())};
-	const int rc = mainProc(3, argv);
+		char chunk[4096];
+		DWORD got = 0;
+		if (!ReadFile(pipe, chunk, sizeof(chunk), &got, nullptr) || got == 0)
+			return 0; // child gone or handle closed
 
-	// Load errors were raised on this thread and handed to the sink; drain them
-	// here, without routing: this process has no session and no log to write.
+		std::lock_guard<std::mutex> lock(engine->mSessionsMutex);
+		auto it = engine->mSessions.find(sessionId);
+		if (it == engine->mSessions.end())
+			return 0;
+		Entry &entry = it->second;
+		entry.stdoutPending.append(chunk, got);
+		// FileAppend writes one call as one write; keep whole lines only. A
+		// trailing line without '\n' waits for the next read - exactly what a
+		// tailing consumer expects.
+		for (;;)
+		{
+			size_t nl = entry.stdoutPending.find('\n');
+			if (nl == std::string::npos)
+				break;
+			std::string line = entry.stdoutPending.substr(0, nl);
+			entry.stdoutPending.erase(0, nl + 1);
+			if (!line.empty() && line.back() == '\r')
+				line.pop_back();
+			if (!line.empty())
+				engine->EnqueueStdout(entry, line);
+		}
+	}
+}
+
+// m061 shape, one truth: the console prints rec.message for kind "stdout" and
+// the JSONL stays machine-readable. Runs with mSessionsMutex held (called from
+// the reader thread's locked section).
+void Engine::EnqueueStdout(Entry &aEntry, const std::string &aLine)
+{
+	ErrorRecord rec;
+	rec.session = aEntry.pub.id;
+	rec.thread = (int)aEntry.pid;
+	rec.kind = "stdout";
+	rec.phase = "runtime";
+	rec.message = aLine;
+	rec.ts = LocalTimestamp();
+	rec.json = "{\"session\":" + std::to_string(aEntry.pub.id) + ",\"ts\":\"" + rec.ts
+		+ "\",\"thread\":" + std::to_string(aEntry.pid)
+		+ ",\"kind\":\"stdout\",\"message\":\"" + JsonEscape(aLine) + "\"}";
 	{
 		std::lock_guard<std::mutex> lock(mErrorMutex);
-		while (!mErrors.empty())
-		{
-			aRecords.push_back(std::move(mErrors.front()));
-			mErrors.pop_front();
-		}
+		mErrors.push_back(std::move(rec));
 	}
-	return rc;
+	mErrorCv.notify_one();
 }
 
-void __stdcall Engine::OnError(const char *aJson)
+void Engine::PumpRawFiles()
 {
-	// Runs on the failing script thread. Nothing but an enqueue happens here:
-	// formatting and file I/O belong to the consumer, never to the script.
-	try
+	// Snapshot (id, path, offset) pairs, then read outside the lock: the child
+	// keeps appending and must never wait on the host's session lock.
+	struct Source
 	{
-		if (!aJson)
-			return;
-		ErrorRecord rec;
-		ParseRecord(std::string(aJson), rec);
-		Engine &engine = Engine::Instance();
+		DWORD id;
+		DWORD pid;
+		std::wstring path;
+		ULONGLONG offset;
+	};
+	std::vector<Source> sources;
+	{
+		std::lock_guard<std::mutex> lock(mSessionsMutex);
+		sources.reserve(mSessions.size());
+		for (auto &it : mSessions)
 		{
-			std::lock_guard<std::mutex> lock(engine.mErrorMutex);
-			engine.mErrors.push_back(std::move(rec));
+			if (it.second.rawPath.empty())
+				continue;
+			sources.push_back({it.first, it.second.pid, it.second.rawPath, it.second.rawOffset});
 		}
-		engine.mErrorCv.notify_one();
 	}
-	catch (...)
-	{
-		// A throwing callback across a DLL boundary would be fatal.
-	}
-}
 
-// m061: stdout records take the same queue as errors; kind already says "stdout",
-// so the consumer can print it as plain text and the log stays machine-readable.
-void __stdcall Engine::OnOutput(const char *aJson)
-{
-	try
+	for (Source &src : sources)
 	{
-		if (!aJson)
-			return;
-		ErrorRecord rec;
-		ParseRecord(std::string(aJson), rec);
-		Engine &engine = Engine::Instance();
+		std::string fresh;
+		ULONGLONG newSize = 0;
+		if (!ReadFileRange(src.path, src.offset, fresh, newSize))
+			continue;
+
+		std::vector<ErrorRecord> records;
+		// Only complete lines: a torn tail (child mid-write) waits for the next
+		// pump, and the offset stops before it.
+		size_t begin = 0;
+		for (;;)
 		{
-			std::lock_guard<std::mutex> lock(engine.mErrorMutex);
-			engine.mErrors.push_back(std::move(rec));
+			size_t nl = fresh.find('\n', begin);
+			if (nl == std::string::npos)
+				break;
+			std::string line = fresh.substr(begin, nl - begin);
+			begin = nl + 1;
+			if (line.empty())
+				continue;
+			// m192: the kernel writes its own (child-internal) thread id into
+			// "thread"; the engine's routing vocabulary is the child process
+			// id. Stamp the JSON line and the struct field to the same pid, so
+			// the JSONL, the console and the UI all see one truth.
+			{
+				static const char kThreadField[] = "\"thread\":";
+				const size_t tp = line.find(kThreadField);
+				if (tp != std::string::npos)
+				{
+					size_t d = tp + sizeof(kThreadField) - 1;
+					while (d < line.size() && line[d] >= '0' && line[d] <= '9')
+						++d;
+					line = line.substr(0, tp) + kThreadField + std::to_string(src.pid)
+						+ line.substr(d);
+				}
+			}
+			ErrorRecord rec;
+			ParseRecord(line, rec);
+			rec.session = src.id;
+			rec.thread = (int)src.pid;
+			records.push_back(std::move(rec));
 		}
-		engine.mErrorCv.notify_one();
-	}
-	catch (...)
-	{
-	}
-}
+		const ULONGLONG consumed = src.offset + begin;
 
-void __stdcall Engine::OnThreadStarted(void *aCtx)
-{
-	try
-	{
-		auto *ctx = static_cast<StartCtx *>(aCtx);
-		if (!ctx)
-			return;
-		// GetCurrentThreadId, not the id returned later by NewThread(): this is
-		// the only moment where the script thread is guaranteed to be alive.
-		ctx->id = GetCurrentThreadId();
-		// SYNCHRONIZE for WaitForSingleObject, QUERY_INFORMATION because
-		// GetExitCodeThread refuses handles without it (it silently returns 0
-		// otherwise, which is how ExitApp's code got lost once already).
-		ctx->thread = OpenThread(SYNCHRONIZE | THREAD_QUERY_INFORMATION, FALSE, ctx->id);
-		ctx->started = true;
-	}
-	catch (...)
-	{
+		if (!records.empty() || consumed != src.offset)
+		{
+			std::lock_guard<std::mutex> lock(mSessionsMutex);
+			auto it = mSessions.find(src.id);
+			if (it != mSessions.end())
+				it->second.rawOffset = consumed;
+		}
+		if (!records.empty())
+		{
+			std::lock_guard<std::mutex> lock(mErrorMutex);
+			for (auto &rec : records)
+				mErrors.push_back(std::move(rec));
+			mErrorCv.notify_one();
+		}
 	}
 }
 
@@ -638,21 +951,19 @@ DWORD Engine::Route(const ErrorRecord &aRecord) const
 	if (it != mThreadIndex.end())
 		return it->second;
 
-	// Single-script host run (the --run case): whatever the kernel reported, even
-	// from a thread that died before our start callback, belongs to that session.
-	// m010 relied on this for load failures, and official scripts report from
-	// their own script thread whether the error is in auto-execute, a hotkey or a
-	// timer callback - those are AHK "threads", not OS threads.
+	// Single-script host run (the --run case): whatever the kernel reported
+	// belongs to that session. Records from the per-session raw file already
+	// carry their session id, so this only serves stdout records whose pid
+	// index entry raced a reaped entry.
 	if (mSessions.size() == 1)
 		return mSessions.begin()->first;
 
-	// A script that never started has no thread id to match on, and its load
-	// error names the file we handed the kernel - that is the only handle here.
-	// Newest first: the failure being reported is the one that just happened.
+	// A raw-file record carries its session id, so unattributed records here
+	// are rare by construction; newest-first path match is the last resort.
 	for (auto riter = mSessions.rbegin(); riter != mSessions.rend(); ++riter)
 	{
 		const Entry &entry = riter->second;
-		if (entry.started)
+		if (!entry.started)
 			continue;
 		std::string given = Utf8Of(entry.pub.path);
 		if (SamePathI(aRecord.file, given))
@@ -674,7 +985,7 @@ void Engine::StampSession(ErrorRecord &aRecord) const
 }
 
 // All callers hold mSessionsMutex. A record is written to exactly one file and
-// flushed: an AI tailing the JSONL must not wait for a buffer the host may never
+// flushed: an AI tailing the JSONL must not wait on a buffer the host may never
 // close, because the host can be killed - that is the point of requirement 2.
 void Engine::WriteLog(const ErrorRecord &aRecord)
 {
@@ -749,13 +1060,59 @@ void Engine::RotateLog(Entry &aEntry)
 DWORD Engine::StartSession(const std::wstring &aScriptPath, const std::vector<std::wstring> &aArgs,
 	std::string &aError)
 {
-	if (!mModule)
+	if (mKernelPath.empty())
 	{
-		aError = "engine is not loaded";
-		return 0;
+		if (!Load(aError))
+		{
+			aError = "engine is not loaded: " + aError;
+			return 0;
+		}
 	}
 
+	// The child opens the script path itself (official behaviour: A_ScriptDir,
+	// A_ScriptName and #Include all resolve against it). A file that cannot even
+	// be opened still gets a session so its record has a home.
+	HANDLE probe = CreateFileW(aScriptPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (probe == INVALID_HANDLE_VALUE)
+	{
+		DWORD sessionId = 0;
+		{
+			std::lock_guard<std::mutex> lock(mSessionsMutex);
+			sessionId = mNextSessionId++;
+			Entry entry;
+			entry.pub.id = sessionId;
+			entry.pub.path = aScriptPath;
+			entry.pub.name = StemOf(aScriptPath);
+			std::string leaf = std::to_string(sessionId) + "-" + TimestampFileName() + ".jsonl";
+			const std::string fileName = entry.pub.name + "-" + leaf;
+			entry.pub.logPath = AppTempRelative(kTempLogs, fileName);
+			entry.logFull = mLogRoot.empty()
+				? WideOf(entry.pub.logPath)
+				: mLogRoot + L"\\" + WideOf(fileName);
+			CreateDirectoryW(mLogRoot.c_str(), nullptr);
+			entry.log.open(entry.logFull.c_str(), std::ios::binary | std::ios::trunc);
+			if (!entry.log.is_open())
+				aError = "the session log could not be created";
+			mSessions[sessionId] = std::move(entry);
+		}
+		{
+			std::lock_guard<std::mutex> lock(mErrorMutex);
+			mErrors.push_back(MakeSyntheticRecord(sessionId, "script file could not be opened"));
+		}
+		mErrorCv.notify_one();
+
+		std::lock_guard<std::mutex> lock(mSessionsMutex);
+		Entry &stored = mSessions[sessionId];
+		stored.pub.state = SessionState::Finished;
+		stored.pub.rc = 2; // CRITICAL_ERROR, as the official engine reports it
+		stored.pub.fatal = true;
+		return sessionId;
+	}
+	CloseHandle(probe);
+
 	DWORD sessionId = 0;
+	std::wstring rawPath, menuPath;
 	{
 		std::lock_guard<std::mutex> lock(mSessionsMutex);
 		sessionId = mNextSessionId++;
@@ -768,138 +1125,249 @@ DWORD Engine::StartSession(const std::wstring &aScriptPath, const std::vector<st
 		// empty: the path is printed to the console and to the journal, so it
 		// must resolve. Displayed relative (rule 9), opened absolute (mLogRoot).
 		std::string leaf = std::to_string(sessionId) + "-" + TimestampFileName() + ".jsonl";
-		entry.pub.logPath = "Logs\\" + entry.pub.name + "-" + leaf;
+		const std::string fileName = entry.pub.name + "-" + leaf;
+		entry.pub.logPath = AppTempRelative(kTempLogs, fileName);
 		entry.logFull = mLogRoot.empty()
 			? WideOf(entry.pub.logPath) // no cwd captured (Load was skipped): stay relative
-			: mLogRoot + L"\\" + WideOf(entry.pub.name + "-" + leaf);
+			: mLogRoot + L"\\" + WideOf(fileName);
 		CreateDirectoryW(mLogRoot.c_str(), nullptr);
 		entry.log.open(entry.logFull.c_str(), std::ios::binary | std::ios::trunc);
 		if (!entry.log.is_open())
 			aError = "the session log could not be created"; // runs anyway: records land on the console
+
+		// Raw error file (kernel patch 2 appends) + menu snapshot target
+		// (kernel patch 4 writes on demand), both under the one temp\ root so
+		// housekeeping (m177) reaps them with everything else.
+		const std::wstring work = AppTempDir(kTempWork);
+		CreateDirectoryW(work.c_str(), nullptr);
+		const std::wstring stamp = WideOf(std::to_string(sessionId) + "-" + TimestampFileName());
+		rawPath = work + L"\\" + WideOf(entry.pub.name) + L"-" + stamp + L"-errors.jsonl";
+		menuPath = work + L"\\" + WideOf(entry.pub.name) + L"-" + stamp + L"-menu.json";
+		DeleteFileW(rawPath.c_str());
+		DeleteFileW(menuPath.c_str());
+		entry.rawPath = rawPath;
+		entry.menuPath = menuPath;
+
 		mSessions[sessionId] = std::move(entry);
 	}
 
-	// NewThread() runs script TEXT. Reading it here (not letting the kernel open
-	// the path) keeps line numbers byte-identical, while passing the real path on
-	// the command line gives A_ScriptDir / A_ScriptName / #Include the same
-	// meaning as the official executable.
-	std::wstring text;
-	std::string readError;
-	if (!ReadScriptText(aScriptPath, text, readError))
+	std::wstring cmd = QuoteArg(mKernelPath) + L" " + QuoteArg(aScriptPath);
+	for (const auto &arg : aArgs)
+		cmd += L" " + QuoteArg(arg);
+
+	std::vector<wchar_t> envBlock = BuildChildEnvironment(rawPath, menuPath);
+
+	// stdout pipe: the child's FileAppend "*" lands here (m061). The write end
+	// is inheritable and handed through STARTF_USESTDHANDLES; the read end
+	// stays with us and is served by a blocking reader thread.
+	SECURITY_ATTRIBUTES sa = {sizeof(sa), nullptr, TRUE};
+	HANDLE stdoutRead = nullptr, stdoutWrite = nullptr;
+	if (!CreatePipe(&stdoutRead, &stdoutWrite, &sa, 0))
 	{
+		stdoutRead = stdoutWrite = nullptr;
+	}
+
+	STARTUPINFOW si = {sizeof(si)};
+	si.dwFlags = STARTF_USESTDHANDLES;
+	si.hStdInput = nullptr;
+	si.hStdOutput = stdoutWrite;
+	si.hStdError = stdoutWrite; // /ErrorStdOut and the loader share the pipe
+	PROCESS_INFORMATION pi = {};
+	// The env block is Unicode: without CREATE_UNICODE_ENVIRONMENT the loader
+	// reads it as ANSI and rejects the interleaved NULs with ERROR_INVALID_PARAMETER.
+	const BOOL created = CreateProcessW(mKernelPath.c_str(), cmd.data(), nullptr, nullptr, TRUE,
+		CREATE_UNICODE_ENVIRONMENT, envBlock.empty() ? nullptr : envBlock.data(), nullptr, &si, &pi);
+	if (stdoutWrite)
+		CloseHandle(stdoutWrite); // ours only; the child holds its own
+
+	if (!created)
+	{
+		const DWORD spawnError = GetLastError();
+		if (stdoutRead)
+			CloseHandle(stdoutRead);
 		{
 			std::lock_guard<std::mutex> lock(mErrorMutex);
-			mErrors.push_back(MakeSyntheticRecord(sessionId, readError));
+			mErrors.push_back(MakeSyntheticRecord(sessionId,
+				"the interpreter could not be started (win32 error " + std::to_string(spawnError) + ")"));
 		}
 		mErrorCv.notify_one();
 
 		std::lock_guard<std::mutex> lock(mSessionsMutex);
 		Entry &stored = mSessions[sessionId];
-		stored.started = false;
 		stored.pub.state = SessionState::Finished;
-		stored.pub.rc = 2; // CRITICAL_ERROR, as the official engine reports it
+		stored.pub.rc = 2;
 		stored.pub.fatal = true;
 		return sessionId;
 	}
 
-	std::wstring cmd = QuoteArg(aScriptPath);
-	for (const auto &arg : aArgs)
-		cmd += L" " + QuoteArg(arg);
-
-	// No title: ThreadMain copies the title into the buffer that also holds the
-	// default script text, and a short text + long title would overflow it
-	// (upstream quirk). The window title is ours to provide at the UI milestone.
-	StartCtx *ctx = new StartCtx();
-	DWORD threadId = mNewThread(text.data(), cmd.data(), nullptr, &Engine::OnThreadStarted, ctx);
-
-	if (!threadId && !ctx->started)
+	// Kill-on-close job: the OS reaps every script the moment the host dies -
+	// the guarantee the in-process kernel gave for free ("one process image"),
+	// rebuilt with one API call.
+	HANDLE job = CreateJobObjectW(nullptr, nullptr);
+	if (job)
 	{
-		// Load-time failure: the kernel reports why through the sink, and
-		// Route() attaches that record to this session by file; the official
-		// exit code for it is CRITICAL_ERROR (2). There is no thread handle
-		// left to wait on.
-		//
-		// "The sink already reported it" is not always true: the kernel raises
-		// the report from the script thread, and on a cold kernel that can be
-		// a moment AFTER NewThread() gave up on that thread. The caller would
-		// then read an empty log and conclude the script printed nothing
-		// (m083). Wait for the report - and wait WITHOUT holding
-		// mSessionsMutex: the UI needs that lock to route the very record we
-		// are waiting for.
-		WaitForLoadRecord(aScriptPath, 2000);
+		JOBOBJECT_EXTENDED_LIMIT_INFORMATION info = {};
+		info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+		SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info, sizeof(info));
+		AssignProcessToJobObject(job, pi.hProcess);
+	}
 
-		std::lock_guard<std::mutex> lock(mSessionsMutex);
-		Entry &entry = mSessions[sessionId];
-		entry.started = false;
-		entry.pub.state = SessionState::Finished;
-		entry.pub.rc = 2;
-		delete ctx;
-		entry.ctx = nullptr;
-		return sessionId;
+	HANDLE reader = nullptr;
+	if (stdoutRead)
+	{
+		uintptr_t id = _beginthreadex(nullptr, 0, &Engine::StdoutThread,
+			new StdoutCtx{this, sessionId}, 0, nullptr);
+		reader = reinterpret_cast<HANDLE>(id);
 	}
 
 	std::lock_guard<std::mutex> lock(mSessionsMutex);
 	Entry &stored = mSessions[sessionId];
-	stored.ctx = ctx;
-
-	if (!threadId)
-		threadId = ctx->id; // started, but NewThread could not report the id
-
-	if (ctx->started && !ctx->thread)
-	{
-		// m011 saw this once in ~40 runs: the script thread reported itself, but
-		// OpenThread failed on it, so the host has nothing to wait on. Without a
-		// handle the session can never be reaped, and a consumer that waits for
-		// its exit code waits forever. Retry once (the thread is alive by
-		// definition here), then say so out loud instead of spinning.
-		ctx->thread = OpenThread(SYNCHRONIZE | THREAD_QUERY_INFORMATION, FALSE, threadId);
-		if (!ctx->thread)
-		{
-			ErrorRecord rec = MakeSyntheticRecord(sessionId,
-				"the script thread handle could not be opened; this session cannot be tracked");
-			{
-				std::lock_guard<std::mutex> queue(mErrorMutex);
-				mErrors.push_back(rec);
-			}
-			mErrorCv.notify_one();
-			stored.started = false; // nothing to wait on: report it as finished
-			stored.pub.state = SessionState::Finished;
-			stored.pub.rc = 2;
-			delete ctx;
-			stored.ctx = nullptr;
-			return sessionId;
-		}
-	}
-
-	stored.started = ctx->started;
-	stored.thread = ctx->thread;
-	stored.pub.threadId = threadId;
+	stored.started = true;
+	stored.process = pi.hProcess;
+	stored.job = job;
+	stored.pid = pi.dwProcessId;
+	stored.stdoutRead = stdoutRead;
+	stored.stdoutThread = reader;
+	stored.pub.threadId = pi.dwProcessId; // m192: the "thread" is the child process
 	stored.pub.state = SessionState::Running;
-	if (threadId)
-		mThreadIndex[threadId] = sessionId;
+	mThreadIndex[pi.dwProcessId] = sessionId;
 	// The index entry is never pruned: records can still arrive for a session
-	// whose thread was reaped, and finished sessions stay in the table anyway.
+	// whose process was reaped, and finished sessions stay in the table anyway.
 	return sessionId;
 }
 
-// All callers hold mSessionsMutex. A session is Finished only once its kernel
-// thread has actually been reaped: the UI polls Sessions() and must never be
-// told "running" about a thread that is already gone (m011 read this from a
-// neighbour's teardown - the thread had died while the table still said Running).
+int Engine::ValidateFile(const std::wstring &aScriptPath, std::string &aError,
+	std::vector<ErrorRecord> &aRecords)
+{
+	aRecords.clear();
+	if (!Load(aError))
+		return 1;
+
+	// The kernel's own switch: LoadFromFile runs, InitForExecution never does.
+	// m192: a plain child process instead of the fresh-process Main() call the
+	// DLL era needed - the process boundary IS the fresh process.
+	const std::wstring work = AppTempDir(kTempWork);
+	CreateDirectoryW(work.c_str(), nullptr);
+	const std::wstring rawPath = work + L"\\validate-" + WideOf(TimestampFileName())
+		+ L"-" + WideOf(std::to_string(GetCurrentProcessId())) + L".jsonl";
+	DeleteFileW(rawPath.c_str());
+
+	std::vector<wchar_t> envBlock = BuildChildEnvironment(rawPath, rawPath); // menu never asked
+	std::wstring cmd = QuoteArg(mKernelPath) + L" /validate " + QuoteArg(aScriptPath);
+
+	SECURITY_ATTRIBUTES sa = {sizeof(sa), nullptr, TRUE};
+	HANDLE stdoutRead = nullptr, stdoutWrite = nullptr;
+	CreatePipe(&stdoutRead, &stdoutWrite, &sa, 0);
+	STARTUPINFOW si = {sizeof(si)};
+	si.dwFlags = STARTF_USESTDHANDLES;
+	si.hStdOutput = stdoutWrite;
+	si.hStdError = stdoutWrite;
+	PROCESS_INFORMATION pi = {};
+	const BOOL created = CreateProcessW(mKernelPath.c_str(), cmd.data(), nullptr, nullptr, TRUE,
+		CREATE_UNICODE_ENVIRONMENT, envBlock.data(), nullptr, &si, &pi);
+	if (stdoutWrite)
+		CloseHandle(stdoutWrite);
+	if (!created)
+	{
+		if (stdoutRead)
+			CloseHandle(stdoutRead);
+		aError = "the interpreter could not be started";
+		return 1;
+	}
+
+	// Drain the pipe while the child runs: the pipe buffer is small, and a
+	// script full of load errors must not wedge the child on a full pipe.
+	std::string output;
+	char chunk[4096];
+	DWORD got = 0;
+	for (;;)
+	{
+		if (!ReadFile(stdoutRead, chunk, sizeof(chunk), &got, nullptr) || got == 0)
+			break;
+		output.append(chunk, got);
+	}
+	CloseHandle(stdoutRead);
+
+	WaitForSingleObject(pi.hProcess, 15000);
+	DWORD rc = 2;
+	GetExitCodeProcess(pi.hProcess, &rc);
+	CloseHandle(pi.hProcess);
+	CloseHandle(pi.hThread);
+
+	// Load errors come back through the same JSON records a session would
+	// produce - parse them here, without log routing (there is no session).
+	std::string blob;
+	ULONGLONG size = 0;
+	ReadFileRange(rawPath, 0, blob, size);
+	DeleteFileW(rawPath.c_str());
+	size_t begin = 0;
+	while (begin < blob.size())
+	{
+		size_t nl = blob.find('\n', begin);
+		if (nl == std::string::npos)
+			break;
+		std::string line = blob.substr(begin, nl - begin);
+		begin = nl + 1;
+		if (line.empty())
+			continue;
+		ErrorRecord rec;
+		ParseRecord(line, rec);
+		aRecords.push_back(std::move(rec));
+	}
+	(void)output; // /ErrorStdOut text duplicates the JSON; the JSON is the truth
+	return (int)rc;
+}
+
+// All callers hold mSessionsMutex. A session is Finished only once its child
+// process has actually been reaped: the UI polls Sessions() and must never be
+// told "running" about a process that is already gone.
 void Engine::ReapLocked(Entry &aEntry) const
 {
-	if (!aEntry.started || !aEntry.thread || aEntry.pub.state == SessionState::Finished)
+	if (!aEntry.started || !aEntry.process || aEntry.pub.state == SessionState::Finished)
 		return;
-	if (WaitForSingleObject(aEntry.thread, 0) != WAIT_OBJECT_0)
+	if (WaitForSingleObject(aEntry.process, 0) != WAIT_OBJECT_0)
 		return;
 	DWORD rc = 0;
-	if (!GetExitCodeThread(aEntry.thread, &rc))
+	if (!GetExitCodeProcess(aEntry.process, &rc))
 		return; // cannot read the code: keep the state honest instead of guessing
-	CloseHandle(aEntry.thread);
-	aEntry.thread = nullptr;
+
+	// Stop the stdout reader first: it blocks on the pipe, and closing the read
+	// end makes ReadFile fail and the thread exit. A torn partial line still
+	// flushes - it is whatever the script printed last.
+	if (aEntry.stdoutRead)
+		CloseHandle(aEntry.stdoutRead);
+	aEntry.stdoutRead = nullptr;
+	if (aEntry.stdoutThread)
+	{
+		// The thread may still hold mSessionsMutex in its final iteration; it
+		// never blocks on it twice, so a bounded wait outside our own lock
+		// cannot deadlock. We hold the lock, so keep this short and forgiving.
+		WaitForSingleObject(aEntry.stdoutThread, 1000);
+		CloseHandle(aEntry.stdoutThread);
+		aEntry.stdoutThread = nullptr;
+	}
+
+	CloseHandle(aEntry.process);
+	aEntry.process = nullptr;
+	if (aEntry.job)
+	{
+		CloseHandle(aEntry.job); // child already gone; the job object dies here
+		aEntry.job = nullptr;
+	}
+	// m132: the host-built tray menu belongs to this session; it must not
+	// outlive it (the map lookup is safe because the id is unique forever).
+	{
+		auto menu = mMenus.find(aEntry.pub.id);
+		if (menu != mMenus.end())
+		{
+			if (menu->second)
+				DestroyMenu(menu->second);
+			mMenus.erase(menu);
+		}
+	}
 	aEntry.pub.state = SessionState::Finished;
 	aEntry.pub.rc = rc;
-	// m027: the thread is gone, so no more records can be produced by it. Close
+	// m027: the child is gone, so no more records can be produced by it. Close
 	// the JSONL handle now instead of holding one per finished session until the
 	// engine unloads. WriteLog reopens on demand, so a late record still lands.
 	if (aEntry.log.is_open())
@@ -912,7 +1380,7 @@ bool Engine::GetSession(DWORD aSessionId, Session &aOut) const
 	auto it = mSessions.find(aSessionId);
 	if (it == mSessions.end())
 		return false;
-	// Polling a session reaps it: reading the state is what notices the thread is
+	// Polling a session reaps it: reading the state is what notices the child is
 	// gone, so the const-correctness here is deliberately bent (mSessionsMutex is
 	// held, and no other thread can be looking at the same entry).
 	ReapLocked(const_cast<Entry &>(it->second));
@@ -948,27 +1416,22 @@ bool Engine::WaitSession(DWORD aSessionId, DWORD aTimeoutMs, DWORD *aExitCode)
 				*aExitCode = it->second.pub.rc;
 			return true; // already reaped: the entry stays queryable
 		}
-		handle = it->second.thread;
+		handle = it->second.process;
 	}
 
 	if (!handle)
 		return false; // started but unopenable: never report a code we cannot read
 
-	DWORD rc = 0;
 	if (WaitForSingleObject(handle, aTimeoutMs) != WAIT_OBJECT_0)
 		return false; // still running; keep the entry
-	if (!GetExitCodeThread(handle, &rc))
+	DWORD rc = 0;
+	if (!GetExitCodeProcess(handle, &rc))
 		return false; // handle lacks query access; never report a guessed code
 
 	std::lock_guard<std::mutex> lock(mSessionsMutex);
 	auto it = mSessions.find(aSessionId);
 	if (it != mSessions.end())
-	{
-		CloseHandle(it->second.thread);
-		it->second.thread = nullptr;
-		it->second.pub.state = SessionState::Finished;
-		it->second.pub.rc = rc;
-	}
+		ReapLocked(it->second);
 	if (aExitCode)
 		*aExitCode = rc;
 	return true;
@@ -976,34 +1439,48 @@ bool Engine::WaitSession(DWORD aSessionId, DWORD aTimeoutMs, DWORD *aExitCode)
 
 HWND Engine::FindScriptWindow(DWORD aSessionId) const
 {
-	DWORD threadId = 0;
+	DWORD pid = 0;
 	{
 		std::lock_guard<std::mutex> lock(mSessionsMutex);
 		auto it = mSessions.find(aSessionId);
 		if (it == mSessions.end() || !it->second.started)
 			return nullptr;
 		if (it->second.pub.state == SessionState::Finished)
-			return nullptr; // its window is gone; a reused thread id must not be followed
-		threadId = it->second.pub.threadId;
+			return nullptr; // its window is gone; a reused pid must not be followed
+		pid = it->second.pid;
 	}
-	if (!threadId)
+	if (!pid)
 		return nullptr;
 
-	ScriptWindowSearch search;
-	search.threadId = threadId;
-	search.processId = GetCurrentProcessId();
-	EnumThreadWindows(threadId, EnumScriptWindow, reinterpret_cast<LPARAM>(&search));
+	// Exact class + exact process: a second AHK on this machine has a window of
+	// the same class, and a dead child's pid can be recycled - both sides must
+	// agree before anything is posted to this window.
+	struct Search
+	{
+		DWORD pid;
+		HWND found;
+	} search = {pid, nullptr};
+	EnumWindows([](HWND aHwnd, LPARAM aParam) -> BOOL {
+		Search *search = reinterpret_cast<Search *>(aParam);
+		DWORD windowPid = 0;
+		GetWindowThreadProcessId(aHwnd, &windowPid);
+		if (windowPid != search->pid)
+			return TRUE;
+		wchar_t className[64] = {0};
+		if (GetClassNameW(aHwnd, className, 64) == 0 || wcscmp(className, kScriptWindowClass) != 0)
+			return TRUE;
+		search->found = aHwnd;
+		return FALSE;
+	}, reinterpret_cast<LPARAM>(&search));
 	return search.found;
 }
 
-// m132: the script thread's live tray menu, so the deck's tray menu can show it
-// as a real submenu. Read-only: the handle belongs to the script thread and the
-// kernel destroys it when the script exits.
+// m132: the script's live tray menu, rebuilt host-side from the JSON snapshot.
+// Read-only: the HMENU built here belongs to THIS process and is destroyed on
+// the next request for the same session or when the session goes away.
 HMENU Engine::TrayMenu(DWORD aSessionId) const
 {
-	if (!mTrayMenu)
-		return nullptr;
-	DWORD threadId = 0;
+	std::wstring menuPath;
 	{
 		std::lock_guard<std::mutex> lock(mSessionsMutex);
 		auto it = mSessions.find(aSessionId);
@@ -1011,14 +1488,70 @@ HMENU Engine::TrayMenu(DWORD aSessionId) const
 			return nullptr;
 		if (it->second.pub.state == SessionState::Finished)
 			return nullptr;
-		threadId = it->second.pub.threadId;
+		menuPath = it->second.menuPath;
 	}
-	return static_cast<HMENU>(mTrayMenu(threadId));
+	if (menuPath.empty())
+		return nullptr;
+
+	// The snapshot is written by the child's main window when it pumps
+	// AHKDECK_DUMP_MENU. A script busy in a long operation cannot pump - give
+	// it a moment and then give up for this tick (the next tray open retries).
+	HWND window = FindScriptWindow(aSessionId);
+	if (window)
+	{
+		DeleteFileW(menuPath.c_str());
+		DWORD_PTR result = 0;
+		SendMessageTimeoutW(window, kDeckDumpMenu, 0, 0, SMTO_ABORTIFHUNG, 500, &result);
+	}
+
+	std::string blob;
+	if (!ReadWholeFile(menuPath, blob) || blob.size() < 8)
+	{
+		// The child did not answer (busy, or gone): no snapshot this tick.
+		std::lock_guard<std::mutex> lock(mSessionsMutex);
+		auto it = mMenus.find(aSessionId);
+		if (it != mMenus.end() && it->second)
+			DestroyMenu(it->second);
+		mMenus.erase(aSessionId);
+		return nullptr;
+	}
+
+	MenuParser parser;
+	// The patch writes {"items":[...]}; parse the array inside the object.
+	static const char kItemsKey[] = "\"items\":";
+	const size_t itemsAt = blob.find(kItemsKey);
+	if (itemsAt == std::string::npos)
+	{
+		std::lock_guard<std::mutex> lock(mSessionsMutex);
+		auto it = mMenus.find(aSessionId);
+		if (it != mMenus.end() && it->second)
+			DestroyMenu(it->second);
+		mMenus.erase(aSessionId);
+		return nullptr;
+	}
+	parser.p = blob.c_str() + itemsAt + sizeof(kItemsKey) - 1;
+	parser.end = blob.c_str() + blob.size();
+	std::vector<MenuItemData> items;
+	parser.ReadItems(items);
+
+	// An EMPTY items array is a valid answer: a script that did
+	// A_TrayMenu.Delete() (m158/m160) owns an empty tray menu, and the deck's
+	// UI guard keys on GetMenuItemCount() == 0. Only a missing/broken snapshot
+	// is "no menu".
+	std::lock_guard<std::mutex> lock(mSessionsMutex);
+	auto old = mMenus.find(aSessionId);
+	if (old != mMenus.end() && old->second)
+		DestroyMenu(old->second);
+	HMENU menu = BuildMenuTree(items);
+	if (menu)
+		mMenus[aSessionId] = menu;
+	else
+		mMenus.erase(aSessionId);
+	return menu;
 }
 
 bool Engine::StopSession(DWORD aSessionId)
 {
-	DWORD threadId = 0;
 	{
 		std::lock_guard<std::mutex> lock(mSessionsMutex);
 		auto it = mSessions.find(aSessionId);
@@ -1027,27 +1560,40 @@ bool Engine::StopSession(DWORD aSessionId)
 		if (it->second.pub.state == SessionState::Finished)
 			return false;
 		it->second.pub.state = SessionState::Stopping;
-		threadId = it->second.pub.threadId;
 	}
-	// The kernel's TerminateSubThread posts WM_QUIT and only falls back to
-	// WM_CLOSE when the post fails. A script sitting in a modal/menu loop can
-	// accept the post and ignore it, so close the window as well: that is the
-	// kernel's own "close the script" path, and a finished script has no window
-	// left to close.
-	bool signalled = PostThreadMessageW(threadId, WM_QUIT, 0, 0) != FALSE;
+
+	// The kernel's own close path: WM_CLOSE on the main window runs OnExit and
+	// exits cleanly - the same thing clicking the tray Exit item does. A script
+	// sitting in a modal/menu loop can accept the post and ignore it, but the
+	// job object guarantees the child cannot outlive the host, and a user who
+	// really wants it dead still has the task manager (unchanged from the
+	// in-process engine, which could also only *ask* a stuck thread).
 	if (HWND hwnd = FindScriptWindow(aSessionId))
 	{
 		DWORD_PTR result = 0;
 		if (SendMessageTimeoutW(hwnd, WM_CLOSE, 0, 0, SMTO_ABORTIFHUNG, 500, &result))
-			signalled = true;
+			return true;
 	}
-	return signalled;
+
+	// No window to close (or it is hung): the job object is the last resort.
+	HANDLE job = nullptr;
+	{
+		std::lock_guard<std::mutex> lock(mSessionsMutex);
+		auto it = mSessions.find(aSessionId);
+		if (it != mSessions.end() && it->second.job)
+			job = it->second.job;
+	}
+	if (job)
+	{
+		TerminateJobObject(job, 2); // EXIT_CRITICAL, the official fatal code
+		return true;
+	}
+	return false;
 }
 
 size_t Engine::StopAll()
 {
 	std::vector<DWORD> sessionIds;
-	std::vector<DWORD> threadIds;
 	{
 		std::lock_guard<std::mutex> lock(mSessionsMutex);
 		for (auto &it : mSessions)
@@ -1056,22 +1602,12 @@ size_t Engine::StopAll()
 				continue;
 			it.second.pub.state = SessionState::Stopping;
 			sessionIds.push_back(it.first);
-			threadIds.push_back(it.second.pub.threadId);
 		}
 	}
 	size_t signalled = 0;
-	for (size_t i = 0; i < threadIds.size(); ++i)
+	for (DWORD id : sessionIds)
 	{
-		bool one = PostThreadMessageW(threadIds[i], WM_QUIT, 0, 0) != FALSE;
-		// Close the window as well: a thread that accepted WM_QUIT but is stuck
-		// in a modal loop otherwise never reaches TerminateApp.
-		if (HWND hwnd = FindScriptWindow(sessionIds[i]))
-		{
-			DWORD_PTR result = 0;
-			if (SendMessageTimeoutW(hwnd, WM_CLOSE, 0, 0, SMTO_ABORTIFHUNG, 500, &result))
-				one = true;
-		}
-		if (one)
+		if (StopSession(id))
 			++signalled;
 	}
 	return signalled;
@@ -1079,55 +1615,20 @@ size_t Engine::StopAll()
 
 size_t Engine::PendingRecords() const
 {
+	const_cast<Engine *>(this)->PumpRawFiles();
 	std::lock_guard<std::mutex> lock(mErrorMutex);
 	return mErrors.size();
 }
 
-bool Engine::WaitForLoadRecord(const std::wstring &aScriptPath, DWORD aTimeoutMs)
-{
-	const std::string want = Utf8Of(aScriptPath);
-	const size_t wantSlash = want.find_last_of("\\/");
-	const std::string wantLeaf = wantSlash == std::string::npos ? want : want.substr(wantSlash + 1);
-	const ULONGLONG deadline = GetTickCount64() + aTimeoutMs;
-	size_t before = 0;
-	{
-		std::lock_guard<std::mutex> lock(mErrorMutex);
-		before = mErrors.size();
-	}
-	for (;;)
-	{
-		{
-			std::lock_guard<std::mutex> lock(mErrorMutex);
-			if (mErrors.size() < before)
-				return true; // the UI consumed it already - it is routed and logged
-			for (const auto &rec : mErrors)
-			{
-				if (rec.file.empty())
-					return true;
-				if (SamePathI(rec.file, want))
-					return true;
-				const size_t slash = rec.file.find_last_of("\\/");
-				const std::string leaf = slash == std::string::npos
-					? rec.file : rec.file.substr(slash + 1);
-				if (SamePathI(leaf, wantLeaf))
-					return true;
-			}
-		}
-		if (GetTickCount64() >= deadline)
-			return false;
-		Sleep(10);
-	}
-}
-
 // Routes one record to its session and writes it to the session's JSONL.
-// The caller holds mSessionsMutex. Returns the thread that must be asked to
+// The caller holds mSessionsMutex. Returns the session that must be asked to
 // stop, or 0.
 //
 // The record keeps its "logged" flag: a tool may have flushed the log before
 // the UI got here, and the file must not receive the same line twice.
 DWORD Engine::PublishRecord(ErrorRecord &aRecord)
 {
-	DWORD quitThread = 0;
+	DWORD stopSession = 0;
 	if (!aRecord.session)
 		aRecord.session = Route(aRecord);
 	StampSession(aRecord);
@@ -1143,19 +1644,18 @@ DWORD Engine::PublishRecord(ErrorRecord &aRecord)
 		{
 			it->second.pub.fatal = true;
 			// An unhandled failure is the official dialog's "Exit": the script
-			// stops. The kernel only unwinds the thread that raised it, so a
-			// repeating timer would re-raise forever - m011 measured 17 KB of
-			// identical records in 10 s. Stopping the session is what the user
-			// would have clicked, and it is the only way to keep the storm out
-			// of the log an AI is about to read.
+			// stops. With the dialog patched away nobody would ever see the
+			// error but the log - stopping the session is what the user would
+			// have clicked, and it is the only way to keep a repeating timer's
+			// error storm out of the log an AI is about to read (m011).
 			if (it->second.started && it->second.pub.state == SessionState::Running)
 			{
 				it->second.pub.state = SessionState::Stopping;
-				quitThread = it->second.pub.threadId;
+				stopSession = it->second.pub.id;
 			}
 		}
 	}
-	return quitThread;
+	return stopSession;
 }
 
 size_t Engine::FlushPendingLogs()
@@ -1163,50 +1663,75 @@ size_t Engine::FlushPendingLogs()
 	// Lock order is mSessionsMutex -> mErrorMutex, the same one StartSession
 	// uses when it queues a record from inside the session table. Taking them
 	// the other way round would deadlock the two against each other.
+	//
+	// Sessions to stop are collected and acted on AFTER the locks drop:
+	// StopSession takes mSessionsMutex itself, and this function holds it.
+	PumpRawFiles();
+	std::vector<DWORD> toStop;
 	size_t written = 0;
-	std::lock_guard<std::mutex> lock(mSessionsMutex);
-	std::lock_guard<std::mutex> errorLock(mErrorMutex);
-	for (auto &rec : mErrors)
 	{
-		if (rec.logged)
-			continue;
-		const DWORD quitThread = PublishRecord(rec);
-		if (quitThread)
-			PostThreadMessageW(quitThread, WM_QUIT, 0, 0);
-		++written;
+		std::lock_guard<std::mutex> lock(mSessionsMutex);
+		std::lock_guard<std::mutex> errorLock(mErrorMutex);
+		for (auto &rec : mErrors)
+		{
+			if (rec.logged)
+				continue;
+			const DWORD stopSession = PublishRecord(rec);
+			if (stopSession)
+				toStop.push_back(stopSession);
+			++written;
+		}
 	}
+	for (DWORD id : toStop)
+		StopSession(id);
 	return written;
 }
 
 bool Engine::PopRecord(ErrorRecord &aRecord, DWORD aTimeoutMs)
 {
-	ErrorRecord rec;
+	// The child appends asynchronously: pump before every look, and while
+	// waiting keep the pump alive on a short slice (a record can arrive between
+	// the cv wake-up and the next check; the slice keeps it bounded).
+	const ULONGLONG deadline = aTimeoutMs == INFINITE
+		? ULONGLONG(-1) : GetTickCount64() + aTimeoutMs;
+	for (;;)
 	{
-		std::unique_lock<std::mutex> lock(mErrorMutex);
-		if (aTimeoutMs == INFINITE)
-		{
-			mErrorCv.wait(lock, [this] { return !mErrors.empty(); });
-		}
-		else if (!mErrorCv.wait_for(lock, std::chrono::milliseconds(aTimeoutMs),
-				[this] { return !mErrors.empty(); }))
-		{
-			return false;
-		}
-		rec = std::move(mErrors.front());
-		mErrors.pop_front();
-	}
+		PumpRawFiles();
 
-	// Routing and logging happen here, once: console, journal and (later) the UI
-	// all read the same session id and the same JSONL.
-	DWORD quitThread = 0;
-	{
-		std::lock_guard<std::mutex> lock(mSessionsMutex);
-		quitThread = PublishRecord(rec);
+		ErrorRecord rec;
+		bool have = false;
+		{
+			std::unique_lock<std::mutex> lock(mErrorMutex);
+			if (!mErrors.empty())
+			{
+				rec = std::move(mErrors.front());
+				mErrors.pop_front();
+				have = true;
+			}
+		}
+		if (have)
+		{
+			// Routing and logging happen here, once: console, journal and (later)
+			// the UI all read the same session id and the same JSONL.
+			DWORD stopSession = 0;
+			{
+				std::lock_guard<std::mutex> lock(mSessionsMutex);
+				stopSession = PublishRecord(rec);
+			}
+			if (stopSession)
+				StopSession(stopSession);
+			aRecord = std::move(rec);
+			return true;
+		}
+
+		const ULONGLONG now = GetTickCount64();
+		if (now >= deadline)
+			return false;
+		const DWORD slice = deadline == ULONGLONG(-1) ? 50
+			: (DWORD)std::min<ULONGLONG>(50, deadline - now);
+		std::unique_lock<std::mutex> lock(mErrorMutex);
+		mErrorCv.wait_for(lock, std::chrono::milliseconds(slice));
 	}
-	if (quitThread)
-		PostThreadMessageW(quitThread, WM_QUIT, 0, 0);
-	aRecord = std::move(rec);
-	return true;
 }
 
 } // namespace ahkdeck

@@ -119,6 +119,19 @@ private:
 	std::string ToolStopScript(const Json &aArgs);
 	std::string ToolListSessions();
 	std::string ToolStopAll();
+	// m174: the session's own window tree, as measurement data. Read-only.
+	std::string ToolInspectUi(const Json &aArgs);
+	// m187: the same window, as pixels instead of coordinates.
+	std::string ToolCaptureUi(const Json &aArgs);
+	std::string ToolPixel(const Json &aArgs);
+	// m177: the offline AutoHotkey help index, so a caller can confirm a
+	// signature instead of recalling one.
+	std::string ToolLookupHelp(const Json &aArgs);
+	// Parses docs\help-index.json on first use. Lazy on purpose: the file is
+	// ~280 KB and most sessions never ask for it, so no launch should pay for
+	// it. A failure is remembered in mHelpError rather than thrown, because the
+	// caller's next move is "quote the reason", not "crash".
+	void EnsureHelpIndexLoaded();
 
 	AiScriptPolicy mPolicy;
 	EditorSupplier mEditor;
@@ -136,6 +149,13 @@ private:
 	int mNextScriptId = 1;
 
 	std::mutex mCallMutex; // one tool at a time, for every transport
+
+	// m177: guarded by its own lock so a slow help query cannot sit behind an
+	// 8-second script run.
+	mutable std::mutex mHelpMutex;
+	bool mHelpLoaded = false;
+	Json mHelpEntries;
+	std::string mHelpError;
 };
 
 } // namespace agent

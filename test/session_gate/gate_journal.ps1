@@ -88,7 +88,7 @@ if ($started.event -ne 'started') { Add-Failure ("first line must be the started
 $sessionId = $started.session
 if (-not $sessionId) { Add-Failure 'started event has no session id' }
 if ($started.script -ne 'boom.ahk') { Add-Failure ("started.script = " + $started.script) }
-if ($started.log -notmatch '^Logs\\boom-') { Add-Failure ("started.log = " + $started.log) }
+if ($started.log -notmatch '^temp/logs/boom-') { Add-Failure ("started.log = " + $started.log) }
 if ($started.log.Contains(':')) { Add-Failure ("log path must stay relative: " + $started.log) }
 
 # 3: the kernel record

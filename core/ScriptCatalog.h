@@ -45,15 +45,54 @@ struct CatalogEntry
 struct CatalogResult
 {
 	std::vector<CatalogEntry> entries;
+	// m180: the manifest's own name, when it ships one (a top-level object
+	// with "name"). Ours is a bare array and stays nameless; a subscriber's
+	// manifest can say who it is, which is the only honest way for the 订阅
+	// list to label it - a host name is a fallback, not a title.
+	std::string name;
 	int skipped = 0;    // malformed or unsafe items (logged, never shown as rows)
 	std::string error;  // empty on success
 };
 
-enum class CatalogSource
+// One subscribed manifest (m180). `name` is cached from the last successful
+// fetch so 订阅管理 can list a source it cannot reach right now; empty means
+// "fall back to the host" - see CustomSourceLabel().
+struct CustomCatalogSource
 {
-	Gitee = 0,
-	Github = 1
+	std::string url;
+	std::string name;
 };
+
+// m179: which manifest a row came from, and - for the two official mirrors -
+// which per-entry URL field to download from. One value travels with each row
+// so a merged list never has to ask "where did this come from" a second time.
+//
+// A custom manifest is the same format as ours (name/version/gitee/github), so
+// it needs no new parser; it only differs in that the user's mirror choice in
+// 选项 has no meaning for it - see DownloadUrlFor().
+enum class ManifestSource
+{
+	OfficialGitee = 0,
+	OfficialGithub = 1,
+	Custom = 2
+};
+
+// m181: m146 §7 ruled that third-party manifests need a trust marker, because
+// the reason official scripts need no hashing ("every artifact comes out of
+// our own build", m160) does not hold for a stranger's catalog: a subscribed
+// manifest declares its own @name/@version and supplies its own bytes, so the
+// name+version check proves identity, NOT integrity or authorship.
+//
+// We deliberately do NOT add a mandatory hash/signature field: that would
+// break the "any same-shape json works" contract the subscription UI is built
+// on. Instead the boundary is made explicit to the user before the download
+// (two-click confirm), in the info window, and in the subscription window.
+// Both the UI and the unit gate go through these two functions so the rule
+// cannot silently drift apart.
+bool IsThirdPartyManifest(ManifestSource aSource);
+
+// Empty for the two official mirrors; otherwise the warning to show verbatim.
+const char *TrustNoticeFor(ManifestSource aSource);
 
 // rupix's four states, minus the ABI check (a script is a single text file):
 // Absent -> 下载, Upgradable -> 升级, Installed/Ahead -> 已下载.
@@ -92,19 +131,36 @@ std::string LocalScriptVersion(const std::wstring &aPath);
 ScriptInstallState ClassifyInstall(const CatalogEntry &aEntry,
 	const std::string &aLocalVersion, bool aLocalExists);
 
-const std::string &DownloadUrlFor(const CatalogEntry &aEntry, CatalogSource aSource);
+// Official rows follow the mirror the user picked in 选项; a custom manifest
+// has no mirror of its own, so it takes whichever field it actually publishes
+// (gitee first - the audience is Chinese, and our own format always fills it).
+const std::string &DownloadUrlFor(const CatalogEntry &aEntry,
+	ManifestSource aSource);
 
 // Both are derived from GetExeDirUtf8(), which already ends in a backslash.
 std::string ScriptsDirUtf8();
 std::string BundledCatalogPathUtf8();
 
-// Local-first: opening the dialog reads the bundled copy, never the network.
-bool ReadBundledCatalog(std::string &aOut, std::string &aError);
+// Where the last fetched copy of a manifest is cached. Official mirrors share
+// ONE file - they publish the same catalog - while every custom URL gets its
+// own, so switching or adding a source can never show another source's rows.
+// Custom caches are pure scratch and therefore live under temp\work\ (m177).
+std::string CatalogCachePathUtf8(ManifestSource aSource, const std::string &aUrl);
 
-// 刷新: fetch, verify it parses, then atomically overwrite the bundled copy.
-// A failed write keeps the old copy; a failed fetch keeps the old catalog.
-bool RefreshBundledCatalog(const std::string &aUrl, std::string &aOut,
-	std::string &aError);
+// The short name a custom source is shown under (the URL's host, without
+// "www."). Not a user-supplied name: m179 settled on "one URL box, no naming
+// step", so the label has to be derivable. Returns an empty string for an
+// unusable URL.
+std::string CustomSourceLabel(const std::string &aUrl);
+
+// Local-first: opening the dialog reads the cached copy, never the network.
+bool ReadCatalogCache(ManifestSource aSource, const std::string &aUrl,
+	std::string &aOut, std::string &aError);
+
+// 刷新: fetch, verify it parses, then atomically overwrite the cache. A failed
+// write keeps the old copy; a failed fetch keeps the old catalog.
+bool RefreshCatalogCache(ManifestSource aSource, const std::string &aUrl,
+	std::string &aOut, std::string &aError);
 
 // The safe install. DownloadFile() writes CREATE_ALWAYS and deletes its target
 // on failure, so it must NEVER be pointed at the live script. This stages into

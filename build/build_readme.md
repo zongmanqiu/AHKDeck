@@ -1,7 +1,7 @@
 # AHKDeck 构建说明（build/）
 
 [full.bat](full.bat) 依次执行 1 体检 → 2 下载 → 3 补丁 → 4 构建 → 5 测试，任一步返回失败即停。
-各步可单独重跑；`4_build.bat` 包含 FLTK、AHK_H 内核 DLL 和 AHKDeck 主程序构建。
+各步可单独重跑；`4_build.bat` 包含 FLTK、官方内核 EXE 和 AHKDeck 主程序构建。m192 P4 起内核只有一个产物（`AutoHotkey64.exe`），AHK_H 的 DLL 与 `tools\` 编译底座已退场。
 路径变量集中在 [_common.bat](_common.bat)，依赖来源与版本固定在 [deps.txt](deps.txt)。
 下文 `.main/`、`.3rd/`、`.temp/`、`.build/` 均为工作区相对路径，不是本机固定位置。
 
@@ -21,7 +21,7 @@ full.bat                 :: 一键全链路
 |---|---|
 | `AHKDECK_FORCE_DOWNLOAD=1` | 无视缓存与在位检查，全部重下重解压 |
 | `AHKDECK_FORCE_FLTK=1` | 清掉 `.temp\fltk-build` 重编 FLTK |
-| `AHKDECK_FORCE_KERNEL=1` | 强制重建内核 DLL |
+| `AHKDECK_FORCE_KERNEL=1` | 强制重建官方内核 EXE |
 | `AHKDECK_SKIP_PATCH=1` | 4_build 里跳过补丁重放；full.bat 本身不自动设置此变量 |
 | `AHKDECK_GATE_UI=1` | 5_test 额外运行 GUI 标签测试；默认只跑非 GUI CTest 及静态检查 |
 | `AHKDECK_CHAINED=1` | 抑制脚本结尾的 pause（full.bat 自动设置） |
@@ -34,11 +34,11 @@ full.bat                 :: 一键全链路
 | 第三方源码 | `.3rd\<库名>\`（永不放编译产物） |
 | 下载缓存 | `.temp\download_cache\` |
 | FLTK 构建树 | `.temp\fltk-build\` |
-| 内核构建树及 DLL 暂存 | `.temp\kernel_build\`、`.temp\kernel\` |
+| 内核构建树与产物暂存 | `.temp\kernel_build\`（MSBuild 中间物）、`.temp\kernel_official\AutoHotkey64.exe` |
 | CMake 构建树 | `.temp\cmake_build\` |
 | 测试 exe | `.temp\bin\` |
-| 成品 exe 与内核 | `.build\AHKDeck.exe`、`.build\AutoHotkey64.dll` |
-| 编译器随包件 | `.build\tools\`（m172：CMake POST_BUILD 从 `.3rd\AutoHotkey_2.0.30` 平铺 `Ahk2Exe.exe` + `AutoHotkey64.exe`，供「脚本/编译为 EXE」；`.3rd` 缺失的独立检出不生成，打包必需项会拦） |
+| 成品（恰好两个 PE） | `.build\AHKDeck.exe`、`.build\AutoHotkey64.exe` |
+| 编译底座 | **不单独存在**：`core\ExeCompiler` 直接复制 `.build\AutoHotkey64.exe` 并写入脚本/图标/版本资源。`4_build.bat` 会清掉旧布局残留的 `.build\AutoHotkey64.dll` 与 `.build\tools\`；缺内核即判构建失败 |
 | 脚本目录 | `.build\Scripts\`（CMake `deck_scripts ALL` 目标只负责创建该目录；脚本由用户自行放入） |
 
 ## 构建约束
@@ -57,10 +57,11 @@ full.bat                 :: 一键全链路
 6. **宿主编译选项**：[CMakeLists.txt](../CMakeLists.txt) 使用 C++17、静态 CRT，并对 MSVC 开启
    `/utf-8`；`/W4 /WX` 按自有目标设置，不全局施加给第三方目标。FLTK 配置同时传入
    `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded` 和 `FLTK_MSVC_RUNTIME_DLL=OFF`。
-7. **内核 DLL**：[build_kernel.bat](build_kernel.bat) 构建 `AutoHotkeyx.sln` 的 `MT_ReleaseDll` / `x64`。
-   `OutDir`、`IntDir` 分别指向 `.temp/kernel_build/bin/`、`.temp/kernel_build/obj/`，当前未按项目追加子目录。
-   成功构建后递归清理第三方树中的 `temp` 暂存目录；失败会提前退出，可能需要清理残留。
-   详见 [内核补丁说明](../patches/AutoHotkey_H-v2.0.25/README.md)。
+7. **官方内核 EXE**：[build_kernel.bat](build_kernel.bat) 只构建 `.3rd\AutoHotkey-v2.0.31-src\AutoHotkeyx.sln`
+   的 `Release / x64`，产物复制到 `.temp\kernel_official\AutoHotkey64.exe`；`OutDir`、`IntDir` 指向
+   `.temp\kernel_build\official_bin\`、`.temp\kernel_build\official_obj\`。补丁目录里的任一文件比产物新
+   （或 `AHKDECK_FORCE_KERNEL=1`）就重编。成功后递归清理第三方树中的 `temp` 暂存目录，保持 `.3rd` 只有源码。
+   详见 [官方内核补丁说明](../patches/AutoHotkey-v2.0.31/README.md)；AHK_H 的两条旧配置不再构建。
 8. **自动化调用**：从 PowerShell 用 `cmd /c 'full.bat'`；单步调用先设置
    `$env:AHKDECK_CHAINED='1'` 避免 pause。`full.bat` 自行设置链式标志，子调用应保存并恢复它。
 9. **批处理重定向**：echo 文本中的未转义 `<`、`>` 会被 cmd 当成重定向，展示路径使用 `:` 分隔，
@@ -68,7 +69,7 @@ full.bat                 :: 一键全链路
 
 ## 测试范围
 
-[5_test.bat](5_test.bat) 先检查 AHK_H 专有名称、控制台归属、下拉项分隔及窗口装饰约束，
+[5_test.bat](5_test.bat) 先检查 AHK_H 专有名称（历史静态名单：官方内核没有这些内置名，防止脚本再用到）、控制台归属、下拉项分隔及窗口装饰约束，
 再运行 `ctest --output-on-failure -LE gui`。设置 `AHKDECK_GATE_UI=1` 后追加 GUI 标签测试。
 测试注册以 [CMakeLists.txt](../CMakeLists.txt) 为准；Python 不可用时 MCP 测试不会注册。
 默认流水线并不运行所有 `test/` 脚本；手动 UI 冒烟和成品对拍需单独调用并满足各自前置条件。

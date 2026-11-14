@@ -2,16 +2,18 @@
 #
 # The manifest and the rules live in build/打包清单.md. In short: the folder a
 # user unzips must contain exactly what the release advertises - AHKDeck.exe,
-# AutoHotkey64.dll, Scripts\ (empty - the folder the deck scans), docs\ (the MCP access doc), licenses\
-# (upstream license texts), tools\ (the official Ahk2Exe + base the deck's
-# 「编译为 EXE」 runs - m172), LICENSE, THIRD-PARTY-NOTICES.md. Never:
-# settings.json, hotkeys.txt, Logs\, Backups\, update.cache.json, .temp\,
-# ahkdeck_backup\, the installer bat. Those are per-machine state, not the
-# product.
+# AutoHotkey64.exe (m192 P4: the ONE kernel, both the engine's per-session
+# child and the image 「编译为 EXE」 bundles), Scripts\ (empty - the folder the
+# deck scans), docs\ (the MCP access doc), licenses\ (upstream license texts),
+# LICENSE, THIRD-PARTY-NOTICES.md. Never: AutoHotkey64.dll or tools\ (the m190
+# AHK_H pair, retired in m192 P4), settings.json, hotkeys.txt, temp\ (m177:
+# logs, backups, work, deleted, the update cache and the updater's own scratch),
+# or the pre-m177 names (Logs\, Backups\, .temp\, ahkdeck_backup\,
+# ahkdeck_update.log). Those are per-machine state, not the product.
 #
-# tools\ is a REQUIRED item: a release built where .3rd was missing would have
-# no staged compiler, and shipping that zip would silently break 编译为 EXE on
-# every user machine. The throw below fails that build closed.
+# AutoHotkey64.exe is a REQUIRED item: a release built where the kernel was
+# missing would break both running scripts and 编译为 EXE on every user machine.
+# The throw below fails that build closed.
 #
 # The zip is made with 7z (m119), not System.IO.Compression. Set AHKDECK_7Z to
 # the full path of 7z.exe/7za.exe when it is not on PATH.
@@ -40,8 +42,8 @@ $stage = Join-Path $temp ("package-" + $version)
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Path $stage | Out-Null
 
-$items = @("AHKDeck.exe", "AutoHotkey64.dll", "LICENSE", "THIRD-PARTY-NOTICES.md",
-           "docs", "licenses", "tools")
+$items = @("AHKDeck.exe", "AutoHotkey64.exe", "LICENSE", "THIRD-PARTY-NOTICES.md",
+           "docs", "licenses")
 foreach ($item in $items) {
     $src = Join-Path $build $item
     if (-not (Test-Path $src)) { throw "missing release item in .build: $item" }

@@ -1,30 +1,29 @@
-// core/ExeCompiler.h - m172: compile one script to a standalone .exe via the
-// OFFICIAL Ahk2Exe compiler, shipped inside the release under tools\.
+// core/ExeCompiler.h - m172, rewritten in m188.
 //
-// The deck owns no compiler of its own. Everything here is a thin, honest
-// wrapper around the official exe:
+// Compiles one script to a standalone .exe. m188 dropped the official
+// Ahk2Exe.exe (995 KB, because it is itself a compiled AutoHotkey v1.1 script
+// carrying a whole previous-generation runtime) in favour of the job it
+// actually performs:
 //
-//   tools\Ahk2Exe.exe  /in <script>  /out <exe>  /base <AutoHotkey64.exe>  /silent
+//   AutoHotkey64.exe  ->  copy  ->  replace RCDATA id 1 with the script
 //
-// Semantics measured against the shipped pair (m172 probes, do not "improve"
-// these from the docs alone):
-//   * rc == 0            success; the success line lands on STDOUT;
-//   * rc == 17           the script has a syntax error - Ahk2Exe validates it
-//                        through its base first; stderr carries the kernel's own
-//                        "==> ..." line;
-//   * rc == 50           an #Include file cannot be opened; stderr explains it;
-//   * /silent            never shows a dialog, which is exactly why we use it;
-//   * the base exe MUST sit in the compiler's own directory: Ahk2Exe also
-//                        searches there for a matching-version interpreter to
-//                        use as a utility while compiling (docs: "Background
-//                        Information"), so tools\ is not splittable and the
-//                        /base path is still passed explicitly anyway.
+// Measured, not assumed (m188 probes): the resulting exe runs, is the same size
+// as Ahk2Exe's output (512 bytes of resource directory apart), and needs no
+// v1.1 runtime. m192 P4: the base is the single shipped kernel next to
+// AHKDeck.exe (also the EXE the editor spawns per session), so tools\ is gone
+// and the package carries exactly two PE files.
 //
-// It runs as a SHORT-LIVED CHILD PROCESS on purpose. The in-process kernel can
-// load a source file only once while its life (DeckEngine.h m103), and the
-// compiler is a separate exe image with its own quirks - neither belongs inside
-// this process. Output goes through temp files, not pipes: same deadlock
-// argument as validate (Toolbox.cpp m103).
+// What went away with Ahk2Exe:
+//   * #@Ahk2Exe-* directives - still not parsed (the runtime sees them as plain
+//     comments). m189 restored the two carrying real user value through a
+//     first-class entry instead: a custom icon and a fresh version block.
+//   * console subsystem / MPRESS - not done; the deck never used either.
+//   * #Include inlining - the runtime resolves #Include by itself, relative to
+//     the exe. Identical for a single-file script (all six bundled ones).
+// What was kept: the script is validated in a CHILD process first (m192 P4:
+// AHKDeck.exe --validate, which starts its own kernel child), because a live
+// interpreter cannot be reused for a load check, and bundling a script that
+// cannot load is a trap the user only finds by double-clicking the result.
 //
 // Synchronous and blocking - call from a worker thread, never the UI thread.
 // FLTK-free.
@@ -35,10 +34,11 @@
 namespace ahkdeck
 {
 
-// Compiler tool locations under the exe directory. True when BOTH files are
-// present; `aError` carries a user-readable Chinese sentence naming what is
-// missing otherwise (fail closed - a half-populated tools\ must not surprise a
-// user mid-compile).
+// Tool locations under the exe directory. m188: only the base image is needed.
+// `aCompilerOut` stays in the signature for callers that probe the tool set and
+// is ALWAYS empty now - a non-empty value there would mean nothing.
+// `aError` carries a user-readable Chinese sentence naming what is missing
+// (fail closed: a half-populated tools\ must not surprise a user mid-compile).
 bool ResolveCompileTools(const std::wstring &aExeDir, std::wstring &aCompilerOut,
 	std::wstring &aBaseOut, std::string &aError);
 
@@ -48,34 +48,51 @@ bool ResolveCompileTools(const std::wstring &aExeDir, std::wstring &aCompilerOut
 // surprising one into a directory escape).
 std::wstring DefaultExePathFor(const std::wstring &aScriptPath);
 
-// The compiler's full command line (quoted, /silent throughout). Pure, so the
-// quoting of Chinese and spaced paths is pinned by a unit test instead of by a
-// GUI click.
-std::wstring BuildCompileCommandLine(const std::wstring &aCompilerPath,
-	const std::wstring &aScriptPath, const std::wstring &aOutPath,
-	const std::wstring &aBasePath);
-
 struct ExeCompileOutcome
 {
-	int rc = -1;           // the compiler's own exit code; -1 = never ran
-	std::string output;    // UTF-8: stdout+stderr of the compiler, verbatim
+	int rc = -1;           // 0 = produced; the validator's code when it refused;
+	                       // -1 = never got that far
+	std::string output;    // UTF-8: the validator's diagnostics, already turned
+	                       // from JSON records into "第 N 行：..." lines
 	std::wstring outPath;  // where the .exe should be by the time rc == 0
 	bool produced = false; // rc == 0 AND the file is on disk (belt: rc lies if
-	                       // the process was killed mid-way, so check both)
+	                       // the move failed, so check both)
 	bool backedUp = false; // TRUE only when THIS call renamed a previous
 	                       // target to ".old" - stale .old files from an
 	                       // earlier round must not make the console lie
-	std::string error;     // deck-side failure (spawn/wait/file), not the
-	                       // compiler's - the compiler's voice is in `output`
+	std::string error;     // deck-side failure (tool check/read/resource/move),
+	                       // not the script's - the script's voice is in `output`
 };
 
-// Compiles one script. The call blocks until the child exits or `aTimeoutMs`
-// elapses (then it is killed and the outcome says so). Existing target is
-// preserved first: renamed to "<target>.old", replacing any earlier .old -
-// the same contract as the downloader's overwrite path (m160), so a recompile
-// can never silently destroy a artifact the user kept.
-// Intermediate capture files live under <exeDir>\.temp and are deleted.
+// m189: the artwork a compiled script carries. Both parts are optional writes
+// on the same update handle as the script - no extra tool, no extra pass.
+struct ExeCompileOptions
+{
+	std::wstring iconPath;         // .ico to adopt; empty = keep the base icon
+	std::wstring fileVersion;      // "1.2.3.4"; empty = 1.0.0.0
+	std::wstring productName;      // empty = the script's file name
+	std::wstring fileDescription;  // empty = the script's file name
+	std::wstring companyName;      // empty = omitted from the version block
+	std::wstring legalCopyright;   // empty = omitted from the version block
+};
+
+// What a plain "编译为 EXE" uses: product/description from the script name,
+// version 1.0.0.0, and - the convention that makes a custom icon reachable
+// without a dialog - a sibling "<script>.ico" when one exists.
+ExeCompileOptions DefaultCompileOptionsFor(const std::wstring &aScriptPath);
+
+// Compiles one script. Blocks while the validator runs; `aTimeoutMs` bounds
+// that child (the bundling itself is a copy plus resource writes).
+// An existing target is preserved first: renamed to "<target>.old", replacing
+// any earlier .old - the same contract as the downloader's overwrite path
+// (m160), so a recompile can never silently destroy an artifact the user kept.
+// The artifact is built under <exeDir>\temp\work and moved into place, so a
+// failure cannot leave a half-written exe at the destination.
 ExeCompileOutcome CompileScriptToExe(const std::wstring &aExeDir,
 	const std::wstring &aScriptPath, const std::wstring &aOutPath, int aTimeoutMs = 60000);
+
+ExeCompileOutcome CompileScriptToExe(const std::wstring &aExeDir,
+	const std::wstring &aScriptPath, const std::wstring &aOutPath,
+	const ExeCompileOptions &aOptions, int aTimeoutMs = 60000);
 
 } // namespace ahkdeck

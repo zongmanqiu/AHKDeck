@@ -5,6 +5,42 @@
 
 ---
 
+## 未发布（工作区，2026-11-14 · m192–m194）
+
+> 本小节记录**尚未发版**的工作区改动；正式发布时归入新版本小节，版本号只以
+> `CMakeLists.txt` 的 `project(AHKDeck VERSION ...)` 为准，并同步 `update.json`。
+> 当前 `CMakeLists.txt`／`update.json` 仍是 0.3.3，本轮只提交源码与更新发行包附件，
+> **不发新版本、不打新标签、不改 `update.json`**。
+
+**变更（单内核）**
+
+- 内核由「AHK_H v2.0.25 进程内 DLL ＋ 独立编译底座」收敛为**一个**官方 AutoHotkey v2.0.31
+  EXE（`.3rd/AutoHotkey-v2.0.31-src` ＋ 五处 env 门控补丁，m194 补 `script.cpp`）。宿主按会话启动它一次，
+  「脚本/编译为 EXE」复制同一个 PE 写入脚本资源；`AutoHotkey64.dll` 与 `tools\` 退场，
+  发行包由 3 个 PE 变 2 个 PE，zip 实测 1,712,044 B / 14 条目。
+- **合并托盘菜单保留**（用户硬需求）：子进程 `NO_TRAY` ＋ 菜单 JSON 快照 → 宿主重建 HMENU →
+  点击 `WM_COMMAND` 回传。状态栏内核版本改读该 EXE，启动日志改为「进程外、每会话一个子进程」。
+- 构建线：`build_kernel.bat` 只编官方 `Release|x64`；`4_build.bat` 清理旧 DLL/tools 残留，
+  缺内核直接判失败；`6_package.ps1` 白名单换成 `AutoHotkey64.exe`。
+- 门禁：`kernel_pair`（DLL/底座对拍）换成 `single_kernel` ＋ `single_kernel_selftest`
+  （包内恰好一个 AHK PE、无 DLL、无 `tools\`、与 `.temp\kernel_official` 逐字节相同，
+  并用污染样本反证门禁会变红）。`test_execompiler` 端到端绿/红臂改指新布局，不再整段 SKIP。
+- 文档：`THIRD-PARTY-NOTICES.md`、`engine/README.md`、`build/打包清单.md`、
+  `build/build_readme.md`、`README.md`、`docs/MCP接入.md` 等同步单内核口径；
+  官方 2.0.31 的 `license.txt` 与随包 `GPL-2.0.txt`／`LICENSE` 核实为同一份原文。
+
+- **修复（m194，用户实测反馈）**：进程外模型下 `A_AhkPath` 变成内核 EXE，官方脚本据此误判
+  「独立运行」并 `A_IconHidden := false`，把 `AHKDECK_NO_TRAY` 推翻，多脚本时每个又出现自己的
+  托盘图标（合并托盘硬需求被破坏）。新增内核补丁 5 与 `AHKDECK_HOST_EXE` 环境门控，
+  让 `A_AhkPath` 恢复旧进程内语义；六个脚本一行未改。实测宿主强杀后 Job Object 仍能回收全部子进程。
+  详见 `.plan/m194-托盘收纳回归与架构复核.md`。**当前已运行的宿主需重启才生效。**
+
+**门禁**：非 GUI 默认门禁 21/21（`ctest -N -LE gui`；另有 1 个 `gui` 标签用例需 `AHKDECK_GATE_UI=1`）；
+  编译链端到端红/绿臂改指新布局后实际执行 27 条断言、不再整段 SKIP；`single_kernel` 及其污染样本自检、
+  `session`/`journal` 托盘桥用例全绿。托盘图标的真机目视与点击仍需手测。
+
+---
+
 ## 0.3.3（2026-11-13）
 
 **新增**

@@ -279,11 +279,16 @@ void attach(Fl_Window *win) {
     if (W <= 0 || H <= 0) return;
     const int N = MulDiv(kRampPx, dpiOf(hwnd), 96);
 
+    // m185: make the real window the OWNER of its glow layer. An ownerless
+    // WS_POPUP gets pushed below every real window when another window is
+    // activated by a click; Windows then keeps an owned popup above its
+    // owner automatically. Without this the glow AND the 1px anti-aliased
+    // corner ring vanished and the hard SetWindowRgn corners showed through.
     HWND sh = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT |
                               WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
                               L"AHKDeck.WindowShadow", L"", WS_POPUP,
                               rc.left - N, rc.top - N, W + 2 * N, H + 2 * N,
-                              nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+                              hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
     if (!sh) return;
 
     SetPropW(hwnd, kShadowHwnd, sh);

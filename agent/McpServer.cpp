@@ -334,10 +334,21 @@ void ServeStdio(Toolbox &aToolbox, const std::atomic<bool> &aRunning,
 				"不要据此改代码；语法能否通过一律以 validate_editor 为准"
 				"（内核 /validate 只解析不执行，ok=true 才可运行）。"
 				"4) 运行用 run_editor（编辑区）或 run_script（磁盘脚本）；"
-				"verdict 为 pass/fail/resident/timeout 之一，errors 是带行号的结构化内核原话，"
+				"verdict 为 pass/fail/resident/timeout 之一，errors 是结构化的内核原话："
+				"line（行号）、source（该行原文）、message（为什么错）、func（出错时在哪个函数）、"
+				"stack（调用链，顶层在前），warnings 是 #Warn 类告警；"
 				"next 字段直接给出下一步该调哪个工具。"
-				"5) 失败时按 errors[].line 用 patch_editor 修，再运行复验，直到 verdict=pass。"
+				"5) 失败时看 errors[0].source 就是那一行代码，按 errors[].line 用 patch_editor 修，"
+				"再运行复验，直到 verdict=pass。同一行出现在不同位置时用 stack 区分是热键、"
+				"定时器还是 GUI 回调进来的。"
 				"verdict=resident 表示脚本常驻：用 get_session_output 读输出，需要结束时 stop_script。"
+				"6) 界面类脚本跑起来之后，inspect_ui 能按会话量出顶层窗口与全部子控件的类名、文字、"
+				"客户区坐标（与开发指南 §10 坐标表同口径）、样式位与 DPI，ui_pixel 取单点颜色；"
+				"核对布局是否落在源码写的 x,y,w,h 时用它，比截图可靠。"
+				"7) 不确定某个 AHK 函数的签名、参数顺序或参数含义时先 lookup_help 查——"
+				"它查的是随包的 2.0.30 官方帮助索引，和你正在跑的内核同版本。"
+				"凭记忆写 API 会写出语法合法但语义错的代码（参数位置颠倒、选项名拼错、"
+				"把格式串当初始值），validate_editor 与 run_editor 都拦不住这类问题。"
 				"工具输出只给脚本 id 与文件名，不含本机绝对路径。"));
 			WriteErrorLog(aLog, "mcp: initialize from protocolVersion=" + requested + "\n");
 			WriteFrame(ResultFrame(id, std::move(result)));

@@ -39,10 +39,12 @@ public:
 	{
 		std::wstring path;
 		std::string name;  // UTF-8 leaf, display only
-		// m132: the script's own tray menu, copied into a real submenu, and the
-		// window the picked command id is posted back to. Both may be null (script
-		// gone, or kernel without DeckTrayMenu); the entry then falls back to
-		// "open that script's menu in a second popup" like m131 did.
+		// m132/m192 P3: the host-owned HMENU rebuilt from the child's JSON tray
+		// snapshot, copied into a real submenu, and the child window the picked
+		// command id is posted back to as WM_COMMAND. Both may be null (script
+		// gone, or a busy child that could not answer the snapshot request); the
+		// entry then falls back to "open that script's menu in a second popup"
+		// like m131 did.
 		HMENU menu = nullptr;
 		HWND window = nullptr;
 	};

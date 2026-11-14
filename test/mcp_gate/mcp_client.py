@@ -44,6 +44,17 @@ EXPECTED_TOOLS = {
     "stop_script",
     "list_sessions",
     "stop_all",
+    # m174: the measurement pair. Same process as the script, so the tree comes
+    # from EnumThreadWindows instead of a cross-process hit test.
+    "inspect_ui",
+    "ui_pixel",
+    # m177: the offline help index. Answers "what is this function's signature"
+    # without a network round trip and without trusting recollection.
+    "lookup_help",
+    # m187: pixels for a session's own window. It exists because a screen copy
+    # only ever returns whatever is in front, and on this machine the foreground
+    # is routinely another application (see the gate cells in 5.7).
+    "capture_ui",
 }
 
 # m101: the legal write_script success path needs a file inside Scripts; the
@@ -54,6 +65,24 @@ WRITE_PROBE = "mcp-gate-write-probe.ahk"
 # chasing. The gate's point is that the loop SEES the failure through the
 # endpoint, not that we claim it does.
 BROKEN = "#Requires AutoHotkey v2.0\nMsgBox, 123\n"
+# m175: a runtime fault two frames deep, so the record has to name the line,
+# quote it, name the function and show how it got there. Line 11 is the divide;
+# line 7 is the call site that must appear in the stack; "> Timer" is the
+# thread entry (a line number alone cannot tell a timer apart from startup).
+STACKED = (
+    "#Requires AutoHotkey v2.0\n"     # 1
+    "Persistent()\n"                  # 2
+    "SetTimer(Outer, -50)\n"          # 3
+    "return\n"                        # 4
+    "\n"                              # 5
+    "Outer() {\n"                     # 6
+    "    Inner(3)\n"                  # 7
+    "}\n"                             # 8
+    "\n"                              # 9
+    "Inner(n) {\n"                    # 10
+    "    x := n / 0\n"                # 11
+    "}\n"                             # 12
+)
 FIXED = (
     "#Requires AutoHotkey v2.0\n"
     'FileAppend "mcp-gate-hello`n", A_ScriptDir "\\mcp-gate.txt"\n'
@@ -175,11 +204,38 @@ def probe(client: McpStdio, resident_file: Path, exe_dir: Path,
     listed = client.request("tools/list")
     tools = (listed.get("result") or {}).get("tools") or []
     names = {t.get("name") for t in tools}
-    cell("tools/list count == 12", len(tools) == len(EXPECTED_TOOLS),
+    cell("tools/list count == %d" % len(EXPECTED_TOOLS), len(tools) == len(EXPECTED_TOOLS),
          f"got {len(tools)}: {sorted(names)}")
     cell("tools/list names exact", names == EXPECTED_TOOLS,
          f"missing={sorted(EXPECTED_TOOLS - names)} extra={sorted(names - EXPECTED_TOOLS)}")
     cell("write_script stays off the list", "write_script" not in names)
+
+    # --- 2b. m177: the help index must answer, or say it cannot ------------
+    # This tool exists because a plausible API is the expensive failure: it
+    # parses, it runs, it does the wrong thing, and no validator catches it. So
+    # the cells below are about honesty (exact flag, miss reports) as much as
+    # about content - a lookup that guesses would be worse than none.
+    help_hit, help_err = client.tool("lookup_help", {"query": "StrSplit"})
+    help_hits = help_hit.get("hits") or []
+    cell("lookup_help answers a real function",
+         not help_err and bool(help_hits) and help_hits[0].get("name") == "StrSplit",
+         json.dumps(help_hit, ensure_ascii=False)[:200])
+    first = help_hits[0] if help_hits else {}
+    cell("lookup_help keeps the documented parameter order",
+         [p.get("name") for p in (first.get("params") or [])][:2] == ["String", "Delimiters"],
+         json.dumps(first.get("params"), ensure_ascii=False)[:200])
+    cell("lookup_help marks a name hit exact", help_hit.get("exact") is True,
+         json.dumps(help_hit, ensure_ascii=False)[:120])
+    cell("lookup_help omits the example unless asked", "example" not in first,
+         list(first.keys()))
+    alias_hit, _ = client.tool("lookup_help", {"query": "SendInput"})
+    cell("lookup_help resolves a merged page by alias",
+         str(((alias_hit.get("hits") or [{}])[0]).get("name") or "").startswith("Send /"),
+         json.dumps(alias_hit, ensure_ascii=False)[:200])
+    miss, _ = client.tool("lookup_help", {"query": "zzznotafunction"})
+    cell("lookup_help reports a miss instead of guessing",
+         not miss.get("hits") and bool(miss.get("hint")),
+         json.dumps(miss, ensure_ascii=False)[:200])
     schemas = {t.get("name"): (t.get("inputSchema") or {}) for t in tools}
     cell("inputSchema required present",
          schemas.get("edit_editor", {}).get("required") == ["content"],
@@ -337,12 +393,73 @@ def probe(client: McpStdio, resident_file: Path, exe_dir: Path,
          all(":" not in f and "\\" not in f and "/" not in f for f in efiles),
          str(efiles)[:200])
 
+    # --- 5.4 m175: a location, not just a line number ---------------------
+    client.tool("edit_editor", {"content": STACKED})
+    run3, _ = client.tool("run_editor", {"timeout_ms": 3000})
+    e3 = (run3.get("errors") or [{}])[0]
+    cell("runtime fault names the exact line", e3.get("line") == 11,
+         json.dumps(e3, ensure_ascii=False)[:220])
+    cell("the record quotes that line",
+         "n / 0" in str(e3.get("source", "")), repr(e3.get("source"))[:120])
+    cell("the record names the running function", e3.get("func") == "Inner",
+         repr(e3.get("func")))
+    stack = str(e3.get("stack", ""))
+    cell("the stack names the caller and the thread entry",
+         "Outer" in stack and "Timer" in stack, repr(stack)[:200])
+    cell("the stack carries no machine path",
+         not re.search(r"[A-Za-z]:[\\/]", stack + str(e3.get("source", ""))),
+         repr(stack)[:200])
+    # A resident script that already logged a runtime error must not be sold as
+    # "fine, go read the output": the next step has to point at the broken line.
+    cell("a resident run with an error says where it broke",
+         run3.get("verdict") == "resident" and "errors" in str(run3.get("next", "")),
+         f"verdict={run3.get('verdict')} next={str(run3.get('next'))[:120]}")
+    if run3.get("session"):
+        client.tool("stop_script", {"session": run3["session"]})
+
     client.tool("edit_editor", {"content": FIXED})
     run2, _ = client.tool("run_editor", {"timeout_ms": 8000})
     cell("fixed script passes", run2.get("rc") == 0 and not run2.get("fatal"),
          f"state={run2.get('state')} rc={run2.get('rc')} output={str(run2.get('output'))[:120]}")
     cell("a fixed script is a pass verdict", run2.get("verdict") == "pass",
          f"verdict={run2.get('verdict')}")
+
+    # --- 5.4b m187: capture_ui returns pixels, not just coordinates -------
+    # PrintWindow makes the window paint itself, so the capture must work while
+    # the window is not in front - the normal state on this machine. If this
+    # ever regresses to a screen copy, the cells below still pass (a BMP comes
+    # back) but 1-2px measurements taken from it stop being trustworthy, which
+    # is why the module asserts a relative path and a real byte count too.
+    GUI_PROBE = (
+        '#Requires AutoHotkey v2.0\n'
+        'g := Gui("+Resize", "capture-gate-probe")\n'
+        'g.AddText("x16 y16 w200 h24", "capture gate")\n'
+        'g.Show("w240 h100")\n'
+        'Persistent()\n'
+    )
+    client.tool("edit_editor", {"content": GUI_PROBE})
+    grun, _ = client.tool("run_editor", {"timeout_ms": 4000})
+    gsid = grun.get("session")
+    cap = {}
+    if gsid:
+        # The Gui appears asynchronously; capture_ui waits on its own.
+        cap, _ = client.tool("capture_ui", {"session": gsid, "wait_ms": 3000})
+    cell("capture_ui shoots a script-owned window",
+         cap.get("ok") is True and (cap.get("width") or 0) > 0,
+         json.dumps(cap, ensure_ascii=False)[:220])
+    cell("capture_ui wrote real pixels",
+         (cap.get("bytes") or 0) > 2000 and cap.get("print_window") is True,
+         f"bytes={cap.get('bytes')} print_window={cap.get('print_window')}")
+    cell("capture_ui returns a relative path",
+         bool(cap.get("path")) and ":" not in str(cap.get("path")),
+         repr(cap.get("path"))[:160])
+    if gsid:
+        cropped, _ = client.tool("capture_ui",
+                                 {"session": gsid, "rect": "0,0,120,40"})
+        cell("capture_ui honours rect in client coordinates",
+             cropped.get("width") == 120 and cropped.get("height") == 40,
+             f"w={cropped.get('width')} h={cropped.get('height')}")
+        client.tool("stop_script", {"session": gsid})
 
     # --- 5.5 a script with chinese text (m083) ---------------------------
     # A Chinese script is the normal thing to edit here. Replacing the editing
@@ -807,7 +924,7 @@ def main() -> int:
         # m062: run_editor now runs from a copy in the script's own folder
         # (real file, or Scripts\AHKDeck-preview.ahk), so A_ScriptDir is the
         # directory the user saves into. Probes therefore land next to that
-        # copy, in Scripts, not in .temp.
+        # copy, in Scripts, not in temp\work.
         exe_dir = Path(exe).parent
         probe_dir = exe_dir / "Scripts"
         resident = probe_dir / "mcp-gate-resident.txt"
@@ -817,10 +934,10 @@ def main() -> int:
                       probe_dir / "mcp-gate-args.txt",
                       probe_dir / "mcp-gate-validated.txt",
                       probe_dir / "AHKDeck-preview.ahk",
-                      exe_dir / ".temp" / "validate-editor.ahk"):
+                      exe_dir / "temp" / "work" / "validate-editor.ahk"):
             if stale.exists():
                 stale.unlink()
-        for stale in (exe_dir / ".temp").glob("validate-*.out"):
+        for stale in (exe_dir / "temp" / "work").glob("validate-*.out"):
             stale.unlink()
 
     try:
@@ -829,7 +946,7 @@ def main() -> int:
         cell("probe completed", False, f"{type(exc).__name__}: {exc}")
     finally:
         client.close()
-        # Two byproducts, both under <exe dir>\.temp: the resident tick file and
+        # Two byproducts, both under <exe dir>	emp\work: the resident tick file and
         # the file the FIXED script appends to A_ScriptDir. A gate that leaves
         # files behind is a gate that will be blamed for "the deck made a mess".
         for leftover in (resident, Path(exe_dir) / "Scripts" / "mcp-gate.txt",
@@ -838,7 +955,7 @@ def main() -> int:
                          Path(exe_dir) / "Scripts" / "mcp-gate-args.txt",
                          Path(exe_dir) / "Scripts" / "mcp-gate-validated.txt",
                          Path(exe_dir) / "Scripts" / "AHKDeck-preview.ahk",
-                         Path(exe_dir) / ".temp" / "validate-editor.ahk"):
+                         Path(exe_dir) / "temp" / "work" / "validate-editor.ahk"):
             for _attempt in range(20):
                 try:
                     if leftover.exists():
@@ -866,7 +983,7 @@ def main() -> int:
                     break
                 except OSError:
                     time.sleep(0.1)
-            backups = write_probe.parent.parent / "Backups"
+            backups = write_probe.parent.parent / "temp" / "backups"
             try:
                 for hit in backups.glob("*/" + WRITE_PROBE):
                     hit.unlink()
@@ -877,7 +994,7 @@ def main() -> int:
             except OSError:
                 pass
         if not selftest:
-            args_left = Path(exe_dir) / ".temp" / "mcp-gate-args.txt"
+            args_left = Path(exe_dir) / "temp" / "work" / "mcp-gate-args.txt"
             try:
                 if args_left.exists():
                     args_left.unlink()
@@ -885,12 +1002,12 @@ def main() -> int:
                 pass
             cell("gate leaves no temp file behind",
                  not resident.exists()
-                 and not (Path(exe_dir) / ".temp" / "mcp-gate.txt").exists()
-                 and not (Path(exe_dir) / ".temp" / "mcp-gate-patch.txt").exists()
-                 and not (Path(exe_dir) / ".temp" / "mcp-gate-patch2.txt").exists()
-                 and not (Path(exe_dir) / ".temp" / "mcp-gate-validated.txt").exists()
-                 and not (Path(exe_dir) / ".temp" / "validate-editor.ahk").exists()
-                 and not any((Path(exe_dir) / ".temp").glob("validate-*.out"))
+                 and not (Path(exe_dir) / "temp" / "work" / "mcp-gate.txt").exists()
+                 and not (Path(exe_dir) / "temp" / "work" / "mcp-gate-patch.txt").exists()
+                 and not (Path(exe_dir) / "temp" / "work" / "mcp-gate-patch2.txt").exists()
+                 and not (Path(exe_dir) / "temp" / "work" / "mcp-gate-validated.txt").exists()
+                 and not (Path(exe_dir) / "temp" / "work" / "validate-editor.ahk").exists()
+                 and not any((Path(exe_dir) / "temp" / "work").glob("validate-*.out"))
                  and not args_left.exists(),
                  str(resident))
             cell("the write probe left no file behind", not write_probe.exists(),

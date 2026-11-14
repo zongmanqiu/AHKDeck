@@ -1,6 +1,7 @@
 // core/ScriptCatalog.cpp - see core/ScriptCatalog.h.
 #include "core/ScriptCatalog.h"
 
+#include "core/AppPaths.h"
 #include "core/Json.h"
 #include "core/ScriptHeader.h"
 #include "core/TextFile.h"
@@ -9,6 +10,7 @@
 #include <windows.h>
 
 #include <cstddef>
+#include <cstdio>
 #include <utility>
 
 namespace ahkdeck
@@ -28,6 +30,34 @@ std::wstring Utf8ToWideLocal(const std::string &aText)
 	MultiByteToWideChar(CP_UTF8, 0, aText.c_str(), (int)aText.size(),
 		out.data(), n);
 	return out;
+}
+
+std::string WideToUtf8Local(const std::wstring &aText)
+{
+	if (aText.empty())
+		return std::string();
+	const int n = WideCharToMultiByte(CP_UTF8, 0, aText.c_str(),
+		(int)aText.size(), nullptr, 0, nullptr, nullptr);
+	if (n <= 0)
+		return std::string();
+	std::string out((size_t)n, '\0');
+	WideCharToMultiByte(CP_UTF8, 0, aText.c_str(), (int)aText.size(),
+		out.data(), n, nullptr, nullptr);
+	return out;
+}
+
+// FNV-1a: the custom cache file name has to be stable for the same URL across
+// runs and short enough to sit in a directory listing. Eight hex digits is
+// plenty for a handful of user-supplied sources.
+unsigned int HashUrl(const std::string &aUrl)
+{
+	unsigned int hash = 2166136261u;
+	for (char c : aUrl)
+	{
+		hash ^= (unsigned int)(unsigned char)c;
+		hash *= 16777619u;
+	}
+	return hash;
 }
 
 bool IsHttpsUrl(const std::string &aUrl)
@@ -96,15 +126,31 @@ CatalogResult ParseScriptCatalog(const std::string &aText)
 		out.error = "清单不是合法 JSON：" + error;
 		return out;
 	}
-	if (!root.IsArray())
+	// m180: a manifest may name itself. A bare array is still the norm (ours is
+	// one, and every pre-m180 manifest stays valid); a top-level object with
+	// "scripts" additionally carries "name", which is what lets 订阅管理 show
+	// "某某脚本集" where the URL alone could only offer a host name.
+	const Json *items = &root;
+	if (root.IsObject())
 	{
-		out.error = "清单顶层不是数组";
+		out.name = root["name"].AsString();
+		const Json &scripts = root["scripts"];
+		if (!scripts.IsArray())
+		{
+			out.error = "清单缺少 scripts 数组";
+			return out;
+		}
+		items = &scripts;
+	}
+	else if (!root.IsArray())
+	{
+		out.error = "清单顶层既不是数组也不是对象";
 		return out;
 	}
 
-	for (size_t i = 0; i < root.Size(); ++i)
+	for (size_t i = 0; i < items->Size(); ++i)
 	{
-		const Json &item = root[i];
+		const Json &item = (*items)[i];
 		CatalogEntry e;
 		e.name = item["name"].AsString();
 		e.version = item["version"].AsString();
@@ -166,24 +212,69 @@ ScriptInstallState ClassifyInstall(const CatalogEntry &aEntry,
 	return ScriptInstallState::Ahead;
 }
 
-const std::string &DownloadUrlFor(const CatalogEntry &aEntry, CatalogSource aSource)
+bool IsThirdPartyManifest(ManifestSource aSource)
 {
-	return aSource == CatalogSource::Github ? aEntry.github : aEntry.gitee;
+	return aSource == ManifestSource::Custom;
 }
 
-std::string ScriptsDirUtf8()
+const char *TrustNoticeFor(ManifestSource aSource)
 {
-	return GetExeDirUtf8() + "Scripts\\";
+	// m181: keep this wording in ONE place. The download window, the info
+	// window and the subscription window all show it, and test_scriptcatalog
+	// pins that the official mirrors get no warning at all.
+	return IsThirdPartyManifest(aSource)
+		? "第三方订阅源 · 仅校验名称与版本，无完整性校验，安装后可在宿主内运行"
+		: "";
 }
 
-std::string BundledCatalogPathUtf8()
+const std::string &DownloadUrlFor(const CatalogEntry &aEntry,
+	ManifestSource aSource)
 {
-	return GetExeDirUtf8() + "docs\\scripts.json";
+	if (aSource == ManifestSource::OfficialGithub)
+		return aEntry.github;
+	if (aSource == ManifestSource::OfficialGitee)
+		return aEntry.gitee;
+	// Custom: the manifest's own mirror choice is not ours to make, so take
+	// whichever field it publishes. Both are the publisher's bytes.
+	return aEntry.gitee.empty() ? aEntry.github : aEntry.gitee;
 }
 
-bool ReadBundledCatalog(std::string &aOut, std::string &aError)
+std::string CustomSourceLabel(const std::string &aUrl)
 {
-	const std::wstring path = Utf8ToWideLocal(BundledCatalogPathUtf8());
+	const size_t scheme = aUrl.find("://");
+	if (scheme == std::string::npos)
+		return std::string();
+	const size_t start = scheme + 3;
+	size_t end = aUrl.find('/', start);
+	if (end == std::string::npos)
+		end = aUrl.size();
+	std::string host = aUrl.substr(start, end - start);
+	// Strip a port, then a leading "www." - both are noise in a 12px column.
+	const size_t colon = host.find(':');
+	if (colon != std::string::npos)
+		host = host.substr(0, colon);
+	if (host.size() > 4 && host.compare(0, 4, "www.") == 0)
+		host = host.substr(4);
+	return host;
+}
+
+std::string CatalogCachePathUtf8(ManifestSource aSource, const std::string &aUrl)
+{
+	if (aSource != ManifestSource::Custom)
+		return BundledCatalogPathUtf8();
+	// One file per URL, under the deck's one scratch root (m177). Deleting
+	// temp\work just costs the custom sources one refetch.
+	const std::wstring dir = AppTempDir(kTempWork) + L"\\catalogs";
+	CreateDirectoryW(dir.c_str(), nullptr);
+	char leaf[64];
+	std::snprintf(leaf, sizeof(leaf), "scripts-%08x.json", HashUrl(aUrl));
+	return WideToUtf8Local(dir) + "\\" + leaf;
+}
+
+bool ReadCatalogCache(ManifestSource aSource, const std::string &aUrl,
+	std::string &aOut, std::string &aError)
+{
+	const std::wstring path = Utf8ToWideLocal(CatalogCachePathUtf8(aSource, aUrl));
 	if (path.empty())
 	{
 		aError = "无法确定程序目录";
@@ -192,15 +283,16 @@ bool ReadBundledCatalog(std::string &aOut, std::string &aError)
 	TextDocument doc;
 	if (!ReadTextDocument(path, doc, aError))
 	{
-		aError = "随包清单不可用：" + aError;
+		aError = aSource == ManifestSource::Custom
+			? "该来源尚未取过清单" : ("随包清单不可用：" + aError);
 		return false;
 	}
 	aOut = doc.utf8;
 	return true;
 }
 
-bool RefreshBundledCatalog(const std::string &aUrl, std::string &aOut,
-	std::string &aError)
+bool RefreshCatalogCache(ManifestSource aSource, const std::string &aUrl,
+	std::string &aOut, std::string &aError)
 {
 	std::string text;
 	std::string fetchError;
@@ -222,13 +314,17 @@ bool RefreshBundledCatalog(const std::string &aUrl, std::string &aOut,
 		return false;
 	}
 
-	const std::string finalPath = BundledCatalogPathUtf8();
-	const std::string partPath = finalPath + ".part";
-	const std::wstring wPart = Utf8ToWideLocal(partPath);
+	const std::string finalPath = CatalogCachePathUtf8(aSource, aUrl);
+	const std::wstring wPart = Utf8ToWideLocal(finalPath + ".part");
 	const std::wstring wFinal = Utf8ToWideLocal(finalPath);
-	const std::wstring wDocs = Utf8ToWideLocal(GetExeDirUtf8() + "docs");
-	if (!wDocs.empty())
-		CreateDirectoryW(wDocs.c_str(), nullptr);
+	// Both the packaged docs\ directory and the custom cache directory may not
+	// exist yet; creating them here keeps the write atomic below.
+	if (aSource != ManifestSource::Custom)
+	{
+		const std::wstring wDocs = Utf8ToWideLocal(GetExeDirUtf8() + "docs");
+		if (!wDocs.empty())
+			CreateDirectoryW(wDocs.c_str(), nullptr);
+	}
 	if (!wPart.empty() && !wFinal.empty())
 	{
 		std::string writeError;
@@ -247,6 +343,16 @@ bool RefreshBundledCatalog(const std::string &aUrl, std::string &aOut,
 	// the caller keeps this text in memory and the old copy stays on disk.
 	aOut = text;
 	return true;
+}
+
+std::string ScriptsDirUtf8()
+{
+	return GetExeDirUtf8() + "Scripts\\";
+}
+
+std::string BundledCatalogPathUtf8()
+{
+	return GetExeDirUtf8() + "docs\\scripts.json";
 }
 
 bool VerifyDownloadedScript(const std::wstring &aPartPath,

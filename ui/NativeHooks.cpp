@@ -558,14 +558,16 @@ LRESULT CALLBACK NativeHooks::WndProc(HWND aHwnd, UINT aMessage, WPARAM aWParam,
 				// means no FLTK widget is touched from inside this dispatch.
 				// m131: the 运行中 submenu is rebuilt on every right-click by asking
 				// the deck (same thread) who is running, so the list cannot go
-				// stale. m132: each running script's own menu is mirrored in as a
-				// real submenu, so it opens to the side the way a nested menu does
-				// - no second popup and no extra click. The mirror is a copy: the
-				// script's HMENU belongs to the script thread and is only read here,
-				// and a picked id goes back to that thread as the WM_COMMAND its
-				// menu would have sent. A script whose menu we could not read keeps
-				// the m131 behaviour: a plain entry the deck turns into a second
-				// popup.
+				// stale. m132/m192 P3: each running script's tray menu is mirrored in
+				// as a real submenu, so it opens to the side the way a nested menu
+				// does - no second popup and no extra click. Since m192 the script
+				// lives in its own process (NO_TRAY): the child serializes its menu
+				// to JSON and the engine rebuilds a HOST-OWNED HMENU from it, so
+				// this mirror copies a menu of our own process, never a foreign
+				// thread's handle. A picked id is posted back to the child's main
+				// window as the WM_COMMAND its own menu would have sent. A script
+				// whose menu could not be snapshotted keeps the m131 behaviour: a
+				// plain entry the deck turns into a second popup.
 				HMENU menu = CreatePopupMenu();
 				if (menu)
 				{
@@ -631,9 +633,9 @@ LRESULT CALLBACK NativeHooks::WndProc(HWND aHwnd, UINT aMessage, WPARAM aWParam,
 						auto mirrored = picks.find((UINT)picked);
 						if (mirrored != picks.end())
 						{
-							// m132: hand the command to the script's own window, exactly
-							// as its menu would have. Posted, not sent: the script thread
-							// must not run inside this dispatch.
+							// m192 P3: hand the command to the child's main window,
+							// exactly as its own menu would have. Posted, not sent:
+							// a busy child must never block this menu dispatch.
 							const ScriptMenuPick &pick = mirrored->second;
 							if (pick.window && IsWindow(pick.window))
 								PostMessageW(pick.window, WM_COMMAND, (WPARAM)pick.command, 0);

@@ -4,8 +4,8 @@
 //   1. CheckUpdate()   fetch the manifest (update.json) from the selected
 //                      source, fall back to the other one, then to the local
 //                      cache; compare versions.
-//   2. DownloadFile()  fetch the new zip next to the running exe.
-//   3. WriteUpdateBat() emit ahkdeck_update.bat that replaces the files and
+//   2. DownloadFile()  fetch the new zip into temp\.
+//   3. WriteUpdateBat() emit temp\ahkdeck_update.bat that replaces the files and
 //                      restarts the program.
 //   4. LaunchUpdater() start that bat hidden; the caller then exits.
 //
@@ -78,7 +78,7 @@ int CompareVersions(const std::string &aCurrent, const std::string &aLatest);
 // absent or unparsable; `aAgeSeconds` is the file's age at call time.
 bool ReadCachedManifest(UpdateManifest &aOut, long long &aAgeSeconds);
 
-// Absolute UTF-8 path of the cache (exe dir + update.cache.json). The name is
+// Absolute UTF-8 path of the cache (temp\update.cache.json, m177). The name is
 // deliberately NOT "update.json": the published manifest must never be shipped
 // inside the zip, or the copy would overwrite the live cache on every update.
 std::string UpdateCachePathUtf8();

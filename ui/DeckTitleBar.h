@@ -23,11 +23,19 @@ class DeckTitleBar : public Fl_Widget, public windowChrome::BandColourSource
 public:
 	enum { kHeight = 32 };
 
-	// Which caption buttons the bar owns. The main window is kAll; a dialog has
-	// nothing to minimize or maximize, so it shows the close box only. This is
-	// the ONE place that count is decided - both draw() and HitTest() read it,
-	// so a dialog can never paint three buttons and answer to one.
-	enum Caption { kCaptionAll = 3, kCaptionCloseOnly = 1 };
+	// Which caption buttons the bar owns. The main window is kAll; a plain
+	// dialog has nothing to minimize or maximize, so it shows the close box
+	// only. m179: a resizable dialog (获取脚本) gets kMaxClose - maximize is
+	// useful there, but a tool-window dialog has no taskbar button to restore
+	// from, so it must never offer minimize. This is the ONE place that count
+	// is decided - draw() and HitTest() both read it, so a dialog can never
+	// paint three buttons and answer to one.
+	enum Caption
+	{
+		kCaptionAll = 3,
+		kCaptionMaxClose = 2,
+		kCaptionCloseOnly = 1
+	};
 
 	explicit DeckTitleBar(int x, int y, int w, int h);
 

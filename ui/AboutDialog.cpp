@@ -268,10 +268,13 @@ public:
 	// White frame around each QR so it stays distinct from the panel.
 	static constexpr int kQrBorder = 2;
 	static constexpr int kMinW = 2 * kQrSize + kQrGap + 2 * kSidePad;  // 368
-	static constexpr int kMinH = 466;
-	// Line index reserved for the clickable repository row (drawn by
-	// RepoLinksWidget, not by draw()); panel layout and widget must agree.
-	static constexpr size_t kUrlLineIndex = 5;
+	static constexpr int kMinH = 490;
+	// Line indices reserved for the clickable repository rows (drawn by
+	// RepoLinksWidget, not by draw()); panel layout and the widgets must agree.
+	// m178: the scripts repository gets its own row - a user who wants to fork
+	// one script should not have to guess that it lives in another project.
+	static constexpr size_t kRepoLineIndex = 5;
+	static constexpr size_t kScriptsLineIndex = 6;
 	static constexpr int kBottomPad = 5;
 
 	AboutPanel(int X, int Y, int W, int H, int fs, std::vector<std::string> lines)
@@ -291,8 +294,12 @@ public:
 	}
 
 	// Repository link text (drawn by RepoLinksWidget); contentWidth() needs it
-	// here to measure the widest line correctly.
-	void setUrlLabel(const char *label) { m_urlLabel = label ? label : ""; }
+	// here to measure the widest line correctly. More than one row is allowed.
+	void addUrlLabel(const char *label)
+	{
+		if (label && *label)
+			m_urlLabels.push_back(label);
+	}
 
 	// Top Y (relative to the panel top) of line `index`, using exactly the
 	// advance rules of draw(), so the link widget cannot drift when lines are
@@ -347,12 +354,15 @@ public:
 			if (tw > maxW)
 				maxW = tw;
 		}
-		if (!m_urlLabel.empty())
+		if (!m_urlLabels.empty())
 		{
-			int urlW = 0, urlH = 0;
-			fl_measure(m_urlLabel.c_str(), urlW, urlH);
-			if (urlW > maxW)
-				maxW = urlW;
+			for (const auto &label : m_urlLabels)
+			{
+				int urlW = 0, urlH = 0;
+				fl_measure(label.c_str(), urlW, urlH);
+				if (urlW > maxW)
+					maxW = urlW;
+			}
 		}
 		return maxW + 2 * kSidePad;
 	}
@@ -425,7 +435,7 @@ private:
 	Fl_Image *m_qr0 = nullptr;
 	Fl_Image *m_qr1 = nullptr;
 	std::string m_qr0Name, m_qr1Name;
-	std::string m_urlLabel;
+	std::vector<std::string> m_urlLabels;
 };
 
 class AboutDialog : public DeckDialog
@@ -440,8 +450,14 @@ public:
 		const std::string title = std::string("AHKDeck ") + VersionString();
 		const std::string copyright = "Copyright © 2026 邱宗满";
 		const std::string license = "依据 GPL-2.0 协议许可";
+		// Same URLs the README advertises, so the window and the project page
+		// can never disagree about where the source lives.
 		const std::string repoGitee = "https://gitee.com/qiuzongman/AHKDeck";
 		const std::string repoGithub = "https://github.com/zongmanqiu/AHKDeck";
+		const std::string scriptsGitee =
+			"https://gitee.com/qiuzongman/ahk-v2-scripts";
+		const std::string scriptsGithub =
+			"https://github.com/zongmanqiu/ahk-v2-scripts";
 
 		std::vector<std::string> lines = {
 			title,                          // 1. name + version
@@ -449,9 +465,10 @@ public:
 			copyright,                      // 3. copyright w/ author
 			license,                        // 4. license
 			"",                             // 5. blank
-			"",                             // 6. URL row (RepoLinksWidget)
-			"",                             // 7. blank
-			"赞助",                         // 8. sponsor
+			"",                             // 6. 项目仓库 row (RepoLinksWidget)
+			"",                             // 7. 脚本仓库 row (RepoLinksWidget)
+			"",                             // 8. blank
+			"赞助",                         // 9. sponsor
 		};
 
 		begin();
@@ -459,12 +476,19 @@ public:
 			AboutPanel::kMinH, fs, std::move(lines));
 
 		const char *repoPrefix = "项目仓库：";
-		m_panel->setUrlLabel(RepoLinksWidget::fullLabel(repoPrefix).c_str());
+		const char *scriptsPrefix = "脚本仓库：";
+		m_panel->addUrlLabel(RepoLinksWidget::fullLabel(repoPrefix).c_str());
+		m_panel->addUrlLabel(RepoLinksWidget::fullLabel(scriptsPrefix).c_str());
 		m_urlWidget = new RepoLinksWidget(0,
-			top + m_panel->lineTopY(AboutPanel::kUrlLineIndex),
+			top + m_panel->lineTopY(AboutPanel::kRepoLineIndex),
 			AboutPanel::kMinW, fs + 8, repoPrefix,
 			repoGitee.c_str(), repoGithub.c_str());
 		m_urlWidget->setFontSize(fs);
+		m_scriptsWidget = new RepoLinksWidget(0,
+			top + m_panel->lineTopY(AboutPanel::kScriptsLineIndex),
+			AboutPanel::kMinW, fs + 8, scriptsPrefix,
+			scriptsGitee.c_str(), scriptsGithub.c_str());
+		m_scriptsWidget->setFontSize(fs);
 		end();
 	}
 
@@ -480,6 +504,7 @@ public:
 		const int newH = m_panel->contentHeight() + AboutPanel::kBottomPad + top + 1;
 		m_panel->resize(0, top, newW, newH - top);
 		m_urlWidget->resize(0, m_urlWidget->y(), newW, m_urlWidget->h());
+		m_scriptsWidget->resize(0, m_scriptsWidget->y(), newW, m_scriptsWidget->h());
 		size(newW, newH);
 		ShowCentered();
 	}
@@ -487,6 +512,7 @@ public:
 private:
 	AboutPanel *m_panel = nullptr;
 	RepoLinksWidget *m_urlWidget = nullptr;
+	RepoLinksWidget *m_scriptsWidget = nullptr;
 };
 
 } // namespace

@@ -1,4 +1,9 @@
-# patches/AutoHotkey_H-v2.0.25 — 内核补丁归档
+# patches/AutoHotkey_H-v2.0.25 — 内核补丁归档（已停用）
+
+> **归档停用（m192 P4）**：AHK_H 不再构建、不再出货、不再充当编译底座；本目录与
+> `.3rd/AutoHotkey_H-v2.0.25` 只作历史留存，下文全部是当时的记录，不是现行事实。
+> 现行内核为官方 AutoHotkey v2.0.31，见
+> [../AutoHotkey-v2.0.31/README.md](../AutoHotkey-v2.0.31/README.md)。
 
 本目录是 AHKDeck 对工作区 `.3rd/AutoHotkey_H-v2.0.25/` 源码修改的权威归档。
 上游为 `thqby/AutoHotkey_H`，钉定 commit `fb9e48c3d326adebcfe080d1a4f9226045b51c4f`，

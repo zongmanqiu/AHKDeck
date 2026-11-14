@@ -24,7 +24,17 @@
 # Set AHKDECK_FORCE_DOWNLOAD=1 to ignore the presence checks and re-fetch
 # everything from scratch.
 
-# AutoHotkey_H v2.0.25 - in-process AHK v2 engine.
+# Official AutoHotkey v2.0.31 - the ONE shipped kernel (m192 P4).
+# Source tarball patched by patches\AutoHotkey-v2.0.31 (four env-gated hooks)
+# and built by build_kernel.bat: Release|x64 ->
+# .temp\kernel_official\AutoHotkey64.exe. The engine spawns it per session and
+# ExeCompiler bundles scripts into a copy of it.
+# sha256 7ed1c04d26b60ea2b4c645768ec9d60d6831d34d53db3d926e451165bd3f467f
+AutoHotkey-v2.0.31-src=https://codeload.github.com/AutoHotkey/AutoHotkey/tar.gz/refs/tags/v2.0.31|source/script.cpp
+
+# AutoHotkey_H v2.0.25 - ARCHIVED in m192 P4 (not built, not shipped).
+# Kept only so the historical m004 parity gate and the patch archive still
+# resolve on a fresh checkout. The DLL + tools\ base are retired.
 # Pinned to commit fb9e48c3d326adebcfe080d1a4f9226045b51c4f (2026-04-30),
 # the v2.0 stable line (NOT alpha-h / v2.1). See .plan/m005.
 AutoHotkey_H-v2.0.25=https://codeload.github.com/thqby/AutoHotkey_H/tar.gz/fb9e48c3d326adebcfe080d1a4f9226045b51c4f|AutoHotkeyx.sln

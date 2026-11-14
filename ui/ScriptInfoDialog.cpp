@@ -10,6 +10,7 @@
 #include "ui/DeckTitleBar.h"
 #include "ui/Theme.h"
 #include "ui/ThemeWidgets.h"
+#include "ui/UiMetrics.h"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Box.H>
@@ -27,13 +28,15 @@ namespace ui
 namespace
 {
 
+// m182: shared facts from UiMetrics; only this dialog's label column and
+// prose padding are local.
 constexpr int kWidth = 480;
-constexpr int kMargin = 16;
-constexpr int kLabelW = 72;
-constexpr int kGap = 10;
-constexpr int kLineH = 26;    // one text row; Theme.h documents 26 + 2 gap
-constexpr int kBtnH = 26;
-constexpr int kGroupGap = 14; // above and below a group's hairline
+constexpr int kMargin = kUiEdge;
+constexpr int kLabelW = 72;  // longer field names than the 48px search label
+constexpr int kGap = kUiGap;
+constexpr int kLineH = kUiControl;
+constexpr int kBtnH = kUiControl;
+constexpr int kGroupGap = kUiGap;
 // Wrapped prose stops this far short of the value column's right edge, so the
 // longest line never ends on the frame and short lines keep a visible gap.
 constexpr int kTextPad = 8;
@@ -170,12 +173,15 @@ std::string WrappedByWidth(const std::string &aText, int aWrapWidth)
 // passes and the widgets all see the same number of lines.
 void WrapAll(std::vector<InfoGroup> &aGroups, int aWrapWidth)
 {
+	// m185: EVERY value is broken to the column width, not just the ones a
+	// caller remembered to flag as prose. An unflagged URL was drawn as one
+	// unbroken line and cut off by the window frame - "all text must fit" is
+	// a property of the dialog, not of each call site.
 	for (InfoGroup &group : aGroups)
 	{
 		for (InfoField &field : group)
 		{
-			if (field.wrap && !field.selectable)
-				field.value = WrappedByWidth(field.value, aWrapWidth);
+			field.value = WrappedByWidth(field.value, aWrapWidth);
 		}
 	}
 }
@@ -193,10 +199,8 @@ int LinesFor(const std::string &aText)
 
 int FieldHeight(const InfoField &aField)
 {
-	// A selectable value is an Fl_Multiline_Output, which does not wrap: it
-	// scrolls sideways instead, so it is always exactly one row tall.
-	if (aField.selectable || !aField.wrap)
-		return kLineH;
+	// The value already carries its own newlines, so every field - including
+	// the selectable path - is as tall as the lines it was broken into.
 	return kLineH * LinesFor(aField.value);
 }
 
@@ -334,7 +338,8 @@ private:
 			Fl_Box *label = new Fl_Box(FL_NO_BOX, kMargin, placed.y, kLabelW,
 				placed.h, nullptr);
 			label->copy_label(placed.field->label.c_str());
-			label->align(FL_ALIGN_RIGHT | FL_ALIGN_TOP | FL_ALIGN_INSIDE);
+			label->align(FL_ALIGN_RIGHT | FL_ALIGN_TOP | FL_ALIGN_INSIDE
+				| FL_ALIGN_CLIP);
 			label->labelsize(SubTextSize());
 			label->labelcolor(aColors.text2);
 
@@ -366,7 +371,7 @@ private:
 					valueWidth, placed.h, nullptr);
 				value->copy_label(placed.field->value.c_str());
 				value->align(FL_ALIGN_LEFT | FL_ALIGN_TOP | FL_ALIGN_INSIDE
-					| FL_ALIGN_WRAP);
+					| FL_ALIGN_WRAP | FL_ALIGN_CLIP);
 				value->labelsize(SubTextSize());
 				value->labelcolor(aColors.text1);
 			}

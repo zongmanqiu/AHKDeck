@@ -1,17 +1,26 @@
-# m109 shipping gate: the startup cleanup of .temp\ / Backups\ / Logs\.
+# m109/m177 shipping gate: the startup cleanup of temp\.
 #
 # The real exe runs in a throwaway copy (its own exe directory), so the user's
-# .build data is never touched. Three phases:
-#   1. fresh settings.json gains housekeeping.max_age_days = 30 (the discoverable
-#      knob for advanced users; there is no UI control for it)
-#   2. with 30 days, a 40-day-old file is deleted from all three directories,
-#      a 1-day-old file stays, and an emptied timestamp subfolder is removed
-#   3. max_age_days = 0 turns the cleanup off: a 40-day-old file survives
+# .build data is never touched. m177 collapsed the four per-machine directories
+# into one temp\ root, so the gate now proves the whole tree is cleaned by one
+# pass - not one pass per directory name.
+#
+# Four phases:
+#   1. fresh settings.json gains housekeeping.max_age_days = 30 (the setting the
+#      options window writes), and startup creates temp\ + its four subdirectories
+#   2. with 30 days: a 40-day-old file is deleted from logs\ / backups\ / work\
+#      and deleted\, a 1-day-old file stays, and an emptied subfolder is removed
+#   3. max_age_days = 0 (never) turns the cleanup off
+#   4. max_age_days = 180 keeps a 40-day-old file - the window is the setting,
+#      not a fixed 30
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 $exe = Join-Path $root '.build\AHKDeck.exe'
-$dll = Join-Path $root '.build\AutoHotkey64.dll'
+# m192 P4: the throwaway copy mirrors the shipped layout - ONE kernel EXE, no
+# DLL. The cleanup gate never runs a script, but a stale DLL here would make the
+# sample layout lie about what a user actually unzips.
+$kernel = Join-Path $root '.build\AutoHotkey64.exe'
 $work = Join-Path $root '.temp\m109_gate'
 $run = Join-Path $work 'run'
 
@@ -25,16 +34,13 @@ function Reset-Run {
     if (Test-Path $run) { Remove-Item $run -Recurse -Force }
     New-Item -ItemType Directory -Force $run | Out-Null
     Copy-Item $exe (Join-Path $run 'AHKDeck.exe')
-    Copy-Item $dll (Join-Path $run 'AutoHotkey64.dll')
-    New-Item -ItemType Directory -Force (Join-Path $run '.temp') | Out-Null
-    New-Item -ItemType Directory -Force (Join-Path $run 'Backups') | Out-Null
-    New-Item -ItemType Directory -Force (Join-Path $run 'Logs') | Out-Null
+    Copy-Item $kernel (Join-Path $run 'AutoHotkey64.exe')
 }
 
 # A file whose last-write time is $days days in the past.
 function New-OldFile([string]$path, [int]$days) {
     New-Item -ItemType Directory -Force (Split-Path -Parent $path) | Out-Null
-    Set-Content -Path $path -Value 'm109 gate' -Encoding ASCII
+    Set-Content -Path $path -Value 'm177 gate' -Encoding ASCII
     (Get-Item $path).LastWriteTime = (Get-Date).AddDays(-$days)
 }
 
@@ -56,7 +62,12 @@ function Stop-Deck([int]$procId) {
     Start-Sleep -Seconds 2
 }
 
-# --- phase 1: a fresh settings.json gains the knob --------------------------
+function Write-Days([int]$days) {
+    $json = '{ "housekeeping": { "max_age_days": ' + $days + ' } }'
+    Set-Content -Path (Join-Path $run 'settings.json') -Value $json -Encoding UTF8
+}
+
+# --- phase 1: layout on first run + the knob --------------------------------
 Reset-Run
 $p = Start-Deck
 Start-Sleep -Seconds 4
@@ -66,48 +77,65 @@ Check (Test-Path $settingsPath) "settings.json written"
 $cfg = Get-Content $settingsPath -Raw | ConvertFrom-Json
 Check ($null -ne $cfg.housekeeping) "settings.json has a housekeeping section"
 Check ($cfg.housekeeping.max_age_days -eq 30) "the default is 30 days"
+foreach ($sub in @('', 'logs', 'backups', 'work', 'deleted')) {
+    $rel = 'temp'
+    if ($sub) { $rel = "temp\$sub" }
+    Check (Test-Path (Join-Path $run $rel)) ("startup creates " + $rel)
+}
 
-# --- phase 2: 30 days cleans the three directories ---------------------------
+# --- phase 2: 30 days cleans the whole tree in one pass ---------------------
 Reset-Run
-Set-Content -Path (Join-Path $run 'settings.json') -Value '{ "housekeeping": { "max_age_days": 30 } }' -Encoding UTF8
-$oldTemp = Join-Path $run '.temp\old-editor.ahk'
-$newTemp = Join-Path $run '.temp\ai-editor.ahk'
-$oldBackup = Join-Path $run 'Backups\2026-09-01\old.ahk'
-$newBackup = Join-Path $run 'Backups\2026-11-07\new.ahk'
-$oldLog = Join-Path $run 'Logs\old-session.jsonl'
-$newLog = Join-Path $run 'Logs\new-session.jsonl'
-New-OldFile $oldTemp 40
-New-OldFile $newTemp 1
-New-OldFile $oldBackup 40
-New-OldFile $newBackup 1
-New-OldFile $oldLog 40
-New-OldFile $newLog 1
+Write-Days 30
+$old = @(
+    'temp\logs\old-session.jsonl',
+    'temp\backups\2026-09-01\old.ahk',
+    'temp\work\old-editor.ahk',
+    'temp\deleted\old-script-20260901.ahk'
+)
+$new = @(
+    'temp\logs\new-session.jsonl',
+    'temp\backups\2026-11-07\new.ahk',
+    'temp\work\ai-editor.ahk',
+    'temp\deleted\new-script-20261113.ahk'
+)
+foreach ($rel in $old) { New-OldFile (Join-Path $run $rel) 40 }
+foreach ($rel in $new) { New-OldFile (Join-Path $run $rel) 1 }
 
 $p = Start-Deck
 Start-Sleep -Seconds 4
 Stop-Deck $p.Id
 
-Check (-not (Test-Path $oldTemp)) ".temp: a 40-day-old file is deleted"
-Check (Test-Path $newTemp) ".temp: a 1-day-old file stays"
-Check (-not (Test-Path $oldBackup)) "Backups: a 40-day-old file is deleted"
-Check (-not (Test-Path (Join-Path $run 'Backups\2026-09-01'))) "Backups: the emptied folder is removed"
-Check (Test-Path $newBackup) "Backups: a 1-day-old file stays"
-Check (-not (Test-Path $oldLog)) "Logs: a 40-day-old file is deleted"
-Check (Test-Path $newLog) "Logs: a 1-day-old file stays"
-Check (Test-Path (Join-Path $run '.temp')) "the directories themselves are kept"
+foreach ($rel in $old) {
+    Check (-not (Test-Path (Join-Path $run $rel))) ($rel + ": a 40-day-old file is deleted")
+}
+foreach ($rel in $new) {
+    Check (Test-Path (Join-Path $run $rel)) ($rel + ": a 1-day-old file stays")
+}
+Check (-not (Test-Path (Join-Path $run 'temp\backups\2026-09-01'))) "temp\backups: the emptied folder is removed"
+Check (Test-Path (Join-Path $run 'temp')) "temp itself is kept"
 $cfg = Get-Content $settingsPath -Raw | ConvertFrom-Json
 Check ($cfg.housekeeping.max_age_days -eq 30) "the setting survives a launch"
 
-# --- phase 3: max_age_days = 0 means never clean -----------------------------
+# --- phase 3: max_age_days = 0 means never clean ----------------------------
 Reset-Run
-Set-Content -Path (Join-Path $run 'settings.json') -Value '{ "housekeeping": { "max_age_days": 0 } }' -Encoding UTF8
-$oldTemp = Join-Path $run '.temp\old-editor.ahk'
-New-OldFile $oldTemp 40
+Write-Days 0
+$oldLog = Join-Path $run 'temp\logs\old-session.jsonl'
+New-OldFile $oldLog 40
 $p = Start-Deck
 Start-Sleep -Seconds 4
 Stop-Deck $p.Id
-Check (Test-Path $oldTemp) "0 days: nothing is deleted"
+Check (Test-Path $oldLog) "0 days (never): nothing is deleted"
 
-if ($fails -gt 0) { Write-Output ("m109 gate: " + $fails + " failure(s)"); exit 1 }
-Write-Output "m109 gate: all checks passed"
+# --- phase 4: the window is the setting, not a fixed 30 --------------------
+Reset-Run
+Write-Days 180
+$oldLog = Join-Path $run 'temp\logs\old-session.jsonl'
+New-OldFile $oldLog 40
+$p = Start-Deck
+Start-Sleep -Seconds 4
+Stop-Deck $p.Id
+Check (Test-Path $oldLog) "180 days: a 40-day-old file is kept"
+
+if ($fails -gt 0) { Write-Output ("m177 gate: " + $fails + " failure(s)"); exit 1 }
+Write-Output "m177 gate: all checks passed"
 exit 0

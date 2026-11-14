@@ -25,9 +25,9 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # ----------------------------------------------------------------------------
 # Supported target is strictly Windows x64 (64-bit), Win10/11.
-# The engine embeds the AutoHotkey_H interpreter (MSVC/Win32 only); there is no
-# 32-bit or cross-platform story. Fail the configure loudly instead of shipping
-# a silent 32-bit build.
+# The engine spawns the official AutoHotkey interpreter as a child process
+# (MSVC/Win32 only, m192); there is no 32-bit or cross-platform story. Fail the
+# configure loudly instead of shipping a silent 32-bit build.
 # ----------------------------------------------------------------------------
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR
@@ -67,6 +67,7 @@ endif()
 # ----------------------------------------------------------------------------
 add_library(core STATIC
     core/Version.cpp
+    core/AppPaths.cpp
     core/TextFile.cpp
     core/Library.cpp
     core/Settings.cpp
@@ -99,9 +100,10 @@ if(MSVC)
 endif()
 
 # ----------------------------------------------------------------------------
-# engine - AutoHotkey_H host layer (m010).
-# Loads the patched kernel DLL at runtime (NewThread / DeckSetErrorSink), so the
-# kernel is NOT linked in - it is the one shipped file next to AHKDeck.exe.
+# engine - out-of-process host layer (m192, replaces the m010 AutoHotkey_H DLL).
+# Spawns one patched official kernel EXE per session (error/menu JSON bridges,
+# NO_TRAY, Job Object). Nothing is linked or loaded into this process - the one
+# shipped kernel file simply sits next to AHKDeck.exe.
 # ----------------------------------------------------------------------------
 add_library(engine STATIC
     engine/DeckEngine.cpp
@@ -155,7 +157,9 @@ add_library(deckui STATIC
     ui/AboutDialog.cpp
     ui/UpdateDialog.cpp
     ui/ScriptDownloadDialog.cpp
+    ui/SubscribeDialog.cpp
     ui/ScriptInfoDialog.cpp
+    ui/OptionsDialog.cpp
     ui/SourceChoice.cpp
     ui/WindowFrame.cpp
     ui/WindowShadow.cpp
@@ -235,27 +239,23 @@ if(EXISTS "${AHKDECK_SCRIPT_CATALOG}")
         COMMENT "Staging the official script catalog next to AHKDeck.exe")
 endif()
 
-# m172: the official compiler pair ships under tools\ so the deck's
-# 「脚本/编译为 EXE」 works on a user machine with no AutoHotkey installed.
-# Same discipline as the script catalog above: the build only copies, never
-# invents - missing .3rd (a standalone .main checkout) simply leaves the deck
-# reporting "tools 缺失" at click time, and the ctest end-to-end arms SKIP.
-# The pair is not splittable: Ahk2Exe searches its own directory for a
-# matching-version interpreter to use as a compile-time utility, and the
-# base exe doubles as that utility (docs: Background Information).
-set(AHKDECK_COMPILER_SRC "${CMAKE_SOURCE_DIR}/../.3rd/AutoHotkey_2.0.30")
-if(EXISTS "${AHKDECK_COMPILER_SRC}/Compiler/Ahk2Exe.exe" AND
-   EXISTS "${AHKDECK_COMPILER_SRC}/AutoHotkey64.exe")
+# m192 P4: exactly ONE interpreter PE ships next to AHKDeck.exe. The engine
+# spawns <exeDir>\AutoHotkey64.exe once per session (NO_TRAY + JSON error/menu
+# bridges), and core/ExeCompiler.cpp bundles every compiled script into a copy
+# of that very image - the editor and the compiled exe are the same interpreter.
+# The old m172/m190 layout staged a second AutoHotkey64.exe under tools\ for the
+# compiler and an AutoHotkey64.dll for the in-process AHK_H kernel; both are
+# retired. Same discipline as the script catalog: the build only copies, never
+# invents. A standalone .main checkout without .temp\kernel_official simply
+# leaves the deck reporting a missing kernel at run time, and the shipping gate
+# fails the package closed.
+set(AHKDECK_KERNEL_OFFICIAL "${CMAKE_SOURCE_DIR}/../.temp/kernel_official/AutoHotkey64.exe")
+if(EXISTS "${AHKDECK_KERNEL_OFFICIAL}")
     add_custom_command(TARGET AHKDeck POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-                "$<TARGET_FILE_DIR:AHKDeck>/tools"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${AHKDECK_COMPILER_SRC}/Compiler/Ahk2Exe.exe"
-                "$<TARGET_FILE_DIR:AHKDeck>/tools/Ahk2Exe.exe"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${AHKDECK_COMPILER_SRC}/AutoHotkey64.exe"
-                "$<TARGET_FILE_DIR:AHKDeck>/tools/AutoHotkey64.exe"
-        COMMENT "Staging the official compiler pair under tools/")
+                "${AHKDECK_KERNEL_OFFICIAL}"
+                "$<TARGET_FILE_DIR:AHKDeck>/AutoHotkey64.exe"
+        COMMENT "Staging the single official kernel EXE next to AHKDeck.exe")
 endif()
 
 # ----------------------------------------------------------------------------
@@ -481,7 +481,10 @@ set_tests_properties(execompiler PROPERTIES
 # ----------------------------------------------------------------------------
 set(AHKDECK_GATE_DIR "${CMAKE_SOURCE_DIR}/../.temp/session_gate")
 file(MAKE_DIRECTORY "${AHKDECK_GATE_DIR}")
-set(AHKDECK_KERNEL_DLL "${CMAKE_SOURCE_DIR}/../.build/AutoHotkey64.dll")
+# m192: the kernel is the official interpreter EXE (patched), built by
+# build_kernel.bat into .temp/kernel_official. P2 gates point at it directly;
+# P4 switches the shipped layout (.build root + tools retirement).
+set(AHKDECK_KERNEL_EXE "${CMAKE_SOURCE_DIR}/../.temp/kernel_official/AutoHotkey64.exe")
 set(AHKDECK_PROBE_DIR "${CMAKE_SOURCE_DIR}/test/session_gate/probe")
 
 add_executable(session_gate
@@ -498,7 +501,7 @@ set_target_properties(session_gate PROPERTIES
 add_test(NAME session COMMAND session_gate "${AHKDECK_PROBE_DIR}")
 set_tests_properties(session PROPERTIES
     WORKING_DIRECTORY "${AHKDECK_GATE_DIR}"
-    ENVIRONMENT "AHKDECK_KERNEL=${AHKDECK_KERNEL_DLL}")
+    ENVIRONMENT "AHKDECK_KERNEL=${AHKDECK_KERNEL_EXE}")
 
 add_test(NAME journal COMMAND powershell -NoProfile -ExecutionPolicy Bypass
     -File "${CMAKE_SOURCE_DIR}/test/session_gate/gate_journal.ps1"
@@ -506,7 +509,7 @@ add_test(NAME journal COMMAND powershell -NoProfile -ExecutionPolicy Bypass
     -Probe "${AHKDECK_PROBE_DIR}")
 set_tests_properties(journal PROPERTIES
     WORKING_DIRECTORY "${AHKDECK_GATE_DIR}"
-    ENVIRONMENT "AHKDECK_KERNEL=${AHKDECK_KERNEL_DLL}")
+    ENVIRONMENT "AHKDECK_KERNEL=${AHKDECK_KERNEL_EXE}")
 
 # m013: the shipped exe must not be a console image (rules-standing.md 13).
 # The gate self-tests against session_gate.exe, which IS console subsystem, so a
@@ -533,6 +536,21 @@ add_test(NAME source_tree_selftest COMMAND powershell -NoProfile -ExecutionPolic
 add_test(NAME stats COMMAND powershell -NoProfile -ExecutionPolicy Bypass
     -File "${CMAKE_SOURCE_DIR}/test/shipping_gate/gate_stats.ps1"
     -Exe "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/AHKDeck.exe")
+
+# m192 P5: kernel_pair (m190) is gone - there is no DLL and no tools\ base to
+# pair. The invariant is now stronger: the package carries exactly ONE AHK PE,
+# the official kernel EXE, byte-identical to the build in .temp\kernel_official.
+# -SelfTest builds a deliberately polluted layout (DLL + tools\ copies) and
+# demands the gate go RED; a gate that always says ok fails here.
+add_test(NAME single_kernel COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+    -File "${CMAKE_SOURCE_DIR}/test/shipping_gate/gate_single_kernel.ps1"
+    -BuildDir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+    -KernelDir "${CMAKE_SOURCE_DIR}/../.temp/kernel_official")
+add_test(NAME single_kernel_selftest COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+    -File "${CMAKE_SOURCE_DIR}/test/shipping_gate/gate_single_kernel.ps1"
+    -BuildDir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+    -KernelDir "${CMAKE_SOURCE_DIR}/../.temp/kernel_official"
+    -SelfTest)
 
 # ----------------------------------------------------------------------------
 # m064: the MCP endpoint, in two halves.

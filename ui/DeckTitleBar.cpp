@@ -56,9 +56,11 @@ DeckTitleBar::Hit DeckTitleBar::HitTest(int mx, int my) const
 	if (mCaption == kCaptionCloseOnly)
 		return Hit::None;
 	const int maxX = closeX - kButtonW;
-	const int minX = maxX - kButtonW;
 	if (mx >= maxX)
 		return Hit::Maximize;
+	if (mCaption == kCaptionMaxClose)
+		return Hit::None;
+	const int minX = maxX - kButtonW;
 	if (mx >= minX)
 		return Hit::Minimize;
 	return Hit::None;
@@ -145,7 +147,8 @@ void DeckTitleBar::draw()
 			dev, dev, 0, nullptr, DI_NORMAL);
 	}
 
-	const int buttons = (mCaption == kCaptionCloseOnly) ? 1 : 3;
+	const int buttons = (mCaption == kCaptionCloseOnly) ? 1
+		: (mCaption == kCaptionMaxClose ? 2 : 3);
 	const char *title = window() ? window()->label() : "";
 	if (title && *title)
 	{
@@ -160,6 +163,10 @@ void DeckTitleBar::draw()
 	if (buttons == 3)
 	{
 		DrawButton(right - 3 * kButtonW, kButtonW, Hit::Minimize);
+		DrawButton(right - 2 * kButtonW, kButtonW, Hit::Maximize);
+	}
+	else if (buttons == 2)
+	{
 		DrawButton(right - 2 * kButtonW, kButtonW, Hit::Maximize);
 	}
 	DrawButton(right - kButtonW, kButtonW, Hit::Close);

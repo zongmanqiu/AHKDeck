@@ -79,6 +79,19 @@ if exist "%PATCHES%\AutoHotkey_H-v2.0.25\source" (
     )
 )
 
+REM m192: the official kernel (single-kernel plan). Same whole-file discipline:
+REM baseline guard first, then one-way conditional copy.
+echo   AutoHotkey v2.0.31 (official)...
+if exist "%PATCHES%\AutoHotkey-v2.0.31\source" (
+    if exist "%PATCHES%\AutoHotkey-v2.0.31\baseline.sha256" (
+        powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0guard_patch.ps1" -PatchDir "%PATCHES%\AutoHotkey-v2.0.31\source" -DstDir "%THIRDPARTY%\AutoHotkey-v2.0.31-src\source" -Baseline "%PATCHES%\AutoHotkey-v2.0.31\baseline.sha256"
+        if errorlevel 1 goto :guard_fail
+    )
+    for %%f in ("%PATCHES%\AutoHotkey-v2.0.31\source\*") do (
+        call :sync "%%f" "%THIRDPARTY%\AutoHotkey-v2.0.31-src\source\%%~nxf" "source/%%~nxf"
+    )
+)
+
 goto :patch_end
 
 :guard_fail

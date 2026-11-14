@@ -1,0 +1,9 @@
+# Pristine upstream hashes for the files AHKDeck patches.
+# Baseline: official AutoHotkey tag v2.0.31 (download URL in .main/build/deps.txt).
+# guard_patch.ps1 aborts the patch step when a destination is neither pristine
+# nor already carrying our patch.
+7c119ed9473d2312ed89dbba472b175f49a4fd072171db95abe516a0ee11f967  source/ahkversion.h
+e30699e22a6ba6730292aa3856b9e5898b75c76a0fff5ef9e006caf2eb419f9b  source/error.cpp
+12d29c3ce0493c28bb7c09e6d8f58158fa5d711e8f496379b2ad82ae1b97516f  source/AutoHotkey.cpp
+eac3ac019b4f6ed2150b1a831a8b715cbcd7f7c45fb0800b94792bd8d138f395  source/script2.cpp
+5c3b65bb05d84899f688fa01466421b948214caedadd8e7303a639df53bd162b  source/script.cpp
