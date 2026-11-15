@@ -1,7 +1,7 @@
 # AHKDeck
 
-**[⬇️ 下载 0.3.3 (Gitee)](https://gitee.com/qiuzongman/AHKDeck/releases/download/0.3.3/AHKDeck_0.3.3.zip)**
-｜ **[⬇️ 下载 0.3.3 (GitHub)](https://github.com/zongmanqiu/AHKDeck/releases/download/0.3.3/AHKDeck_0.3.3.zip)**
+**[⬇️ 下载 0.3.5 (Gitee)](https://gitee.com/qiuzongman/AHKDeck/releases/download/0.3.5/AHKDeck_0.3.5.zip)**
+｜ **[⬇️ 下载 0.3.5 (GitHub)](https://github.com/zongmanqiu/AHKDeck/releases/download/0.3.5/AHKDeck_0.3.5.zip)**
 
 
 > AHKDeck: [Gitee](https://gitee.com/qiuzongman/AHKDeck)
@@ -14,6 +14,7 @@
 - 每个脚本会话跑在独立子进程里，互不干扰；真正退出宿主时由 Job Object 一并回收。
 - 标题栏关闭通常只是隐藏到托盘，脚本继续运行。
 - 支持mcp，可接入AI进行脚本撰写与修改。
+- MCP 界面量测：AI 能读出脚本窗口的控件树、列表条目与控件当前值，改完自行验证结果。
 - 合并托盘菜单：脚本自己的图标收起，各脚本菜单汇集到宿主「运行中」子菜单。
 - 一键把脚本编译成独立 exe（直接复制随包的同一个内核，机器上不用装 AutoHotkey）。
 

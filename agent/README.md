@@ -1,9 +1,9 @@
-# agent/ — 脚本工具层与 MCP 端（m063／m064）
+# agent/ — 脚本工具层与 MCP 端（m063／m064／m205）
 
-一句话：**工具的唯一定义处**。谁驱动这 12 个脚本工具都行，实现与清单只有一份。
+一句话：**工具的唯一定义处**。谁驱动这 16 个工具都行，实现与清单只有一份。
 
 ```
-Toolbox     12 个脚本工具 + 中性工具定义（ToolDef）；线程安全；只经 core/AiPolicy 落盘
+Toolbox     16 个工具 + 中性工具定义（ToolDef）；线程安全；只经 core/AiPolicy 落盘
 McpServer   MCP stdio 端：换行分隔 JSON-RPC，stdout 只放协议帧，日志走 stderr
 ```
 
@@ -21,7 +21,13 @@ m065 把那个循环删了：模型、重试、上下文管理交给外部 MCP �
 
 `list_scripts` / `read_script` / `edit_editor` / `check_editor` / `validate_editor`
 / `patch_editor` / `run_editor` / `run_script` / `get_session_output` / `stop_script`
-/ `list_sessions` / `stop_all`
+/ `list_sessions` / `stop_all` / `inspect_ui` / `ui_pixel` / `capture_ui` / `lookup_help`
+
+- 界面量测（m174／m187／m205）：`inspect_ui` 走 Win32 消息层，先看 HWND 树（全部控件），
+  `items=true` 再补七类控件的条目与所有控件的当前值 `state`；`capture_ui` 用 `PrintWindow`
+  截脚本自己的窗口，`ui_pixel` 按屏幕坐标取单点色。目标是 `session`／`hwnd`／`pid` 三选一，
+  所以也能看任意第三方程序。**不引入 UI Automation**：工具能看到的层级与 AHK 脚本用
+  `Control*`／`SendMessage` 能操作的层级对齐。字段口径见 `docs\MCP界面量测.md`。
 
 - 模型只看脚本 **id**（`S1`…），看不到本机绝对路径（规则 9）。`list_scripts` 每次都重新枚举，
   所以外部 agent 新建的文件下一句就能看见。
@@ -54,8 +60,8 @@ m065 把那个循环删了：模型、重试、上下文管理交给外部 MCP �
 
 ## 接入 MCP 客户端
 
-**面向用户/AI 的接入说明就在发行包里**：`docs\MCP接入.md`（配置示例就在正文里、14 个工具、
-典型提示词、边界、排错）；界面量测的字段语义与判读口径在 `docs\MCP界面量测.md`（m174）。
+**面向用户/AI 的接入说明就在发行包里**：`docs\MCP接入.md`（配置示例、16 个工具、
+典型提示词、边界、排错）；界面量测的字段语义与判读口径在 `docs\MCP界面量测.md`（m174／m205）。
 程序内「帮助 > MCP 接入」用系统默认程序打开前者。
 本节是开发者视角的同一份事实，不重复那份文档的内容。
 
@@ -78,8 +84,9 @@ WorkBuddy —— `~/.workbuddy/mcp.json` 或项目 `<dir>/.workbuddy/mcp.json`�
 Qoder —— MCP 服务（个人设置）或项目 `.qoder/config/mcp.json`，同样的两个字段。
 
 两家的配置里都只有 `command`/`args`/`env`，没有 url ⇒ **只有 stdio 这一条路**，
-所以 `--mcp-stdio` 拉起的就是 deck 窗口本身：脚本、编辑区、控制台都在这一个进程里，
-只有宿主进程真正退出时，脚本才随之结束；stdin 断开本身不会关闭窗口。
+所以 `--mcp-stdio` 拉起的就是 deck 窗口本身：编辑区、控制台与工具层都在这一个进程里，
+**脚本各自跑在官方内核子进程里**（m192 起），宿主真退出时由 Job Object 一并回收；
+stdin 断开本身不会关闭窗口。
 
 ### 行为边界
 

@@ -1,8 +1,8 @@
 {
-  "version": "0.3.4",
+  "version": "0.3.5",
   "published": "2026-11-15",
-  "notes": "0.3.4：内核收敛为单一官方 AutoHotkey 2.0.31 进程外子进程，发行包由 3 个 PE 变 2 个 PE（AutoHotkey64.dll 与 tools\\ 退场），合并托盘菜单保留；状态栏与脚本列表的 CPU/GPU/运行内存改为「本体 ＋ 各运行中脚本之和」，列表扩为 7 列（运行/菜单/脚本/CPU/GPU/内存/快捷键）并恢复表头点击排序；内核版本号收为单一参数，关于界面补「内核 AutoHotkey 2.0.31」；门禁补「假绿」防线与内核版本四处一致性断言。",
-  "notes_en": "0.3.4: The kernel converges to a single out-of-process official AutoHotkey v2.0.31 child process, and the release shrinks from 3 PEs to 2 PEs (AutoHotkey64.dll and tools\\ retired) while keeping the merged tray menu. The status bar and the script list now show CPU/GPU/working-memory as host plus all running scripts; the list grows to 7 columns (run/menu/script/CPU/GPU/memory/hotkey) with header-click sorting restored. The kernel version is now a single parameter, the About dialog gains a 'Kernel AutoHotkey 2.0.31' line, and the gate suite adds a fake-green guard plus a four-way kernel-version consistency assertion.",
-  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.3.4/AHKDeck_0.3.4.zip",
-  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.3.4/AHKDeck_0.3.4.zip"
+  "notes": "0.3.5：AI 现在能真正看懂脚本的界面。inspect_ui 除控件框外，还能读出 ListView、ListBox、ComboBox、TreeView、Tab、状态栏和表头的每行每列文字，并给出勾选状态、当前选中项、滑块与进度条位置、日期时间、热键等当前值；也可按窗口句柄或进程号查看任意程序的窗口。另修复 inspect_ui / capture_ui 在 0.3.3、0.3.4 中找不到脚本窗口的问题，建议这两版用户升级。",
+  "notes_en": "0.3.5: The AI can now actually read a script's UI. inspect_ui still lists every control, but now also returns the rows and columns inside ListView, ListBox, ComboBox, TreeView, Tab, status bar and header controls, plus current values such as checkbox state, selected item, slider/progress position, date and hotkey. Any program's window can be inspected by window handle or process id. Also fixes inspect_ui / capture_ui failing to find script windows in 0.3.3 and 0.3.4 - users of those versions should upgrade.",
+  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.3.5/AHKDeck_0.3.5.zip",
+  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.3.5/AHKDeck_0.3.5.zip"
 }

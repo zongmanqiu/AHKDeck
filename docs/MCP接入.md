@@ -36,14 +36,14 @@ Claude Desktop、Cursor…）之后，AI 可以：
 | Claude Desktop | `claude_desktop_config.json` 的 `mcpServers` |
 
 如果客户端读的是单独的 json 文件，上面整段就是文件内容，一个字都不用改。
-配好后重启客户端，工具列表里应出现 15 个，按用途分五组：
+配好后重启客户端，工具列表里应出现 16 个，按用途分五组：
 
 | 用途 | 工具 |
 |---|---|
 | 看与改源码 | `list_scripts`、`read_script`、`edit_editor`、`patch_editor` |
 | 检查与运行 | `check_editor`、`validate_editor`、`run_editor`、`run_script` |
 | 会话与输出 | `get_session_output`、`list_sessions`、`stop_script`、`stop_all` |
-| 界面量测 | `inspect_ui`、`ui_pixel` —— 字段语义与判读口径见 [MCP界面量测](MCP界面量测.md) |
+| 界面量测 | `inspect_ui`、`capture_ui`、`ui_pixel` —— 字段语义与判读口径见 [MCP界面量测](MCP界面量测.md) |
 | 语法查询 | `lookup_help` —— 离线查 AHK 函数签名与参数，见下文第五节 |
 
 这份文档只讲「怎么接、怎么跑、怎么排错」。界面量测是另一份，需要核对布局时再读，

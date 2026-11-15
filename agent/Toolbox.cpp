@@ -6,6 +6,7 @@
 #include "engine/DeckEngine.h"
 
 #include <windows.h>
+#include <commctrl.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -1021,17 +1022,25 @@ std::vector<ToolDef> Toolbox::Definitions() const
 	{
 		ToolDef d;
 		d.name = "inspect_ui";
-		d.description = "读出某个会话正在显示的界面：按该会话的脚本线程枚举它创建的顶层窗口与全部子控件，"
+		d.description = "读出界面结构：按目标进程枚举顶层窗口与全部子控件，"
 			"返回类名、文字、客户区坐标、屏幕坐标、样式位、DPI。客户区坐标相对顶层窗口客户区，"
 			"与开发指南 §10 坐标表同口径，可直接和源码里的 x16 y76 w388 h242 对照，不用手工减标题栏。"
+			"目标三选一：session（本宿主的脚本会话）、hwnd（任何窗口句柄）、pid（任何进程）。"
+			"传 items=true 时读控件里的内容：① 七类控件（ListView/ListBox/ComboBox/TreeView/Tab/"
+			"StatusBar/Header）给 items{kind,count,rows,...}；② 所有控件按类给 state：勾选状态、"
+			"当前选中项、滑块/进度/上下控件的位置与范围、日期时间、热键、ListView 勾选行等。"
+			"这些都不在窗口文字里，只能问控件本身；读不到时给 items_error 说明原因。"
 			"窗口是异步创建的：刚 run_script 完可能还没建好，用 wait_ms 等一会儿；返回空表就重试，"
 			"或先 get_session_output 看脚本是不是先报错了。只读：不激活目标窗口、不改任何属性、不发输入。"
-			"核对布局、查 1px 内缩、确认控件有没有落在写的位置时用它。";
-		d.properties.Set("session", arg("integer", "会话编号，来自 run_script、run_editor 或 list_sessions"));
+			"核对布局、查 1px 内缩、确认列表里到底是哪几行时用它。";
+		d.properties.Set("session", arg("integer", "会话编号，来自 run_script、run_editor 或 list_sessions；与 hwnd、pid 三选一"));
+		d.properties.Set("hwnd", arg("string", "窗口句柄（十六进制如 0x001307A8，或十进制）；给它就只看这一个窗口，含隐藏窗口"));
+		d.properties.Set("pid", arg("integer", "进程编号；给枚举它的顶层窗口，可用于任何第三方程序"));
 		d.properties.Set("scope", arg("string", "tree（默认，含全部子控件）或 windows（只要顶层窗口）"));
 		d.properties.Set("max", arg("integer", "最多返回多少个控件，默认 200，上限 500；超出时 truncated=true"));
 		d.properties.Set("wait_ms", arg("integer", "等窗口出现的最长毫秒数，默认 1500，上限 5000"));
-		d.required.push_back("session");
+		d.properties.Set("items", arg("boolean", "true 时读取 ListView/ListBox 的条目（行数 + 每行每列文字），默认 false"));
+		d.properties.Set("rows", arg("integer", "items=true 时最多返回多少行，默认 50，上限 200"));
 		defs.push_back(std::move(d));
 	}
 	{
@@ -2027,12 +2036,12 @@ std::string Toolbox::ToolListSessions()
 }
 
 // m174: the session's window tree as measurement data. Three facts shape it:
-//   * a session owns its windows by THREAD, not by process. The kernel is a
-//     DLL, so every script lives in this one process and pid cannot tell two
-//     sessions apart; each session does have its own kernel thread, and
-//     EnumThreadWindows then lists exactly that script's windows. The deck's
-//     own FLTK window belongs to the UI thread and never appears here - no
-//     class-name allow-list needed.
+//   * a session owns its windows by PROCESS (m203). Since m192 the kernel is a
+//     separate AutoHotkey64.exe child and Session::threadId - a legacy name -
+//     holds that child's pid, so two sessions are two processes and pid tells
+//     them apart; CollectTopWindows lists exactly that process's windows. The
+//     deck's own FLTK window belongs to this process and never appears here -
+//     no class-name allow-list needed.
 //   * handles and style bits are 64-bit values: they travel as hex strings,
 //     because a JSON number is a double and would round a handle silently.
 //   * a control's client position is relative to the TOP-LEVEL client area,
@@ -2048,6 +2057,12 @@ struct UiWalk
 	int count = 0;
 	bool truncated = false;
 	HWND root = nullptr;
+	// m205: entry reading. `process` is the target's handle, opened once by the
+	// caller and closed after the walk; null means the owner could not be opened
+	// (a list box still reads, a list view cannot). `entries` is the request.
+	HANDLE process = nullptr;
+	bool entries = false;
+	int rows = 50;
 };
 
 std::string HexOf(ULONGLONG aValue)
@@ -2138,6 +2153,616 @@ Json NodeOf(HWND aHwnd, HWND aRoot, int aDepth)
 	return node;
 }
 
+// ------------------------------------------------------ m205: 条目，不是窗口
+//
+// A ListView row is not a child window: GetWindow(GW_CHILD) never returns one
+// and GetWindowText has nothing to say, which is why `text` comes back empty
+// for the four list-bearing official scripts. The owner answers these through
+// control messages instead, and a message that carries a pointer only works if
+// the buffer is in the OWNER's address space - so each read goes through one
+// VirtualAllocEx block in the target process: LVITEMW and the text buffer sit
+// in the same block, and the struct has to be rewritten before every call
+// because it holds the pointer.
+const int kEntryTextChars = 512;
+const int kEntryMaxColumns = 16;
+
+size_t EntryTextLength(const wchar_t *aText, size_t aMax)
+{
+	size_t n = 0;
+	while (n < aMax && aText[n])
+		++n;
+	return n;
+}
+
+class RemoteArena
+{
+public:
+	explicit RemoteArena(HANDLE aProcess) : mProcess(aProcess) {}
+	~RemoteArena() { Release(); }
+	RemoteArena(const RemoteArena &) = delete;
+	RemoteArena &operator=(const RemoteArena &) = delete;
+
+	bool Reserve(size_t aBytes)
+	{
+		Release();
+		mBase = VirtualAllocEx(mProcess, nullptr, aBytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+		return mBase != nullptr;
+	}
+
+	bool Write(size_t aOffset, const void *aSrc, size_t aBytes)
+	{
+		SIZE_T done = 0;
+		return WriteProcessMemory(mProcess, (BYTE *)mBase + aOffset, aSrc, aBytes, &done) && done == aBytes;
+	}
+
+	bool Read(size_t aOffset, void *aDst, size_t aBytes)
+	{
+		SIZE_T done = 0;
+		return ReadProcessMemory(mProcess, (const BYTE *)mBase + aOffset, aDst, aBytes, &done) && done == aBytes;
+	}
+
+	LPARAM Remote(size_t aOffset) const { return (LPARAM)((BYTE *)mBase + aOffset); }
+
+	void Release()
+	{
+		if (mBase)
+			VirtualFreeEx(mProcess, mBase, 0, MEM_RELEASE);
+		mBase = nullptr;
+	}
+
+private:
+	HANDLE mProcess = nullptr;
+	void *mBase = nullptr;
+};
+
+// Every send carries a 100ms budget for the same reason TextOf() does: this is
+// another thread, and a script stuck in a loop must not hang the tool.
+bool ReadEntries(HWND aHwnd, HANDLE aProcess, bool aListView, int aMaxRows, Json &aOut)
+{
+	const size_t cellBytes = (size_t)(kEntryTextChars + 1) * sizeof(wchar_t);
+	// LVM_* messages are NOT marshaled, so the struct and its text buffer have to
+	// live in the owner's address space. LB_GETTEXT *is* marshaled by the system
+	// (same treatment as WM_GETTEXT), so a local buffer is what works there -
+	// measured: the remote buffer returned count=2 and two empty strings.
+	RemoteArena arena(aProcess);
+	if (aListView && !arena.Reserve(sizeof(LVITEMW) + cellBytes))
+		return false;
+
+	DWORD_PTR answer = 0;
+	if (!SendMessageTimeoutW(aHwnd, aListView ? LVM_GETITEMCOUNT : LB_GETCOUNT, 0, 0,
+			SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &answer))
+		return false;
+	const int count = (int)answer;
+
+	// A list can have columns but no visible header (-Hdr in our own scripts):
+	// the header control still exists, so its item count is the column count.
+	int columns = 1;
+	if (aListView)
+	{
+		DWORD_PTR header = 0;
+		if (SendMessageTimeoutW(aHwnd, LVM_GETHEADER, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &header) && header)
+		{
+			DWORD_PTR found = 0;
+			if (SendMessageTimeoutW((HWND)(ULONG_PTR)header, HDM_GETITEMCOUNT, 0, 0,
+					SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &found))
+				columns = (int)found;
+		}
+		columns = columns < 1 ? 1 : (columns > kEntryMaxColumns ? kEntryMaxColumns : columns);
+	}
+
+	Json rows = Json::MakeArray();
+	int shown = 0;
+	wchar_t text[kEntryTextChars + 1] = {0};
+	for (int row = 0; row < count && row < aMaxRows; ++row)
+	{
+		Json cells = Json::MakeArray();
+		if (aListView)
+		{
+			for (int col = 0; col < columns; ++col)
+			{
+				LVITEMW item = {};
+				item.mask = LVIF_TEXT;
+				item.iItem = row;
+				item.iSubItem = col;
+				item.pszText = (LPWSTR)arena.Remote(sizeof(LVITEMW));
+				item.cchTextMax = kEntryTextChars;
+				if (!arena.Write(0, &item, sizeof(item)))
+					break;
+				DWORD_PTR copied = 0;
+				SendMessageTimeoutW(aHwnd, LVM_GETITEMTEXTW, (WPARAM)row, arena.Remote(0),
+					SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &copied);
+				text[0] = 0;
+				if (!arena.Read(sizeof(LVITEMW), text, cellBytes))
+					break;
+				text[kEntryTextChars] = 0;
+				cells.Push(Json(Utf8Of(std::wstring(text, EntryTextLength(text, kEntryTextChars)))));
+			}
+		}
+		else
+		{
+			wchar_t local[kEntryTextChars + 1] = {0};
+			DWORD_PTR copied = 0;
+			if (!SendMessageTimeoutW(aHwnd, LB_GETTEXT, (WPARAM)row, (LPARAM)local,
+					SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &copied) || copied == (DWORD_PTR)-1)
+				break;
+			local[kEntryTextChars] = 0;
+			cells.Push(Json(Utf8Of(std::wstring(local, EntryTextLength(local, kEntryTextChars)))));
+		}
+		rows.Push(std::move(cells));
+		++shown;
+	}
+
+	Json out = Json::MakeObject();
+	out.Set("kind", Json(aListView ? "listview" : "listbox"));
+	out.Set("count", Json((double)count));
+	if (aListView)
+		out.Set("columns", Json((double)columns));
+	out.Set("rows", std::move(rows));
+	out.Set("truncated", Json(shown < count));
+	if (aListView)
+	{
+		// Selection and the check-box column are states on the rows themselves,
+		// not rows of text: LVM_GETITEMSTATE returns the bits directly, so no
+		// remote buffer is needed here.
+		DWORD_PTR selected = 0;
+		if (SendMessageTimeoutW(aHwnd, LVM_GETSELECTEDCOUNT, 0, 0,
+				SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &selected))
+			out.Set("selected_count", Json((double)selected));
+		Json checked = Json::MakeArray();
+		for (int row = 0; row < shown; ++row)
+		{
+			DWORD_PTR state = 0;
+			if (!SendMessageTimeoutW(aHwnd, LVM_GETITEMSTATE, (WPARAM)row, LVIS_STATEIMAGEMASK,
+					SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &state))
+				break;
+			if ((state & LVIS_STATEIMAGEMASK) == INDEXTOSTATEIMAGEMASK(2))
+				checked.Push(Json((double)row));
+		}
+		if (checked.Size() > 0)
+			out.Set("checked_rows", std::move(checked));
+	}
+	aOut = std::move(out);
+	return true;
+}
+
+Json EntriesObject(const char *aKind, int aCount, int aShown, Json &aRows, int aColumns)
+{
+	Json out = Json::MakeObject();
+	out.Set("kind", Json(aKind));
+	out.Set("count", Json((double)aCount));
+	if (aColumns > 0)
+		out.Set("columns", Json((double)aColumns));
+	out.Set("rows", std::move(aRows));
+	out.Set("truncated", Json(aShown < aCount));
+	return out;
+}
+
+// ComboBox answers with CB_* messages, and like LB_* the system marshals the
+// buffer for us - so this one needs no remote memory either.
+bool ReadComboItems(HWND aHwnd, int aMaxRows, Json &aOut)
+{
+	DWORD_PTR total = 0;
+	if (!SendMessageTimeoutW(aHwnd, CB_GETCOUNT, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &total))
+		return false;
+	const int count = (int)total;
+	Json rows = Json::MakeArray();
+	int shown = 0;
+	wchar_t local[kEntryTextChars + 1] = {0};
+	for (int index = 0; index < count && index < aMaxRows; ++index)
+	{
+		DWORD_PTR copied = 0;
+		if (!SendMessageTimeoutW(aHwnd, CB_GETLBTEXT, (WPARAM)index, (LPARAM)local,
+				SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &copied) || copied == (DWORD_PTR)-1)
+			break;
+		local[kEntryTextChars] = 0;
+		Json cells = Json::MakeArray();
+		cells.Push(Json(Utf8Of(std::wstring(local, EntryTextLength(local, kEntryTextChars)))));
+		rows.Push(std::move(cells));
+		++shown;
+	}
+	aOut = EntriesObject("combobox", count, shown, rows, 0);
+	return true;
+}
+
+// TVM_GETITEMW is not marshaled either, so TVITEMW and the text share the same
+// remote block as the list view's. `levels` exists because a tree without its
+// shape is just an unordered pile of words: the row order is a depth-first walk,
+// and level 0 is the root row.
+bool ReadTreeBranch(HWND aHwnd, RemoteArena &aArena, HTREEITEM aItem, int aLevel,
+	int &aRemaining, Json &aRows, Json &aLevels)
+{
+	while (aItem && aRemaining > 0)
+	{
+		TVITEMW item = {};
+		item.mask = TVIF_TEXT | TVIF_HANDLE;
+		item.hItem = aItem;
+		item.pszText = (LPWSTR)aArena.Remote(sizeof(TVITEMW));
+		item.cchTextMax = kEntryTextChars;
+		if (!aArena.Write(0, &item, sizeof(item)))
+			return false;
+		DWORD_PTR copied = 0;
+		if (!SendMessageTimeoutW(aHwnd, TVM_GETITEMW, 0, aArena.Remote(0),
+				SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &copied) || !copied)
+			return false;
+		wchar_t text[kEntryTextChars + 1] = {0};
+		if (!aArena.Read(sizeof(TVITEMW), text, (kEntryTextChars + 1) * sizeof(wchar_t)))
+			return false;
+		text[kEntryTextChars] = 0;
+		Json cells = Json::MakeArray();
+		cells.Push(Json(Utf8Of(std::wstring(text, EntryTextLength(text, kEntryTextChars)))));
+		aRows.Push(std::move(cells));
+		aLevels.Push(Json((double)aLevel));
+		--aRemaining;
+
+		DWORD_PTR child = 0;
+		if (SendMessageTimeoutW(aHwnd, TVM_GETNEXTITEM, TVGN_CHILD, (LPARAM)aItem,
+				SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &child) && child)
+		{
+			if (!ReadTreeBranch(aHwnd, aArena, (HTREEITEM)(ULONG_PTR)child, aLevel + 1,
+					aRemaining, aRows, aLevels))
+				return false;
+		}
+		DWORD_PTR next = 0;
+		if (!SendMessageTimeoutW(aHwnd, TVM_GETNEXTITEM, TVGN_NEXT, (LPARAM)aItem,
+				SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &next))
+			return false;
+		aItem = (HTREEITEM)(ULONG_PTR)next;
+	}
+	return true;
+}
+
+bool ReadTreeItems(HWND aHwnd, HANDLE aProcess, int aMaxRows, Json &aOut)
+{
+	RemoteArena arena(aProcess);
+	if (!arena.Reserve(sizeof(TVITEMW) + (kEntryTextChars + 1) * sizeof(wchar_t)))
+		return false;
+	DWORD_PTR total = 0;
+	if (!SendMessageTimeoutW(aHwnd, TVM_GETCOUNT, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &total))
+		return false;
+	DWORD_PTR root = 0;
+	if (!SendMessageTimeoutW(aHwnd, TVM_GETNEXTITEM, TVGN_ROOT, 0,
+			SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &root))
+		return false;
+
+	Json rows = Json::MakeArray();
+	Json levels = Json::MakeArray();
+	int remaining = aMaxRows;
+	if (root && !ReadTreeBranch(aHwnd, arena, (HTREEITEM)(ULONG_PTR)root, 0, remaining, rows, levels))
+		return false;
+
+	Json out = EntriesObject("treeview", (int)total, aMaxRows - remaining, rows, 0);
+	out.Set("levels", std::move(levels));
+	DWORD_PTR caret = 0;
+	if (SendMessageTimeoutW(aHwnd, TVM_GETNEXTITEM, TVGN_CARET, 0,
+			SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &caret) && caret)
+	{
+		TVITEMW item = {};
+		item.mask = TVIF_TEXT | TVIF_HANDLE;
+		item.hItem = (HTREEITEM)(ULONG_PTR)caret;
+		item.pszText = (LPWSTR)arena.Remote(sizeof(TVITEMW));
+		item.cchTextMax = kEntryTextChars;
+		if (arena.Write(0, &item, sizeof(item)))
+		{
+			DWORD_PTR copied = 0;
+			if (SendMessageTimeoutW(aHwnd, TVM_GETITEMW, 0, arena.Remote(0),
+					SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &copied) && copied)
+			{
+				wchar_t text[kEntryTextChars + 1] = {0};
+				if (arena.Read(sizeof(TVITEMW), text, sizeof(text)))
+				{
+					text[kEntryTextChars] = 0;
+					out.Set("selected", Json(Utf8Of(std::wstring(text, EntryTextLength(text, kEntryTextChars)))));
+				}
+			}
+		}
+	}
+	aOut = std::move(out);
+	return true;
+}
+
+bool ReadTabItems(HWND aHwnd, HANDLE aProcess, int aMaxRows, Json &aOut)
+{
+	RemoteArena arena(aProcess);
+	if (!arena.Reserve(sizeof(TCITEMW) + (kEntryTextChars + 1) * sizeof(wchar_t)))
+		return false;
+	DWORD_PTR total = 0;
+	if (!SendMessageTimeoutW(aHwnd, TCM_GETITEMCOUNT, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &total))
+		return false;
+	const int count = (int)total;
+	Json rows = Json::MakeArray();
+	int shown = 0;
+	wchar_t text[kEntryTextChars + 1] = {0};
+	for (int index = 0; index < count && index < aMaxRows; ++index)
+	{
+		TCITEMW item = {};
+		item.mask = TCIF_TEXT;
+		item.pszText = (LPWSTR)arena.Remote(sizeof(TCITEMW));
+		item.cchTextMax = kEntryTextChars;
+		if (!arena.Write(0, &item, sizeof(item)))
+			break;
+		DWORD_PTR copied = 0;
+		if (!SendMessageTimeoutW(aHwnd, TCM_GETITEMW, (WPARAM)index, arena.Remote(0),
+				SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &copied) || !copied)
+			break;
+		text[0] = 0;
+		if (!arena.Read(sizeof(TCITEMW), text, (kEntryTextChars + 1) * sizeof(wchar_t)))
+			break;
+		text[kEntryTextChars] = 0;
+		Json cells = Json::MakeArray();
+		cells.Push(Json(Utf8Of(std::wstring(text, EntryTextLength(text, kEntryTextChars)))));
+		rows.Push(std::move(cells));
+		++shown;
+	}
+	aOut = EntriesObject("tab", count, shown, rows, 0);
+	return true;
+}
+
+// One row per part: a status bar's text lives in the control, not in the window
+// caption, which is why a Gui's "就绪" line was invisible before this.
+bool ReadStatusParts(HWND aHwnd, HANDLE aProcess, int aMaxRows, Json &aOut)
+{
+	RemoteArena arena(aProcess);
+	if (!arena.Reserve((kEntryTextChars + 1) * sizeof(wchar_t)))
+		return false;
+	DWORD_PTR parts = 0;
+	if (!SendMessageTimeoutW(aHwnd, SB_GETPARTS, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &parts))
+		return false;
+	const int count = (int)parts;
+	Json rows = Json::MakeArray();
+	int shown = 0;
+	wchar_t text[kEntryTextChars + 1] = {0};
+	for (int index = 0; index < count && index < aMaxRows; ++index)
+	{
+		DWORD_PTR copied = 0;
+		if (!SendMessageTimeoutW(aHwnd, SB_GETTEXTW, (WPARAM)index, arena.Remote(0),
+				SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &copied))
+			break;
+		text[0] = 0;
+		if (!arena.Read(0, text, (kEntryTextChars + 1) * sizeof(wchar_t)))
+			break;
+		text[kEntryTextChars] = 0;
+		Json cells = Json::MakeArray();
+		cells.Push(Json(Utf8Of(std::wstring(text, EntryTextLength(text, kEntryTextChars)))));
+		rows.Push(std::move(cells));
+		++shown;
+	}
+	aOut = EntriesObject("statusbar", count, shown, rows, 0);
+	return true;
+}
+
+// --------------------------------------------------- 当前值（不是一行文字）
+//
+// A check-box's tick, a slider's position and a tab's current page are not rows:
+// they are one number or one state per control. They live in the control, not in
+// the window caption, and nearly all of them come back as the message's return
+// value - no remote buffer at all. Only the two calendar controls answer through
+// a SYSTEMTIME pointer, which does have to be in the owner's address space.
+std::string DateOf(const SYSTEMTIME &aTime)
+{
+	char text[32] = {0};
+	std::snprintf(text, sizeof(text), "%04u-%02u-%02u %02u:%02u:%02u",
+		(unsigned)aTime.wYear, (unsigned)aTime.wMonth, (unsigned)aTime.wDay,
+		(unsigned)aTime.wHour, (unsigned)aTime.wMinute, (unsigned)aTime.wSecond);
+	return std::string(text);
+}
+
+bool Ask(HWND aHwnd, UINT aMsg, WPARAM aW, LPARAM aL, DWORD_PTR &aOut)
+{
+	aOut = 0;
+	return SendMessageTimeoutW(aHwnd, aMsg, aW, aL,
+		SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &aOut) != 0;
+}
+
+// DTM_GETSYSTEMTIME returns GDT_VALID (0) on success and GDT_ERROR (-1) on
+// failure; MCM_GETCURSEL returns a BOOL. Both answer "did it work" differently,
+// so the caller says which convention applies.
+bool ReadSystemTime(HWND aHwnd, HANDLE aProcess, UINT aMsg, bool aWantsNonZero, std::string &aOut)
+{
+	if (!aProcess)
+		return false;
+	RemoteArena arena(aProcess);
+	if (!arena.Reserve(sizeof(SYSTEMTIME)))
+		return false;
+	const SYSTEMTIME zero = {};
+	if (!arena.Write(0, &zero, sizeof(zero)))
+		return false;
+	DWORD_PTR result = 0;
+	if (!Ask(aHwnd, aMsg, 0, arena.Remote(0), result))
+		return false;
+	if (aWantsNonZero ? result == 0 : result == (DWORD_PTR)-1)
+		return false;
+	SYSTEMTIME value = {};
+	if (!arena.Read(0, &value, sizeof(value)))
+		return false;
+	aOut = DateOf(value);
+	return true;
+}
+
+std::string HotkeyOf(WORD aHotkey)
+{
+	const BYTE vk = LOBYTE(aHotkey);
+	const BYTE mods = HIBYTE(aHotkey);
+	std::string out;
+	if (mods & HOTKEYF_CONTROL) out += "^";
+	if (mods & HOTKEYF_SHIFT) out += "+";
+	if (mods & HOTKEYF_ALT) out += "!";
+	if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z'))
+		out += (char)vk;
+	else
+	{
+		char text[16] = {0};
+		std::snprintf(text, sizeof(text), "vk%02X", (unsigned)vk);
+		out += text;
+	}
+	return out;
+}
+
+// One uniform `state` object regardless of control class: callers do not have
+// to learn a new shape for every kind, and an unreadable value simply leaves the
+// field out instead of lying about it.
+Json StateOf(HWND aHwnd, const std::string &aClass, HANDLE aProcess)
+{
+	Json state = Json::MakeObject();
+	DWORD_PTR v = 0;
+	bool any = false;
+	const auto put = [&](const char *aKey, double aNumber)
+	{
+		state.Set(aKey, Json(aNumber));
+		any = true;
+	};
+	const LONG_PTR style = GetWindowLongPtrW(aHwnd, GWL_STYLE);
+
+	if (lstrcmpiA(aClass.c_str(), "Button") == 0)
+	{
+		// BS_TYPEMASK is the low nibble: 2/3 = check box, 4/9 = radio,
+		// 6/11 = three-state. A push button has 0 and no check state to report.
+		const LONG_PTR type = style & 0xF;
+		if (type >= 2 && type <= 11 && Ask(aHwnd, BM_GETCHECK, 0, 0, v))
+			put("checked", (double)v);
+	}
+	else if (lstrcmpiA(aClass.c_str(), "ComboBox") == 0)
+	{
+		if (Ask(aHwnd, CB_GETCURSEL, 0, 0, v) && (int)v >= 0)
+			put("selected", (double)v);
+	}
+	else if (lstrcmpiA(aClass.c_str(), "ListBox") == 0)
+	{
+		if (Ask(aHwnd, LB_GETCURSEL, 0, 0, v) && (int)v >= 0)
+			put("selected", (double)v);
+		if ((style & LBS_MULTIPLESEL) && Ask(aHwnd, LB_GETSELCOUNT, 0, 0, v))
+			put("selected_count", (double)v);
+	}
+	else if (lstrcmpiA(aClass.c_str(), "SysTabControl32") == 0)
+	{
+		if (Ask(aHwnd, TCM_GETCURSEL, 0, 0, v) && (int)v >= 0)
+			put("selected", (double)v);
+	}
+	else if (lstrcmpiA(aClass.c_str(), "msctls_trackbar32") == 0)
+	{
+		if (Ask(aHwnd, TBM_GETPOS, 0, 0, v)) put("pos", (double)v);
+		if (Ask(aHwnd, TBM_GETRANGEMIN, 0, 0, v)) put("min", (double)v);
+		if (Ask(aHwnd, TBM_GETRANGEMAX, 0, 0, v)) put("max", (double)v);
+	}
+	else if (lstrcmpiA(aClass.c_str(), "msctls_progress32") == 0)
+	{
+		if (Ask(aHwnd, PBM_GETPOS, 0, 0, v)) put("pos", (double)v);
+		if (Ask(aHwnd, PBM_GETRANGE, 0, 0, v)) put("min", (double)(short)LOWORD(v));
+		if (Ask(aHwnd, PBM_GETRANGE, 1, 0, v)) put("max", (double)(short)LOWORD(v));
+	}
+	else if (lstrcmpiA(aClass.c_str(), "msctls_updown32") == 0)
+	{
+		// UDM_GETPOS keeps an error flag in the high word; a nonzero one means
+		// the value is not usable, so it must not be reported as a position.
+		if (Ask(aHwnd, UDM_GETPOS, 0, 0, v) && HIWORD(v) == 0)
+			put("pos", (double)(short)LOWORD(v));
+	}
+	else if (lstrcmpiA(aClass.c_str(), "msctls_hotkey32") == 0)
+	{
+		if (Ask(aHwnd, HKM_GETHOTKEY, 0, 0, v))
+		{
+			state.Set("hotkey", Json(HotkeyOf((WORD)v)));
+			any = true;
+		}
+	}
+	else if (lstrcmpiA(aClass.c_str(), "SysDateTimePick32") == 0)
+	{
+		std::string date;
+		if (ReadSystemTime(aHwnd, aProcess, DTM_GETSYSTEMTIME, false, date))
+		{
+			state.Set("date", Json(date));
+			any = true;
+		}
+	}
+	else if (lstrcmpiA(aClass.c_str(), "SysMonthCal32") == 0)
+	{
+		std::string date;
+		if (ReadSystemTime(aHwnd, aProcess, MCM_GETCURSEL, true, date))
+		{
+			state.Set("date", Json(date));
+			any = true;
+		}
+	}
+	return any ? state : Json();
+}
+
+// A ListView's header is a child window of its own, and its column titles are
+// items too. Cheap now that HDM_* shares the same remote-buffer path as TCITEMW.
+bool ReadHeaderItems(HWND aHwnd, HANDLE aProcess, int aMaxRows, Json &aOut)
+{
+	RemoteArena arena(aProcess);
+	if (!arena.Reserve(sizeof(HDITEMW) + (kEntryTextChars + 1) * sizeof(wchar_t)))
+		return false;
+	DWORD_PTR total = 0;
+	if (!SendMessageTimeoutW(aHwnd, HDM_GETITEMCOUNT, 0, 0,
+			SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &total))
+		return false;
+	const int count = (int)total;
+	Json rows = Json::MakeArray();
+	int shown = 0;
+	wchar_t text[kEntryTextChars + 1] = {0};
+	for (int index = 0; index < count && index < aMaxRows; ++index)
+	{
+		HDITEMW item = {};
+		item.mask = HDI_TEXT;
+		item.pszText = (LPWSTR)arena.Remote(sizeof(HDITEMW));
+		item.cchTextMax = kEntryTextChars;
+		if (!arena.Write(0, &item, sizeof(item)))
+			break;
+		DWORD_PTR copied = 0;
+		if (!SendMessageTimeoutW(aHwnd, HDM_GETITEMW, (WPARAM)index, arena.Remote(0),
+				SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &copied) || !copied)
+			break;
+		text[0] = 0;
+		if (!arena.Read(sizeof(HDITEMW), text, (kEntryTextChars + 1) * sizeof(wchar_t)))
+			break;
+		text[kEntryTextChars] = 0;
+		Json cells = Json::MakeArray();
+		cells.Push(Json(Utf8Of(std::wstring(text, EntryTextLength(text, kEntryTextChars)))));
+		rows.Push(std::move(cells));
+		++shown;
+	}
+	aOut = EntriesObject("header", count, shown, rows, 0);
+	return true;
+}
+
+// Only the controls whose content is invisible to GetWindow(GW_CHILD) are listed
+// here. Everything else is already described by the node itself, and an entry
+// read is a cross-process round trip per row - not something to do unasked.
+void AttachEntries(HWND aHwnd, Json &aNode, HANDLE aProcess, int aRows)
+{
+	const std::string cls = ClassOf(aHwnd);
+	Json state = StateOf(aHwnd, cls, aProcess);
+	if (!state.IsNull())
+		aNode.Set("state", std::move(state));
+
+	Json entries;
+	bool known = true;
+	bool ok = false;
+	if (lstrcmpiA(cls.c_str(), "SysListView32") == 0)
+		ok = ReadEntries(aHwnd, aProcess, true, aRows, entries);
+	else if (lstrcmpiA(cls.c_str(), "ListBox") == 0)
+		ok = ReadEntries(aHwnd, aProcess, false, aRows, entries);
+	else if (lstrcmpiA(cls.c_str(), "ComboBox") == 0)
+		ok = ReadComboItems(aHwnd, aRows, entries);
+	else if (lstrcmpiA(cls.c_str(), "SysTreeView32") == 0)
+		ok = ReadTreeItems(aHwnd, aProcess, aRows, entries);
+	else if (lstrcmpiA(cls.c_str(), "SysTabControl32") == 0)
+		ok = ReadTabItems(aHwnd, aProcess, aRows, entries);
+	else if (lstrcmpiA(cls.c_str(), "msctls_statusbar32") == 0)
+		ok = ReadStatusParts(aHwnd, aProcess, aRows, entries);
+	else if (lstrcmpiA(cls.c_str(), "SysHeader32") == 0)
+		ok = ReadHeaderItems(aHwnd, aProcess, aRows, entries);
+	else
+		known = false;
+
+	if (!known)
+		return;
+	if (ok)
+		aNode.Set("items", std::move(entries));
+	else
+		aNode.Set("items_error", Json("读不到条目：控件无响应，或目标进程不可读写"));
+}
+
 // Parent before child, siblings in z order - the same order EnumChildWindows
 // uses, written out so `depth` means something and nesting stays readable.
 void WalkChildren(HWND aParent, UiWalk &aWalk, int aDepth)
@@ -2150,6 +2775,8 @@ void WalkChildren(HWND aParent, UiWalk &aWalk, int aDepth)
 			return;
 		}
 		Json node = NodeOf(child, aWalk.root, aDepth);
+		if (aWalk.entries)
+			AttachEntries(child, node, aWalk.process, aWalk.rows);
 		++aWalk.count;
 		aWalk.items.Push(std::move(node));
 		if (aDepth < 8)
@@ -2157,10 +2784,33 @@ void WalkChildren(HWND aParent, UiWalk &aWalk, int aDepth)
 	}
 }
 
-BOOL CALLBACK CollectThreadWindow(HWND aHwnd, LPARAM aParam)
+// m203: a session is a child process since m192, and Session::threadId (a
+// legacy name) holds that child's pid - EnumThreadWindows(pid) lists nothing,
+// which blinded inspect_ui/capture_ui on every machine. Top-level windows now
+// come from EnumWindows filtered by GetWindowThreadProcessId: cross-process,
+// but read-only, the same shape session_gate F4 already asserts.
+struct WindowScan
 {
-	reinterpret_cast<std::vector<HWND> *>(aParam)->push_back(aHwnd);
+	DWORD pid = 0;
+	std::vector<HWND> *out = nullptr;
+};
+
+BOOL CALLBACK CollectSessionWindow(HWND aHwnd, LPARAM aParam)
+{
+	WindowScan *scan = reinterpret_cast<WindowScan *>(aParam);
+	DWORD pid = 0;
+	GetWindowThreadProcessId(aHwnd, &pid);
+	if (pid == scan->pid)
+		scan->out->push_back(aHwnd);
 	return TRUE;
+}
+
+void CollectTopWindows(DWORD aPid, std::vector<HWND> &aOut)
+{
+	WindowScan scan;
+	scan.pid = aPid;
+	scan.out = &aOut;
+	EnumWindows(CollectSessionWindow, (LPARAM)&scan);
 }
 
 // Writes a top-down 24bpp DIB as a bottom-up BMP. BMP needs no codec and every
@@ -2214,44 +2864,89 @@ bool WriteBmp24(const std::wstring &aPath, int aWidth, int aHeight,
 
 std::string Toolbox::ToolInspectUi(const Json &aArgs)
 {
-	if (!aArgs.Has("session") || !aArgs["session"].IsNumber())
-		return ErrorResult("session 是必需参数（来自 run_script、run_editor 或 list_sessions）").Dump();
-
-	const DWORD sessionId = (DWORD)aArgs["session"].AsInt(0);
-	Session session;
-	if (!Engine::Instance().GetSession(sessionId, session))
-		return ErrorResult("未知会话: " + std::to_string(sessionId)).Dump();
-	if (session.threadId == 0)
-		return ErrorResult("会话还没有脚本线程（脚本可能连加载都没走到）").Dump();
+	// m205: three ways in. `session` keeps its original meaning (a script session
+	// of this host). `hwnd` and `pid` widen the same tool to any other program -
+	// the tree is the same question either way, only the entry point differs, and
+	// an AI writing a script that drives another program needs that tree.
+	HWND single = nullptr;
+	DWORD pid = 0;
+	DWORD sessionId = 0;
+	if (aArgs.Has("hwnd"))
+	{
+		const std::string raw = aArgs["hwnd"].IsString()
+			? aArgs["hwnd"].AsString()
+			: std::to_string(aArgs["hwnd"].AsInt(0));
+		single = (HWND)(ULONG_PTR)wcstoull(WideOf(raw).c_str(), nullptr, 0);
+		if (!single || !IsWindow(single))
+			return ErrorResult("hwnd 不是一个存在的窗口: " + raw).Dump();
+		GetWindowThreadProcessId(single, &pid);
+	}
+	else if (aArgs.Has("pid") && aArgs["pid"].IsNumber())
+	{
+		pid = (DWORD)aArgs["pid"].AsInt(0);
+		if (pid == 0)
+			return ErrorResult("pid 必须是正整数").Dump();
+	}
+	else
+	{
+		if (!aArgs.Has("session") || !aArgs["session"].IsNumber())
+			return ErrorResult("需要 session（本宿主的脚本会话）、hwnd 或 pid 之一").Dump();
+		sessionId = (DWORD)aArgs["session"].AsInt(0);
+		Session session;
+		if (!Engine::Instance().GetSession(sessionId, session))
+			return ErrorResult("未知会话: " + std::to_string(sessionId)).Dump();
+		if (session.threadId == 0)
+			return ErrorResult("会话还没有脚本进程（脚本可能连加载都没走到）").Dump();
+		pid = session.threadId;
+	}
 
 	const bool tree = aArgs["scope"].AsString() != "windows";
 	int max = aArgs["max"].AsInt(200);
 	max = max < 1 ? 1 : (max > 500 ? 500 : max);
 	int waitMs = aArgs["wait_ms"].AsInt(1500);
 	waitMs = waitMs < 0 ? 0 : (waitMs > 5000 ? 5000 : waitMs);
+	const bool wantItems = aArgs["items"].AsBool(false);
+	int rows = aArgs["rows"].AsInt(50);
+	rows = rows < 1 ? 1 : (rows > 200 ? 200 : rows);
 
-	// The window is created asynchronously by the script thread: a run that has
+	// Entries need PROCESS_VM_* on the owner. A refused open is not a failure for
+	// the tree - another integrity level, or the process is already gone - it only
+	// means `items` stays absent and the tree is still worth returning.
+	HANDLE target = wantItems
+		? OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION,
+			FALSE, pid)
+		: nullptr;
+
+	// The window is created asynchronously by the script process: a run that has
 	// already returned can still be milliseconds away from its first visible
 	// Gui. Answering with an empty list at that moment reads as "my window never
-	// appeared", which is the wrong diagnosis most of the time.
+	// appeared", which is the wrong diagnosis most of the time. An explicit hwnd
+	// is already there, so it skips the wait.
 	std::vector<HWND> tops;
-	const ULONGLONG deadline = GetTickCount64() + (ULONGLONG)waitMs;
-	for (;;)
+	if (single)
 	{
-		tops.clear();
-		EnumThreadWindows(session.threadId, CollectThreadWindow, (LPARAM)&tops);
-		bool visible = false;
-		for (HWND hwnd : tops)
+		tops.push_back(single);
+	}
+	else
+	{
+		const ULONGLONG deadline = GetTickCount64() + (ULONGLONG)waitMs;
+		for (;;)
 		{
-			if (IsWindowVisible(hwnd))
+			tops.clear();
+			CollectTopWindows(pid, tops);
+			bool visible = false;
+			for (HWND hwnd : tops)
 			{
-				visible = true;
-				break;
+				if (IsWindowVisible(hwnd))
+				{
+					visible = true;
+					break;
+				}
 			}
+			if (visible || GetTickCount64() >= deadline)
+				break;
+			Sleep(60);
 		}
-		if (visible || GetTickCount64() >= deadline)
-			break;
-		Sleep(60);
 	}
 
 	Json windows = Json::MakeArray();
@@ -2261,17 +2956,26 @@ std::string Toolbox::ToolInspectUi(const Json &aArgs)
 	for (HWND hwnd : tops)
 	{
 		// Hidden top-level windows are noise here: a script usually parks its
-		// real window in one and keeps a hidden one behind it for hotkeys.
-		if (!IsWindowVisible(hwnd))
+		// real window in one and keeps a hidden one behind it for hotkeys. An
+		// explicit hwnd is the caller's own choice, so it is always returned -
+		// "hide to tray" is exactly when one asks about a hidden window.
+		if (!single && !IsWindowVisible(hwnd))
 			continue;
 
 		Json item = NodeOf(hwnd, hwnd, 0);
 		item.Set("dpi", Json((double)DpiOf(hwnd)));
+		if (wantItems && !target)
+			item.Set("items_error", Json("打不开目标进程（权限不足或已退出），只返回了窗口结构"));
+		else if (wantItems)
+			AttachEntries(hwnd, item, target, rows);
 		if (tree)
 		{
 			UiWalk walk;
 			walk.budget = max - total;
 			walk.root = hwnd;
+			walk.process = target;
+			walk.entries = wantItems;
+			walk.rows = rows;
 			if (walk.budget > 0)
 				WalkChildren(hwnd, walk, 1);
 			total += walk.count;
@@ -2281,15 +2985,21 @@ std::string Toolbox::ToolInspectUi(const Json &aArgs)
 		windows.Push(std::move(item));
 		++shown;
 	}
+	if (target)
+		CloseHandle(target);
 
 	Json result = OkResult();
 	result.Set("session", Json((double)sessionId));
+	if (!sessionId)
+		result.Set("pid", Json((double)pid));
 	result.Set("windows", std::move(windows));
 	result.Set("count", Json((double)shown));
 	result.Set("controls", Json((double)total));
 	result.Set("truncated", Json(truncated));
 	if (shown == 0)
-		result.Set("note", Json("该会话目前没有可见窗口：窗口可能还没建好，也可能脚本已经退出。"));
+		result.Set("note", Json(sessionId
+			? "该会话目前没有可见窗口：窗口可能还没建好，也可能脚本已经退出。"
+			: "目标进程目前没有可见顶层窗口：pid 可能不对，或窗口还没建好。"));
 	return result.Dump();
 }
 
@@ -2316,7 +3026,7 @@ std::string Toolbox::ToolCaptureUi(const Json &aArgs)
 	if (!Engine::Instance().GetSession(sessionId, session))
 		return ErrorResult("未知会话: " + std::to_string(sessionId)).Dump();
 	if (session.threadId == 0)
-		return ErrorResult("会话还没有脚本线程（脚本可能连加载都没走到）").Dump();
+		return ErrorResult("会话还没有脚本进程（脚本可能连加载都没走到）").Dump();
 
 	int waitMs = aArgs["wait_ms"].AsInt(1500);
 	waitMs = waitMs < 0 ? 0 : (waitMs > 5000 ? 5000 : waitMs);
@@ -2328,7 +3038,7 @@ std::string Toolbox::ToolCaptureUi(const Json &aArgs)
 	for (;;)
 	{
 		tops.clear();
-		EnumThreadWindows(session.threadId, CollectThreadWindow, (LPARAM)&tops);
+		CollectTopWindows(session.threadId, tops);
 		bool anyVisible = false;
 		for (HWND hwnd : tops)
 		{

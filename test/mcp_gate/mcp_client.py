@@ -44,8 +44,9 @@ EXPECTED_TOOLS = {
     "stop_script",
     "list_sessions",
     "stop_all",
-    # m174: the measurement pair. Same process as the script, so the tree comes
-    # from EnumThreadWindows instead of a cross-process hit test.
+    # m174/m203: the measurement pair. The kernel is a separate child exe since
+    # m192, so the tree comes from EnumWindows + GetWindowThreadProcessId (the
+    # pid stored in Session::threadId) - a read-only cross-process walk.
     "inspect_ui",
     "ui_pixel",
     # m177: the offline help index. Answers "what is this function's signature"
@@ -434,7 +435,37 @@ def probe(client: McpStdio, resident_file: Path, exe_dir: Path,
         '#Requires AutoHotkey v2.0\n'
         'g := Gui("+Resize", "capture-gate-probe")\n'
         'g.AddText("x16 y16 w200 h24", "capture gate")\n'
-        'g.Show("w240 h100")\n'
+        'lv := g.Add("ListView", "x16 y44 w200 h60 Checked", ["名称", "状态"])\n'
+        'lv.Add(, "文件A", "存在")\n'
+        'lv.Add(, "文件B", "缺失")\n'
+        'lv.Modify(1, "Check")\n'
+        'lb := g.Add("ListBox", "x16 y110 w200 h60")\n'
+        'lb.Add(["第一项", "第二项"])\n'
+        'cb := g.Add("ComboBox", "x16 y176 w200 h120")\n'
+        'cb.Add(["甲", "乙"])\n'
+        'cb.Choose(2)\n'
+        'tv := g.Add("TreeView", "x230 y44 w180 h140")\n'
+        'r1 := tv.Add("根一")\n'
+        'tv.Add("子一", r1)\n'
+        'tv.Add("子二", r1)\n'
+        'tv.Add("根二")\n'
+        'tab := g.Add("Tab3", "x230 y196 w180 h120", ["页一", "页二"])\n'
+        'tab.Choose(2)\n'
+        'g.Add("StatusBar", "", "就绪")\n'
+        'chk := g.Add("CheckBox", "x16 y212 w120 h24", "记住")\n'
+        'chk.Value := 1\n'
+        'sl := g.Add("Slider", "x16 y240 w200 h24", "Range0-100")\n'
+        'sl.Value := 35\n'
+        'pg := g.Add("Progress", "x16 y270 w200 h20")\n'
+        'pg.Value := 60\n'
+        'dt := g.Add("DateTime", "x230 y320 w170 h24")\n'
+        'dt.Value := "20261115143000"\n'
+        'hk := g.Add("Hotkey", "x230 y350 w170 h24")\n'
+        'hk.Value := "^!D"\n'
+        'ed := g.Add("Edit", "x230 y382 w150 h24", "12")\n'
+        'ud := g.Add("UpDown", "x380 y382 w20 h24", "Range0-100")\n'
+        'ud.Value := 12\n'
+        'g.Show("w420 h460")\n'
         'Persistent()\n'
     )
     client.tool("edit_editor", {"content": GUI_PROBE})
@@ -459,6 +490,103 @@ def probe(client: McpStdio, resident_file: Path, exe_dir: Path,
         cell("capture_ui honours rect in client coordinates",
              cropped.get("width") == 120 and cropped.get("height") == 40,
              f"w={cropped.get('width')} h={cropped.get('height')}")
+
+        # m205: a row is not a window. inspect_ui already returned the ListView
+        # box with an empty `text`; items=true is the only way to learn which
+        # rows and columns actually exist, which is what an AI needs to check
+        # its own script instead of squinting at pixels.
+        ui, _ = client.tool("inspect_ui",
+                            {"session": gsid, "items": True, "wait_ms": 3000})
+        found = {}
+        for window in ui.get("windows") or []:
+            for control in window.get("controls") or []:
+                entries = control.get("items") or {}
+                if entries.get("kind"):
+                    found[entries["kind"]] = entries
+        lv = found.get("listview") or {}
+        lb = found.get("listbox") or {}
+        cell("inspect_ui reads ListView rows",
+             lv.get("count") == 2 and lv.get("columns") == 2
+             and lv.get("rows") == [["文件A", "存在"], ["文件B", "缺失"]],
+             json.dumps(lv, ensure_ascii=False)[:240])
+        cell("inspect_ui reads ListBox items",
+             lb.get("count") == 2 and lb.get("rows") == [["第一项"], ["第二项"]],
+             json.dumps(lb, ensure_ascii=False)[:240])
+        # The other four kinds are the ones an AI-written Gui reaches for next:
+        # a dropdown, a tree, tabs and a status line. Each answers through a
+        # different message family, and only CB_*/LB_* let the system marshal
+        # the buffer - so these cells are what catches a wrong buffer choice.
+        cb = found.get("combobox") or {}
+        tv = found.get("treeview") or {}
+        tab = found.get("tab") or {}
+        sb = found.get("statusbar") or {}
+        cell("inspect_ui reads ComboBox items",
+             cb.get("count") == 2 and cb.get("rows") == [["甲"], ["乙"]],
+             json.dumps(cb, ensure_ascii=False)[:240])
+        cell("inspect_ui reads TreeView rows with levels",
+             tv.get("count") == 4
+             and tv.get("rows") == [["根一"], ["子一"], ["子二"], ["根二"]]
+             and tv.get("levels") == [0, 1, 1, 0],
+             json.dumps(tv, ensure_ascii=False)[:260])
+        cell("inspect_ui reads Tab pages",
+             tab.get("count") == 2 and tab.get("rows") == [["页一"], ["页二"]],
+             json.dumps(tab, ensure_ascii=False)[:240])
+        cell("inspect_ui reads StatusBar text",
+             sb.get("count") == 1 and sb.get("rows") == [["就绪"]],
+             json.dumps(sb, ensure_ascii=False)[:240])
+
+        # m205 third layer: current values. These are single numbers or states,
+        # not rows of text, so they live in `state` on any control node. One
+        # fixture exercises ten different message families at once.
+        states = {}
+        for window in ui.get("windows") or []:
+            for control in window.get("controls") or []:
+                value = control.get("state") or {}
+                if value:
+                    states.setdefault(control.get("class", ""), value)
+        cell("inspect_ui reads Header column titles",
+             (found.get("header") or {}).get("rows") == [["名称"], ["状态"]],
+             json.dumps(found.get("header") or {}, ensure_ascii=False)[:200])
+        cell("inspect_ui reads ListView checked rows",
+             lv.get("checked_rows") == [0],
+             json.dumps(lv, ensure_ascii=False)[:240])
+        cell("inspect_ui reads CheckBox state",
+             states.get("Button", {}).get("checked") == 1,
+             json.dumps(states.get("Button", {}), ensure_ascii=False)[:160])
+        cell("inspect_ui reads Slider position and range",
+             states.get("msctls_trackbar32", {}).get("pos") == 35
+             and states.get("msctls_trackbar32", {}).get("min") == 0
+             and states.get("msctls_trackbar32", {}).get("max") == 100,
+             json.dumps(states.get("msctls_trackbar32", {}), ensure_ascii=False)[:200])
+        cell("inspect_ui reads Progress position",
+             states.get("msctls_progress32", {}).get("pos") == 60,
+             json.dumps(states.get("msctls_progress32", {}), ensure_ascii=False)[:160])
+        cell("inspect_ui reads ComboBox / Tab selection",
+             states.get("ComboBox", {}).get("selected") == 1
+             and states.get("SysTabControl32", {}).get("selected") == 1,
+             json.dumps({"combo": states.get("ComboBox", {}),
+                         "tab": states.get("SysTabControl32", {})}, ensure_ascii=False)[:220])
+        # AHK stores an uppercase letter in a Hotkey control as Shift+key, so
+        # "^!D" reads back as "^+!D". That is the control's own semantics; the
+        # decoder is only reporting the bits it was given (CONTROL|SHIFT|ALT + VK_D).
+        cell("inspect_ui reads DateTime / Hotkey / UpDown values",
+             str(states.get("SysDateTimePick32", {}).get("date", "")).startswith("2026-11-15")
+             and states.get("msctls_hotkey32", {}).get("hotkey") == "^+!D"
+             and states.get("msctls_updown32", {}).get("pos") == 12,
+             json.dumps({"date": states.get("SysDateTimePick32", {}),
+                         "hotkey": states.get("msctls_hotkey32", {}),
+                         "updown": states.get("msctls_updown32", {})}, ensure_ascii=False)[:260])
+        plain, _ = client.tool("inspect_ui", {"session": gsid, "wait_ms": 3000})
+        stray = [c for w in (plain.get("windows") or [])
+                 for c in (w.get("controls") or []) if c.get("items")]
+        cell("inspect_ui leaves items off unless asked", not stray,
+             json.dumps(plain, ensure_ascii=False)[:200])
+        root = ((ui.get("windows") or [{}])[0]).get("hwnd")
+        byhwnd, _ = client.tool("inspect_ui", {"hwnd": root, "items": True})
+        cell("inspect_ui accepts a bare hwnd target",
+             byhwnd.get("count") == 1 and byhwnd.get("session") == 0
+             and (byhwnd.get("controls") or 0) >= 3,
+             json.dumps(byhwnd, ensure_ascii=False)[:200])
         client.tool("stop_script", {"session": gsid})
 
     # --- 5.5 a script with chinese text (m083) ---------------------------
