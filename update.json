@@ -1,8 +1,8 @@
 {
-  "version": "0.4.0",
+  "version": "0.4.1",
   "published": "2026-11-17",
-  "notes": "0.4.0：脚本版本走 release + MCP 自动验收闭环。每个脚本每个版本发到云端 release，信息窗可点「版本历史」链接退回旧版；新增 assert_ui / wait_ui 两个工具（18→20），脚本自测可写成硬断言直接跑。另修源码审查遗留多项（内存泄漏、IME 卸载、文件泵串行化等）。",
-  "notes_en": "0.4.0: Script versions on release + MCP auto-verification. Every script version is published to cloud releases with clickable 版本历史 links to roll back; adds assert_ui / wait_ui (18->20 tools) so script self-tests become hard assertions. Also fixes several source-review findings (memory leaks, IME unload, file-pump serialization).",
-  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.4.0/AHKDeck_0.4.0.zip",
-  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.4.0/AHKDeck_0.4.0.zip"
+  "notes": "0.4.1：两处修复。脚本详情窗多行字段（如「入口」）底部留白过大，把「历史版本」推得比其它项远，已改为按真实文字行高排版；官方脚本的历史清单 Gitee 链接改为直连 CDN，旧地址会跳转到带时效签名的地址，过期即打不开。",
+  "notes_en": "0.4.1: Two fixes. Multi-line fields in the script detail dialog (e.g. Entry) left too much blank space below, pushing 版本历史 further away than other rows; heights now follow the real text line height. And the Gitee links in official script history lists now point directly at the CDN, since the old form redirected to a time-limited signed URL that eventually stopped working.",
+  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.4.1/AHKDeck_0.4.1.zip",
+  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.4.1/AHKDeck_0.4.1.zip"
 }
