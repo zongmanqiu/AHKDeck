@@ -271,10 +271,15 @@ if ($Only -ne 'github' -and $giteeOwner -and -not $failures.Count) {
         "header = `"Authorization: Bearer $script:giteeToken`"`n" +
         "form = `"file=@$($zip -replace '\\','/')`"`n"
     $attach = $config | & curl.exe -s -K -
-    try {
-        $a = $attach | ConvertFrom-Json
-        Info "Gitee asset: $($a.browser_download_url)"
-    } catch { Fail ('Gitee attach failed: ' + $attach) }
+    # Gitee echoes back Chinese names as GBK-mangled bytes; ConvertFrom-Json can
+    # choke on them even though the upload succeeded. Match the ASCII URL only.
+    $attachText = (@($attach) -join "`n")
+    $urlMatch = [regex]::Match($attachText, '"browser_download_url"\s*:\s*"([^"]+)"')
+    if ($urlMatch.Success) {
+        Info "Gitee asset: $($urlMatch.Groups[1].Value)"
+    } else {
+        Fail ('Gitee attach failed: ' + $attachText)
+    }
 }
 
 # --- GitHub release (gh owns the token) -------------------------------------
