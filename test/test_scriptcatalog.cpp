@@ -6,10 +6,15 @@
 
 #include "core/ScriptCatalog.h"
 
+#include "core/AppPaths.h"
+#include "core/ZipPackage.h"
+
 #include <windows.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -25,6 +30,148 @@ void Check(bool aCondition, const char *aWhat)
 		std::printf("FAIL %s\n", aWhat);
 		++gFailures;
 	}
+}
+
+// --- test-only stored (uncompressed) zip builder ----------------------------
+// Replaces the retired miniz writer: entries are STORE-method records with
+// the UTF-8 name flag (bit 11) set, exactly what our 7z-based packer emits
+// for non-ASCII names. Building the bytes by hand also lets this test craft
+// a traversal entry that the filesystem itself would refuse to create.
+
+struct ZipSpec
+{
+	std::string name; // zip-style '/' separators
+	std::string data;
+	bool isDir = false;
+};
+
+unsigned long Crc32(const unsigned char *aData, size_t aSize)
+{
+	unsigned long table[256];
+	for (unsigned long i = 0; i < 256; ++i)
+	{
+		unsigned long c = i;
+		for (int k = 0; k < 8; ++k)
+			c = (c & 1) ? 0xEDB88320ul ^ (c >> 1) : c >> 1;
+		table[i] = c;
+	}
+	unsigned long crc = 0xFFFFFFFFul;
+	for (size_t i = 0; i < aSize; ++i)
+		crc = table[(crc ^ aData[i]) & 0xFF] ^ (crc >> 8);
+	return crc ^ 0xFFFFFFFFul;
+}
+
+void PutU16(std::string &aOut, unsigned short aV)
+{
+	aOut.push_back((char)(aV & 0xFF));
+	aOut.push_back((char)((aV >> 8) & 0xFF));
+}
+
+void PutU32(std::string &aOut, unsigned long aV)
+{
+	aOut.push_back((char)(aV & 0xFF));
+	aOut.push_back((char)((aV >> 8) & 0xFF));
+	aOut.push_back((char)((aV >> 16) & 0xFF));
+	aOut.push_back((char)((aV >> 24) & 0xFF));
+}
+
+bool BuildZip(const std::wstring &aPath, const std::vector<ZipSpec> &aItems)
+{
+	const unsigned short dosTime = 0x6000; // 12:00:00
+	const unsigned short dosDate = (unsigned short)
+		(((2026 - 1980) << 9) | (11 << 5) | 16);
+	const unsigned short flags = 0x0800; // names are UTF-8
+
+	std::string blob;
+	std::string central;
+	std::vector<unsigned long> offsets;
+	for (const ZipSpec &item : aItems)
+	{
+		const unsigned long crc = Crc32(
+			(const unsigned char *)item.data.data(), item.data.size());
+		offsets.push_back((unsigned long)blob.size());
+		PutU32(blob, 0x04034b50); // local file header
+		PutU16(blob, 20);         // version needed
+		PutU16(blob, flags);
+		PutU16(blob, 0);          // stored
+		PutU16(blob, dosTime);
+		PutU16(blob, dosDate);
+		PutU32(blob, crc);
+		PutU32(blob, (unsigned long)item.data.size());
+		PutU32(blob, (unsigned long)item.data.size());
+		PutU16(blob, (unsigned short)item.name.size());
+		PutU16(blob, 0); // extra len
+		blob += item.name;
+		blob += item.data;
+
+		PutU32(central, 0x02014b50); // central directory header
+		PutU16(central, 20);         // version made by
+		PutU16(central, 20);         // version needed
+		PutU16(central, flags);
+		PutU16(central, 0); // stored
+		PutU16(central, dosTime);
+		PutU16(central, dosDate);
+		PutU32(central, crc);
+		PutU32(central, (unsigned long)item.data.size());
+		PutU32(central, (unsigned long)item.data.size());
+		PutU16(central, (unsigned short)item.name.size());
+		PutU16(central, 0); // extra len
+		PutU16(central, 0); // comment len
+		PutU16(central, 0); // disk start
+		PutU16(central, 0); // internal attrs
+		PutU32(central, item.isDir ? 0x10ul : 0ul); // external attrs
+		PutU32(central, offsets.back());
+		central += item.name;
+	}
+
+	const unsigned long centralOffset = (unsigned long)blob.size();
+	blob += central;
+	const unsigned long centralSize =
+		(unsigned long)blob.size() - centralOffset;
+	PutU32(blob, 0x06054b50); // end of central directory
+	PutU16(blob, 0);
+	PutU16(blob, 0);
+	PutU16(blob, (unsigned short)aItems.size());
+	PutU16(blob, (unsigned short)aItems.size());
+	PutU32(blob, centralSize);
+	PutU32(blob, centralOffset);
+	PutU16(blob, 0); // comment len
+
+	FILE *file = nullptr;
+	if (_wfopen_s(&file, aPath.c_str(), L"wb") != 0 || !file)
+		return false;
+	const bool wrote = std::fwrite(blob.data(), 1, blob.size(), file)
+		== blob.size();
+	std::fclose(file);
+	return wrote;
+}
+
+std::wstring Utf8ToWideLocal(const std::string &aText)
+{
+	if (aText.empty())
+		return std::wstring();
+	const int n = MultiByteToWideChar(CP_UTF8, 0, aText.c_str(),
+		(int)aText.size(), nullptr, 0);
+	if (n <= 0)
+		return std::wstring();
+	std::wstring out((size_t)n, L'\0');
+	MultiByteToWideChar(CP_UTF8, 0, aText.c_str(), (int)aText.size(),
+		out.data(), n);
+	return out;
+}
+
+std::string WideToUtf8Local(const std::wstring &aText)
+{
+	if (aText.empty())
+		return std::string();
+	const int n = WideCharToMultiByte(CP_UTF8, 0, aText.c_str(),
+		(int)aText.size(), nullptr, 0, nullptr, nullptr);
+	if (n <= 0)
+		return std::string();
+	std::string out((size_t)n, '\0');
+	WideCharToMultiByte(CP_UTF8, 0, aText.c_str(), (int)aText.size(),
+		out.data(), n, nullptr, nullptr);
+	return out;
 }
 
 std::wstring TempPath(const wchar_t *aName)
@@ -253,6 +400,124 @@ int main()
 		const ahkdeck::CatalogResult broken =
 			ahkdeck::ParseScriptCatalog("{ \"name\": \"x\" }");
 		Check(!broken.error.empty(), "object without a scripts array is rejected");
+	}
+
+	// ---- m211: package install ----------------------------------------
+	// Network-free: the zip is built locally by the test's own stored-zip
+	// builder, then handed straight to InstallPackageFromZip (the same
+	// function the network path lands on after its download). Extraction
+	// itself goes through the system Shell namespace, so this block also
+	// proves Explorer's unzip accepts what our packer produces. Layout:
+	// Scripts is a sandbox under %TEMP%, so the live install directory is
+	// never touched.
+	{
+		const std::wstring sandbox = TempPath(L"ahkdeck_pkg_test");
+		const std::wstring zipPath = sandbox + L"\\pkg.zip";
+		const std::string name = "测试包脚本";
+		const std::string version = "1.2.3";
+
+		ahkdeck::RemoveTreeWide(sandbox);
+		CreateDirectoryW(sandbox.c_str(), nullptr);
+
+		const std::string entryText = "; ==UserScript==\n"
+			"; @name         " + name + "\n"
+			"; @version      " + version + "\n"
+			"; ==/UserScript==\n"
+			"\n"
+			"#Requires AutoHotkey v2.0\n";
+		const std::string companion = "companion-bytes";
+
+		Check(BuildZip(zipPath, {
+				{ name + "/", "", true },
+				{ name + "/" + name + ".ahk", entryText, false },
+				{ name + "/data/", "", true },
+				{ name + "/data/companion.bin", companion, false },
+			}), "test zip builder writes the good package");
+
+		ahkdeck::ScriptInstallRequest req;
+		req.targetPathUtf8 = WideToUtf8Local(sandbox) + "\\Scripts\\"
+			+ name + "\\" + name + ".ahk";
+		req.expectedName = name;
+		req.expectedVersion = version;
+
+		std::string err;
+		Check(ahkdeck::InstallPackageFromZip(zipPath, req, err),
+			"package install succeeds");
+		Check(err.empty(), "package install has no error");
+
+		const std::wstring entryFile = sandbox + L"\\Scripts\\"
+			+ Utf8ToWideLocal(name) + L"\\" + Utf8ToWideLocal(name) + L".ahk";
+		const std::wstring companionFile = sandbox + L"\\Scripts\\"
+			+ Utf8ToWideLocal(name) + L"\\data\\companion.bin";
+		Check(GetFileAttributesW(entryFile.c_str()) != INVALID_FILE_ATTRIBUTES,
+			"entry script lands at Scripts\\<名>\\<名>.ahk");
+		Check(GetFileAttributesW(companionFile.c_str()) != INVALID_FILE_ATTRIBUTES,
+			"companion lands inside the same folder");
+		Check(!ahkdeck::LocalScriptVersion(entryFile).empty()
+			&& ahkdeck::LocalScriptVersion(entryFile) == version,
+			"entry script version reads back");
+		const std::wstring staging = sandbox + L"\\Scripts\\"
+			+ Utf8ToWideLocal(name) + L".part";
+		Check(GetFileAttributesW(staging.c_str()) == INVALID_FILE_ATTRIBUTES,
+			"staging dir is cleaned up");
+
+		// A second install moves the old directory into temp\deleted instead
+		// of destroying it (the m177 rule, now for packages too).
+		const std::string entryText2 = "; ==UserScript==\n"
+			"; @name         " + name + "\n"
+			"; @version      9.9.9\n"
+			"; ==/UserScript==\n"
+			"\n"
+			"#Requires AutoHotkey v2.0\n";
+		Check(BuildZip(zipPath, {
+				{ name + "/", "", true },
+				{ name + "/" + name + ".ahk", entryText2, false },
+			}), "second zip writes the upgrade package");
+
+		ahkdeck::ScriptInstallRequest req2 = req;
+		req2.expectedVersion = "9.9.9";
+		Check(ahkdeck::InstallPackageFromZip(zipPath, req2, err),
+			"package upgrade succeeds");
+		Check(ahkdeck::LocalScriptVersion(entryFile) == "9.9.9",
+			"upgraded entry version reads back");
+		const std::wstring deleted = ahkdeck::AppTempDir(ahkdeck::kTempDeleted);
+		bool foundBackup = false;
+		WIN32_FIND_DATAW bfd;
+		HANDLE bfind = FindFirstFileW((deleted + L"\\"
+			+ Utf8ToWideLocal(name) + L"-*").c_str(), &bfd);
+		if (bfind != INVALID_HANDLE_VALUE)
+		{
+			foundBackup = (bfd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+			FindClose(bfind);
+		}
+		Check(foundBackup, "old package dir moved to temp\\deleted");
+
+		// Rejection: a traversal entry must never reach the disk. The
+		// filesystem itself cannot hold a ".." component, so the builder
+		// crafts the name directly - exactly what a hostile archive does.
+		const std::string evil = "../evil.txt";
+		Check(BuildZip(zipPath, { { evil, "x", false } }),
+			"evil zip writes the traversal entry");
+		std::string evilErr;
+		Check(!ahkdeck::InstallPackageFromZip(zipPath, req, evilErr),
+			"traversal package is rejected");
+		Check(evilErr.find("..") != std::string::npos,
+			"rejection explains the traversal entry");
+
+		// Wrong @name must fail exactly like a single-file download would.
+		const std::string wrongName = "; ==UserScript==\n"
+			"; @name         别的脚本\n"
+			"; @version      " + version + "\n"
+			"; ==/UserScript==\n";
+		Check(BuildZip(zipPath, {
+				{ name + "/", "", true },
+				{ name + "/" + name + ".ahk", wrongName, false },
+			}), "wrong-name zip writes its entry");
+		std::string nameErr;
+		Check(!ahkdeck::InstallPackageFromZip(zipPath, req, nameErr),
+			"wrong @name package is rejected");
+
+		ahkdeck::RemoveTreeWide(sandbox);
 	}
 
 	if (gFailures)

@@ -12,7 +12,7 @@ if(CMAKE_GENERATOR MATCHES "Makefiles")
     set(CMAKE_DEPENDS_USE_COMPILER FALSE)
 endif()
 
-project(AHKDeck VERSION 0.3.5 LANGUAGES C CXX RC)
+project(AHKDeck VERSION 0.3.6 LANGUAGES C CXX RC)
 
 # Static CRT (/MT): the shipped exe must run with ZERO VC++ redistributable
 # dependencies ("单 exe 即装即用"). CMP0091 NEW lets CMAKE_MSVC_RUNTIME_LIBRARY
@@ -80,7 +80,13 @@ add_library(core STATIC
     core/ExeCompiler.cpp
     core/ResourceStats.cpp
     core/Housekeeping.cpp
+    core/ZipPackage.cpp
 )
+# m212: ZipPackage validates the archive from its central directory with plain
+# C++ and extracts through the system Shell zip namespace (the Explorer code,
+# present on every supported Win10/11) - no zip library is vendored, so the
+# reader API stays out of every other module and the exe stays small. The
+# namespace needs ole32/oleaut32 for the COM dispatch.
 target_include_directories(core PUBLIC "${CMAKE_SOURCE_DIR}")
 # m094: the version has exactly ONE source - project(AHKDeck VERSION ...) above.
 # core/Version.h derives its constants from these macros and VersionString()
@@ -94,7 +100,7 @@ target_compile_definitions(core PUBLIC
 # has no window toolkit dependency, so the unit tests link it unchanged.
 # m107: ResourceStats reads process counters (psapi) and the GPU counter (PDH).
 # Measurement again, not GUI: core's no-window-toolkit rule still holds.
-target_link_libraries(core PUBLIC winhttp psapi pdh)
+target_link_libraries(core PUBLIC winhttp psapi pdh ole32 oleaut32)
 if(MSVC)
     target_compile_options(core PRIVATE /W4 /WX)
 endif()
@@ -244,8 +250,8 @@ endif()
 # bridges), and core/ExeCompiler.cpp bundles every compiled script into a copy
 # of that very image - the editor and the compiled exe are the same interpreter.
 # The old m172/m190 layout staged a second AutoHotkey64.exe under tools\ for the
-# compiler and an AutoHotkey64.dll for the in-process AHK_H kernel; both are
-# retired. Same discipline as the script catalog: the build only copies, never
+# compiler and an AutoHotkey64.dll for the in-process kernel; both were retired
+# with the m192 single-kernel plan. Same discipline as the script catalog: the build only copies, never
 # invents. A standalone .main checkout without .temp\kernel_official simply
 # leaves the deck reporting a missing kernel at run time, and the shipping gate
 # fails the package closed.

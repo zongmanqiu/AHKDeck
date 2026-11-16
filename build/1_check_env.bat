@@ -10,8 +10,8 @@ REM   nmake    - NMake generator backend
 REM   rc.exe   - Windows resource compiler
 REM   tar.exe  - resolved by _common.bat (bsdtar, handles drive letters)
 REM   curl.exe - resolved by _common.bat (downloads the libraries)
-REM   MSBuild  - NOT fatal yet: the AHK_H kernel build (engine milestone) needs
-REM              it; the skeleton itself does not.
+REM   MSBuild  - NOT fatal: the kernel builds through build_kernel.bat when
+REM              needed; the skeleton itself does not.
 REM
 REM This script changes NOTHING on disk. It only reports, so it is safe to run
 REM first on a fresh machine to learn what has to be installed.
@@ -90,7 +90,7 @@ if not defined CURL_EXE (
     echo   [OK] curl.exe : %CURL_EXE%
 )
 
-REM ---- MSBuild (non-fatal: needed only by the AHK_H kernel build later) ------
+REM ---- MSBuild (non-fatal: the kernel builds through build_kernel.bat when needed) ------
 set "MSBUILD_EXE="
 set "VSWHERE=C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
 if exist "%VSWHERE%" (
@@ -101,9 +101,9 @@ if exist "%VSWHERE%" (
 if defined MSBUILD_EXE if exist "!MSBUILD_EXE!" (
     echo   [OK] msbuild : !MSBUILD_EXE!
 ) else (
-    echo   [WARN] msbuild not located - fine until the AHK_H kernel build
+    echo   [WARN] msbuild not located - fine; the kernel build uses build_kernel.bat
 )
-if not defined MSBUILD_EXE echo   [WARN] msbuild not located - fine until the AHK_H kernel build
+if not defined MSBUILD_EXE echo   [WARN] msbuild not located - fine; the kernel build uses build_kernel.bat
 
 REM ---- MSVC / SDK summary ------------------------------------------------------
 echo.

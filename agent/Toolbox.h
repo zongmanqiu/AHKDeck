@@ -123,6 +123,11 @@ private:
 	std::string ToolInspectUi(const Json &aArgs);
 	// m187: the same window, as pixels instead of coordinates.
 	std::string ToolCaptureUi(const Json &aArgs);
+	// m208: inject mouse / wheel / keyboard into a session window - interaction
+	// bugs (bad callbacks, mis-hooked menus) never show in a static capture.
+	std::string ToolSendInput(const Json &aArgs);
+	// m209: pixel-level regression check between two captures.
+	std::string ToolUiDiff(const Json &aArgs);
 	std::string ToolPixel(const Json &aArgs);
 	// m177: the offline AutoHotkey help index, so a caller can confirm a
 	// signature instead of recalling one.

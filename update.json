@@ -1,8 +1,8 @@
 {
-  "version": "0.3.5",
-  "published": "2026-11-15",
-  "notes": "0.3.5：AI 现在能真正看懂脚本的界面。inspect_ui 除控件框外，还能读出 ListView、ListBox、ComboBox、TreeView、Tab、状态栏和表头的每行每列文字，并给出勾选状态、当前选中项、滑块与进度条位置、日期时间、热键等当前值；也可按窗口句柄或进程号查看任意程序的窗口。另修复 inspect_ui / capture_ui 在 0.3.3、0.3.4 中找不到脚本窗口的问题，建议这两版用户升级。",
-  "notes_en": "0.3.5: The AI can now actually read a script's UI. inspect_ui still lists every control, but now also returns the rows and columns inside ListView, ListBox, ComboBox, TreeView, Tab, status bar and header controls, plus current values such as checkbox state, selected item, slider/progress position, date and hotkey. Any program's window can be inspected by window handle or process id. Also fixes inspect_ui / capture_ui failing to find script windows in 0.3.3 and 0.3.4 - users of those versions should upgrade.",
-  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.3.5/AHKDeck_0.3.5.zip",
-  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.3.5/AHKDeck_0.3.5.zip"
+  "version": "0.3.6",
+  "published": "2026-11-16",
+  "notes": "0.3.6：脚本列表修正、MCP 交互验证与像素回归、多文件脚本包、仓库清整。① 表头字号统一；② 列宽下限容纳表头与排序箭头，点表头不再位移；③ 启动时按脚本名升序并显示 ↑；④ MCP 新增 send_input 与 ui_diff，capture_ui 支持等画面稳定（工具 16 → 18）；⑤ 脚本支持 zip 多文件包发行（下载-校验-解压-整目录安装，附属文件随包）；⑥ 移除已停用的 AHK_H 补丁归档与退役门禁脚本，内核口径统一官方 2.0.31。",
+  "notes_en": "0.3.6: Script-list fixes, MCP interaction/pixel tools, zip script packages, repo cleanup. (1) Unified header font; (2) wider column minimums; (3) opens sorted by name; (4) new MCP tools send_input and ui_diff with stable capture, tools 16 -> 18; (5) scripts can now ship as zip packages with companion files (download - verify - extract - directory swap install); (6) removed retired AHK_H archives, kernel uniformly official 2.0.31.",
+  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.3.6/AHKDeck_0.3.6.zip",
+  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.3.6/AHKDeck_0.3.6.zip"
 }

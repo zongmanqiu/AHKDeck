@@ -2,8 +2,8 @@
 """Build docs/help-index.json from the AutoHotkey v2 help file.
 
 Why the .chm and not a web mirror: the index has to describe the engine that
-actually runs the scripts. The vendored markdown mirror in .3rd/help tops out at
-2.0.18; the chm next to AutoHotkey_2.0.30_setup.exe is the 2.0.30 text, which is
+actually runs the scripts. The chm next to AutoHotkey_2.0.30_setup.exe carries the
+2.0.30 text, which is
 what the shipped AutoHotkey64.exe is. A wrong signature in this file teaches the
 AI the wrong API, so the version match is the whole point.
 

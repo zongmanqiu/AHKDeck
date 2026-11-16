@@ -8,7 +8,6 @@ REM authoritative patch archive (project AGENTS.md rule 2).
 REM
 REM   * FLTK          : patches\fltk-1.4.5\FL\*  : .3rd\fltk-1.4.5\FL\
 REM                     patches\fltk-1.4.5\src\* : .3rd\fltk-1.4.5\src\
-REM   * AutoHotkey_H  : patches\AutoHotkey_H-v2.0.25\source\* : .3rd similarly
 REM                     (whole-file patches guarded by baseline.sha256)
 REM
 REM Conditional copy (content differs only): copy /Y always refreshes the
@@ -50,32 +49,6 @@ if exist "%PATCHES%\fltk-1.4.5\src" (
     if not exist "%THIRDPARTY%\fltk-1.4.5\src" mkdir "%THIRDPARTY%\fltk-1.4.5\src"
     for %%f in ("%PATCHES%\fltk-1.4.5\src\*") do (
         call :sync "%%f" "%THIRDPARTY%\fltk-1.4.5\src\%%~nxf" "src/%%~nxf"
-    )
-)
-
-REM ---- AutoHotkey_H -----------------------------------------------------------
-REM Explicit file list (never a blind tree copy). ahkversion.h pins the reported
-REM version to the pinned tree (v2.0.25): the archive has no .git, so upstream's
-REM "2.0" fallback would otherwise hide the real kernel version from
-REM A_AhkVersion, error dialogs and #Requires diagnostics.
-echo   AutoHotkey_H...
-if exist "%PATCHES%\AutoHotkey_H-v2.0.25\source" (
-    REM Whole-file patches (script.cpp, AutoHotkey.cpp, ...) silently lose their
-    REM meaning if upstream drifts, so assert the destination is either pristine
-    REM (baseline) or already patched before touching anything.
-    if exist "%PATCHES%\AutoHotkey_H-v2.0.25\baseline.sha256" (
-        powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0guard_patch.ps1" -PatchDir "%PATCHES%\AutoHotkey_H-v2.0.25\source" -DstDir "%THIRDPARTY%\AutoHotkey_H-v2.0.25\source" -Baseline "%PATCHES%\AutoHotkey_H-v2.0.25\baseline.sha256"
-        if errorlevel 1 goto :guard_fail
-    )
-    for %%f in ("%PATCHES%\AutoHotkey_H-v2.0.25\source\*") do (
-        call :sync "%%f" "%THIRDPARTY%\AutoHotkey_H-v2.0.25\source\%%~nxf" "source/%%~nxf"
-    )
-    REM m061: source\lib\file.cpp carries the stdout seam (FileAppend "*").
-    REM Explicit, one level, never a blind tree copy.
-    if exist "%PATCHES%\AutoHotkey_H-v2.0.25\source\lib" (
-        for %%f in ("%PATCHES%\AutoHotkey_H-v2.0.25\source\lib\*") do (
-            call :sync "%%f" "%THIRDPARTY%\AutoHotkey_H-v2.0.25\source\lib\%%~nxf" "source/lib/%%~nxf"
-        )
     )
 )
 

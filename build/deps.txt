@@ -32,26 +32,13 @@
 # sha256 7ed1c04d26b60ea2b4c645768ec9d60d6831d34d53db3d926e451165bd3f467f
 AutoHotkey-v2.0.31-src=https://codeload.github.com/AutoHotkey/AutoHotkey/tar.gz/refs/tags/v2.0.31|source/script.cpp
 
-# AutoHotkey_H v2.0.25 - ARCHIVED in m192 P4 (not built, not shipped).
-# Kept only so the historical m004 parity gate and the patch archive still
-# resolve on a fresh checkout. The DLL + tools\ base are retired.
-# Pinned to commit fb9e48c3d326adebcfe080d1a4f9226045b51c4f (2026-04-30),
-# the v2.0 stable line (NOT alpha-h / v2.1). See .plan/m005.
-AutoHotkey_H-v2.0.25=https://codeload.github.com/thqby/AutoHotkey_H/tar.gz/fb9e48c3d326adebcfe080d1a4f9226045b51c4f|AutoHotkeyx.sln
 
-# Official AutoHotkey v2.0.25 - the reference engine for the m004 parity gate.
-# Deliberately the SAME version as the pinned AHK_H kernel: capability parity
-# ("the same script succeeds/fails the same way, with the same error") only
-# means anything version-to-version. Comparing against a newer official build
-# would just flag upstream features we intentionally do not have.
-#   AutoHotkey-v2.0.25-src : source tree, used to harvest the API name list.
-#   sha256 083d1f3b084969064528dfa59c66a0d73b0a99a0b80d85c9d267b1df7b058526
-#   AutoHotkey_2.0.25      : portable release zip (flat, no top-level dir).
-#   sha256 44035e19cb8b1b642e0af294b1e53556bf51453bb3aed0a8700c2ef509d0d340
-AutoHotkey-v2.0.25-src=https://codeload.github.com/AutoHotkey/AutoHotkey/tar.gz/refs/tags/v2.0.25|source/script.cpp
-AutoHotkey_2.0.25=https://github.com/AutoHotkey/AutoHotkey/releases/download/v2.0.25/AutoHotkey_2.0.25.zip|AutoHotkey64.exe
 
 # FLTK 1.4.5 - GUI framework (our patches/fltk-1.4.5
 # applies on top). UI final pick is re-confirmed by m009; FLTK stays pinned
 # until then.
 fltk-1.4.5=https://codeload.github.com/fltk/fltk/tar.gz/refs/tags/release-1.4.5|CMakeLists.txt
+
+# m212: script packages (zip) are validated by a small in-house central-directory
+# reader and extracted through the system Shell zip namespace (Explorer's code,
+# built into Win10/11). No zip library is vendored any more.

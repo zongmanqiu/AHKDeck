@@ -31,7 +31,7 @@ struct NamedKey
 };
 
 // Only the keys that RegisterHotKey can actually deliver, spelled the way the
-// kernel spells them (.3rd\AutoHotkey_H-v2.0.25\source\globaldata.cpp g_key_to_vk).
+// kernel spells them (.3rd\AutoHotkey-v2.0.31-src\source\globaldata.cpp g_key_to_vk).
 // Numpad and mouse/joystick names are deliberately absent: they need scan codes.
 const NamedKey kNamedKeys[] = {
 	{"Escape", 0x1B}, {"Esc", 0x1B}, {"Tab", 0x09}, {"Space", 0x20},

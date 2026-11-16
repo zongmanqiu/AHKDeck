@@ -1,4 +1,4 @@
-# 界面量测：inspect_ui、capture_ui 与 ui_pixel
+# 界面量测：inspect_ui、capture_ui、ui_pixel、ui_diff 与 send_input
 
 这三个工具回答同一个问题：**我刚写的界面，实际落在屏幕上的哪里、长什么样。**
 一个给几何与控件树（含列表条目与控件当前值），一个给整窗像素，一个给单点颜色。
@@ -66,7 +66,7 @@ rows      可选     items=true 时最多返回多少行，默认 50，上限 20
 
 | 字段 | 含义 |
 |---|---|
-| `client` | **相对顶层窗口客户区**的矩形，与开发指南 §10 坐标表同口径 |
+| `client` | **相对顶层窗口客户区**的矩形，与 docs/UI规范.md §10.3 坐标表同口径 |
 | `screen` | 屏幕物理像素矩形（多显示器时用） |
 | `depth` | 0 是顶层窗口，1 是它的直接子控件，更深是子控件的子控件 |
 | `class` | 窗口类名：`AutoHotkeyGUI` / `Static` / `Edit` / `Button` / `SysListView32` / `msctls_trackbar32` |
@@ -160,6 +160,8 @@ rows      可选     items=true 时最多返回多少行，默认 50，上限 20
 session   必需   会话编号
 window    可选   第几个可见顶层窗口，默认 0（序号与 inspect_ui 的 windows 一致）
 rect      可选   只截一块，客户区坐标 "x,y,w,h"，与 inspect_ui 的 client 同口径
+stable    可选   连续相同帧数（≥2 启用）：反复重截直到画面连续 N 帧不变，防「截到重绘中间态」；
+                 stable_timeout 默认 3000ms。滚轮/点击后马上截图时建议 stable=2
 wait_ms   可选   等窗口出现的最长毫秒，默认 1500，上限 5000
 ```
 
@@ -167,6 +169,54 @@ wait_ms   可选   等窗口出现的最长毫秒，默认 1500，上限 5000
 自己绘制，所以窗口被别的程序挡住、甚至不在前台也截得到；屏幕拷贝在这种时候只会拍到遮挡物。
 看间距、字号渲染、圆角、颜色层次用它；字段级核对用 `inspect_ui`，单点取色用 `ui_pixel`。
 `rect` 可直接填 `inspect_ui` 里某个控件的 `client`，只看那一块，省 token。
+
+## ui_diff
+
+逐像素比对两张 capture_ui 截图，把「画面哪里变了」变成一条可断言的返回值。
+
+    a / b     必填   capture_ui 返回的 path（exe 相对路径）
+    threshold 可选   逐像素三通道差值和的门槛，0-255，默认 0（任何变化都算）；
+                     抗锯齿噪声明显时调大（如 8）
+    rows      可选   最多返回多少条 band，默认 10，上限 50
+
+返回：`same`（是否逐像素一致）、`diff_pixels`、`diff_ratio`、`bbox`（变化区域包围盒）、
+`bands`（按变化量降序的连续行段，每条 y0/y1/changed）、`samples`（最多 5 个样本点）。
+
+判读口径：
+
+- **等宽、等距的 band** = 行级缺陷：裁字（每 4 行一条）、滚动残影、斑马纹错位。
+- **一整片大 band（占图一半以上）** = 整块重绘、位移或遮挡。
+- **bbox 的 x/y 变了** = 元素位移（实案：排序后表头左移 16px，就是 bbox 抓出来的）。
+- 两张图尺寸不同直接报错——先确认两次截图之间窗口没被缩放。
+
+标准验收闭环：**改 UI 前后各 capture_ui 一次 → ui_diff → 把 diff_pixels 与 bbox 写进
+HISTORY 或测试断言**。
+
+## send_input
+
+把鼠标/滚轮/键盘消息用 PostMessage 注入会话窗口，序列与真实输入一致，控件端区分不出
+来源。不碰真实光标键盘、不抢前台、不受 UIPI 限制（目标是本宿主会话自己的窗口）。
+
+    session   必填   会话编号
+    action    必填   click / rclick / dblclick / wheel / key / text / move
+    x / y     可选   客户区坐标（inspect_ui 的 client 口径），省略取客户区中心
+    window    可选   第几个可见顶层窗口，默认 0
+    delta     可选   wheel 专用，一格 ±120，正=向上，默认 -120
+    key       可选   key 专用：Enter / Esc / Tab / Space / PageUp / PageDown / Home / End /
+                     Up / Down / Left / Right / Delete / Backspace / Insert / F1..F12
+    text      可选   text 专用，逐字符 WM_CHAR，喂输入框
+
+要点：
+
+- **坐标按「最深的非透明子控件」命中**，与真实点击同规则：Text 色块没加 `+0x100`（K19）
+  时会像真实点击一样落在父窗口上。
+- **key / text 送焦点控件**。脚本刚启动时焦点常为空——先用 `click` 点一下要输入的控件
+  （真实点击会设焦点），工具查不到焦点时会临时挂入输入队列把焦点给坐标命中的控件
+  （返回 `focus.set_by_tool=true`），两样都不行才报错。
+- **为什么需要它**：回调用错（K32 对象当函数调用）、右键菜单挂错消息（K45/K46）、
+  滚轮焦点错位（K29）——这些 bug 截图全是常态，只有把消息真的送进控件才暴露。
+- 验证 Click 回调：点击后 `inspect_ui(items=true)` 看行数/状态，或 `get_session_output`
+  看回调里的输出；改画面再用 capture_ui + ui_diff。
 
 ## ui_pixel
 

@@ -40,6 +40,12 @@ struct CatalogEntry
 	double sizeKb = 0.0;
 	std::string gitee;
 	std::string github;
+	// m211: package mode. Empty for the classic single .ahk file; non-empty
+	// means the script ships as a zip (root folder `<名>/`, entry
+	// `<名>/<名>.ahk`) that must be extracted, not just overwritten. Two
+	// mirrors like the text URLs; `packageGithub` may stay empty.
+	std::string package;
+	std::string packageGithub;
 };
 
 struct CatalogResult
@@ -116,6 +122,10 @@ struct ScriptInstallRequest
 	// excludes, while @name itself went unchecked).
 	std::string expectedName;
 	std::string expectedVersion;
+	// m211: non-empty switches InstallScriptFile into package mode - download
+	// the zip, validate, extract to a staging dir, verify the entry script,
+	// then swap the whole `<名>/` directory. The text `url` is unused then.
+	std::string packageUrl;
 };
 
 // A UTF-8 BOM is tolerated. Items with an unsafe name, no version, or no
@@ -135,6 +145,11 @@ ScriptInstallState ClassifyInstall(const CatalogEntry &aEntry,
 // has no mirror of its own, so it takes whichever field it actually publishes
 // (gitee first - the audience is Chinese, and our own format always fills it).
 const std::string &DownloadUrlFor(const CatalogEntry &aEntry,
+	ManifestSource aSource);
+
+// m211: the package zip URL for the picked mirror, or empty when the entry is
+// a single-file script (or the mirror carries no package).
+const std::string &PackageUrlFor(const CatalogEntry &aEntry,
 	ManifestSource aSource);
 
 // Both are derived from GetExeDirUtf8(), which already ends in a backslash.
@@ -168,6 +183,16 @@ bool RefreshCatalogCache(ManifestSource aSource, const std::string &aUrl,
 // on any error. The user's script is never deleted.
 bool InstallScriptFile(const ScriptInstallRequest &aRequest, std::string &aError,
 	ScriptInstallProgress aProgress = nullptr);
+
+// m211: the package install once the zip is already on disk (staged by
+// InstallScriptFile, or handed over directly by a test). aRequest.targetPathUtf8
+// must point at `<Scripts>\<名>\<名>.ahk`; the zip is validated, extracted to a
+// staging dir next to Scripts, the entry script header is verified against the
+// request, then the whole `<名>/` directory is swapped in. A pre-existing
+// directory moves to temp\deleted (never destroyed); a legacy flat
+// `Scripts\<名>.ahk` moves aside the same way so the two layouts cannot coexist.
+bool InstallPackageFromZip(const std::wstring &aZipPath,
+	const ScriptInstallRequest &aRequest, std::string &aError);
 
 // m160: the download verification as one standalone function (the .part file
 // is already on disk). Uses the SAME header parser as the info window, then

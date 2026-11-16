@@ -10,9 +10,9 @@ REM m192 P4: the AHK_H pair is RETIRED - MT_ReleaseDll (AutoHotkey64.dll, the
 REM in-process kernel) and MT_Release (the tools\ compile base). The engine now
 REM spawns the official EXE once per session and ExeCompiler bundles scripts
 REM into a copy of that very EXE, so one build serves both and the package
-REM carries exactly two PE files. The AHK_H source tree and its patch archive
-REM stay in .3rd / patches for history and the m004 parity gate; they are no
-REM longer built, staged or shipped.
+REM carries exactly two PE files. The AHK_H tree and its patch archive were
+REM removed from .3rd / patches on 2026-11-16 (the m004 parity gate went with
+REM them); they are no longer built, staged or shipped.
 REM
 REM The official v2.0.31 source carries four env-gated patches from
 REM patches\AutoHotkey-v2.0.31: version fallback, JSON error/warning sink,

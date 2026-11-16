@@ -786,6 +786,31 @@ void Toolbox::RefreshScripts()
 			found.push_back({std::string(), root + L"\\" + data.cFileName, Utf8Of(data.cFileName)});
 		} while (FindNextFileW(find, &data));
 		FindClose(find);
+
+		// m211: folder layout - <root>\<名>\<名>.ahk, what a zip package
+		// installs. A flat file with the same stem wins, so one name is never
+		// two rows here either.
+		const std::wstring dirPattern = root + L"\\*";
+		HANDLE dirFind = FindFirstFileW(dirPattern.c_str(), &data);
+		if (dirFind != INVALID_HANDLE_VALUE)
+		{
+			do
+			{
+				if (!(data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+					continue;
+				const std::wstring name = data.cFileName;
+				if (name == L"." || name == L"..")
+					continue;
+				const std::wstring flat = root + L"\\" + name + L".ahk";
+				if (GetFileAttributesW(flat.c_str()) != INVALID_FILE_ATTRIBUTES)
+					continue;
+				const std::wstring entry = root + L"\\" + name + L"\\"
+					+ name + L".ahk";
+				if (GetFileAttributesW(entry.c_str()) != INVALID_FILE_ATTRIBUTES)
+					found.push_back({std::string(), entry, Utf8Of(name + L".ahk")});
+			} while (FindNextFileW(dirFind, &data));
+			FindClose(dirFind);
+		}
 	}
 
 	for (const auto &file : files)
@@ -1073,9 +1098,60 @@ std::vector<ToolDef> Toolbox::Definitions() const
 	d.properties.Set("rect", arg("string",
 		"只截一块，客户区坐标 \"x,y,w,h\"（与 inspect_ui 的 client 同口径）；省略则截整个窗口"));
 	d.properties.Set("wait_ms", arg("integer", "等窗口出现的最长毫秒数，默认 1500，上限 5000"));
+	d.properties.Set("stable", arg("integer",
+		"连续相同帧数：≥2 时反复重截，直到画面连续 N 帧不再变化（防「截到重绘中间态」），默认 0 不启用"));
+	d.properties.Set("stable_timeout", arg("integer", "stable 生效时的最长等待毫秒数，默认 3000，上限 10000"));
 	d.required.push_back("session");
 	defs.push_back(std::move(d));
 }
+	{
+		ToolDef d;
+		d.name = "send_input";
+		d.description = "给会话自己的窗口注入输入：PostMessage 直发鼠标/滚轮/键盘消息，"
+			"不碰真实光标键盘、不抢前台、失败不落系统状态。消息序列与真实输入一致，"
+			"控件端区分不出来源——这正是验证交互所需要的。"
+			"为什么需要它：回调用错（对象当函数调用，K32）、右键菜单挂错消息（K45/K46）、"
+			"滚轮焦点错位（K29），这些 bug 截图全是常态，只有把消息真的送进控件才暴露。"
+			"action 取值：click / rclick / dblclick（x,y 客户区坐标，与 inspect_ui 的 client 同口径，"
+			"省略取客户区中心）；wheel（delta 每格 ±120，负值向下）；key（Enter / Esc / Tab / Space / "
+			"PageUp / PageDown / Home / End / Up / Down / Left / Right / Delete / Backspace / Insert / F1..F12）；"
+			"text（逐字符 WM_CHAR，喂输入框）；move（仅移动悬停点）。"
+			"坐标按「最深的非透明子控件」命中（与真实点击同规则）：Text 色块没加 +0x100 时"
+			"会像真实点击一样落在父窗口上（K19）。key/text 送焦点控件。"
+			"典型闭环：run_editor → send_input 点按钮/滚列表/右键 → capture_ui + inspect_ui 看结果"
+			" → get_session_output 查有没有报错弹窗/进程退出。";
+		d.properties.Set("session", arg("integer", "会话编号，来自 run_script、run_editor 或 list_sessions"));
+		d.properties.Set("action", arg("string", "click / rclick / dblclick / wheel / key / text / move"));
+		d.properties.Set("window", arg("integer", "第几个可见顶层窗口，默认 0；序号与 inspect_ui 返回的 windows 一致"));
+		d.properties.Set("x", arg("integer", "客户区坐标 x（顶层窗口客户区，inspect_ui 的 client 口径）；省略取中心"));
+		d.properties.Set("y", arg("integer", "客户区坐标 y；省略取中心"));
+		d.properties.Set("delta", arg("integer", "wheel 的滚动量，一格 ±120，正=向上，默认 -120"));
+		d.properties.Set("key", arg("string", "key 动作的键名，见 description"));
+		d.properties.Set("text", arg("string", "text 动作要输入的文字"));
+		d.required.push_back("session");
+		d.required.push_back("action");
+		defs.push_back(std::move(d));
+	}
+	{
+		ToolDef d;
+		d.name = "ui_diff";
+		d.description = "逐像素比对两张 capture_ui 截图，回答「改完之后画面到底变了哪里」："
+			"差异像素数、占比、变化区域包围盒、按变化量排序的行段（bands）、最多 5 个样本点。"
+			"把像素级回归从「每次手写一次性 BMP 解析探针」变成一行断言："
+			"排序后表头有没有位移（bbox 的 x 有没有变）、滚动后有没有行级裁字/残影"
+			"（等宽等距的 band）、闪没闪（band 是不是一大片）。"
+			"a / b 传 capture_ui 返回的 path（exe 相对路径）；两张图尺寸不同会直接报错"
+			"（先确认窗口没被缩放）。threshold 是逐像素三通道差值和的门槛，"
+			"0=任何变化都算，调大可以忽略抗锯齿噪声。**改 UI 前后各 capture_ui 一次再 ui_diff，"
+			"就是最硬的验收证据**。";
+		d.properties.Set("a", arg("string", "第一张截图的 path（capture_ui 返回值）"));
+		d.properties.Set("b", arg("string", "第二张截图的 path（capture_ui 返回值）"));
+		d.properties.Set("threshold", arg("integer", "逐像素变化门槛（三通道差值和），0-255，默认 0"));
+		d.properties.Set("rows", arg("integer", "最多返回多少条 band，默认 10，上限 50"));
+		d.required.push_back("a");
+		d.required.push_back("b");
+		defs.push_back(std::move(d));
+	}
 	{
 		ToolDef d;
 		d.name = "lookup_help";
@@ -1191,6 +1267,10 @@ std::string Toolbox::Call(const std::string &aName, const std::string &aArgument
 		return ToolPixel(args);
 	if (aName == "capture_ui")
 		return ToolCaptureUi(args);
+	if (aName == "send_input")
+		return ToolSendInput(args);
+	if (aName == "ui_diff")
+		return ToolUiDiff(args);
 	if (aName == "lookup_help")
 		return ToolLookupHelp(args);
 	return ErrorResult("未知工具: " + aName).Dump();
@@ -3016,6 +3096,119 @@ std::string Toolbox::ToolInspectUi(const Json &aArgs)
 // Measured on a script-owned Gui fully covered by another window: PrintWindow
 // returned byte-identical pixels to the uncovered capture, while a screen copy
 // of the very same moment returned the covering window.
+// ------------------------------------------------- m208/m209 shared capture core
+//
+// capture_ui did its DC / PrintWindow / GetDIBits dance inline. ui_diff reuses
+// exactly those pixels, so the dance moved into this helper and both tools call
+// it. Same contract as the original inline code: PrintWindow first (window-
+// owned pixels, independent of z-order), screen BitBlt as the fallback.
+static bool CaptureWindowPixels(HWND hwnd, int aW, int aH,
+	std::vector<unsigned char> &aPixels, int &aStride, bool &aFromScreen)
+{
+	aFromScreen = false;
+	HDC src = GetWindowDC(hwnd);
+	if (!src)
+		return false;
+	HDC mem = CreateCompatibleDC(src);
+	HBITMAP bitmap = CreateCompatibleBitmap(src, aW, aH);
+	if (!mem || !bitmap)
+	{
+		if (bitmap)
+			DeleteObject(bitmap);
+		if (mem)
+			DeleteDC(mem);
+		ReleaseDC(hwnd, src);
+		return false;
+	}
+
+	HGDIOBJ old = SelectObject(mem, bitmap);
+	BOOL painted = PrintWindow(hwnd, mem, 2);
+	if (!painted)
+	{
+		painted = BitBlt(mem, 0, 0, aW, aH, src, 0, 0, SRCCOPY);
+		aFromScreen = painted != FALSE;
+	}
+
+	BITMAPINFO info = {};
+	info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+	info.bmiHeader.biWidth = aW;
+	info.bmiHeader.biHeight = -aH; // top-down: row 0 is the top of the window
+	info.bmiHeader.biPlanes = 1;
+	info.bmiHeader.biBitCount = 24;
+	info.bmiHeader.biCompression = BI_RGB;
+	aStride = ((aW * 3 + 3) / 4) * 4;
+	info.bmiHeader.biSizeImage = (DWORD)aStride * (DWORD)aH;
+	aPixels.assign((size_t)aStride * (size_t)aH + 4, 0);
+	const int lines = GetDIBits(mem, bitmap, 0, (UINT)aH, aPixels.data(), &info,
+		DIB_RGB_COLORS);
+
+	SelectObject(mem, old);
+	DeleteObject(bitmap);
+	DeleteDC(mem);
+	ReleaseDC(hwnd, src);
+	return painted != FALSE && lines == aH;
+}
+
+// ui_diff reads back what capture_ui wrote, so only the one BMP flavor
+// WriteBmp24 produces has to parse: 24-bit, BI_RGB, positive (bottom-up) height.
+// Rows are flipped to top-down on the way in so a row index doubles as the
+// client-space y coordinate.
+static bool ReadBmp24File(const std::wstring &aPath,
+	std::vector<unsigned char> &aPixels, int &aW, int &aH, int &aStride)
+{
+	HANDLE file = CreateFileW(aPath.c_str(), GENERIC_READ, FILE_SHARE_READ,
+		nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (file == INVALID_HANDLE_VALUE)
+		return false;
+
+	BITMAPFILEHEADER fh = {};
+	BITMAPINFOHEADER ih = {};
+	DWORD got = 0;
+	bool ok = ReadFile(file, &fh, sizeof(fh), &got, nullptr) && got == sizeof(fh)
+		&& ReadFile(file, &ih, sizeof(ih), &got, nullptr) && got == sizeof(ih);
+	if (ok)
+		ok = fh.bfType == 0x4D42 && ih.biBitCount == 24
+			&& ih.biCompression == BI_RGB && ih.biWidth > 0 && ih.biHeight > 0
+			&& ih.biWidth <= 8192 && ih.biHeight <= 8192;
+	if (!ok)
+	{
+		CloseHandle(file);
+		return false;
+	}
+
+	aW = ih.biWidth;
+	aH = ih.biHeight;
+	aStride = ((aW * 3 + 3) / 4) * 4;
+	const DWORD rowBytes = (DWORD)aW * 3;
+	aPixels.assign((size_t)aStride * (size_t)aH, 0);
+	std::vector<unsigned char> row((size_t)aStride, 0);
+	LARGE_INTEGER pos = {};
+	for (int y = 0; ok && y < aH; ++y)
+	{
+		pos.QuadPart = (LONGLONG)fh.bfOffBits + (LONGLONG)(aH - 1 - y) * aStride;
+		ok = SetFilePointerEx(file, pos, nullptr, FILE_BEGIN)
+			&& ReadFile(file, row.data(), rowBytes, &got, nullptr)
+			&& got == rowBytes;
+		if (ok)
+			std::memcpy(aPixels.data() + (size_t)y * (size_t)aStride,
+				row.data(), rowBytes);
+	}
+	CloseHandle(file);
+	return ok;
+}
+
+// Tool results only ever carry exe-relative paths (no drive letters); ui_diff
+// takes such a path back, so it resolves the same way every other consumer of
+// these paths does.
+static std::wstring ResolveToolPath(const std::string &aPathUtf8)
+{
+	const std::wstring wide = WideOf(aPathUtf8);
+	if (wide.size() >= 2 && (wide[1] == L':' || (wide[0] == L'\\' && wide[1] == L'\\')))
+		return wide;
+	const std::wstring dir = ExeDirectoryForTools();
+	return dir.empty() ? wide : dir + L"\\" + wide;
+}
+
 std::string Toolbox::ToolCaptureUi(const Json &aArgs)
 {
 	if (!aArgs.Has("session") || !aArgs["session"].IsNumber())
@@ -3140,56 +3333,45 @@ std::string Toolbox::ToolCaptureUi(const Json &aArgs)
 	if ((long long)cropW * (long long)cropH * 3LL > 96LL * 1024 * 1024)
 		return ErrorResult("要截的区域太大（超过 96 MB 像素）：用 rect 只截关心的那一块").Dump();
 
-	HDC src = GetWindowDC(hwnd);
-	if (!src)
-		return ErrorResult("取不到窗口 DC").Dump();
-	HDC mem = CreateCompatibleDC(src);
-	HBITMAP bitmap = CreateCompatibleBitmap(src, winW, winH);
-	if (!mem || !bitmap)
-	{
-		if (bitmap)
-			DeleteObject(bitmap);
-		if (mem)
-			DeleteDC(mem);
-		ReleaseDC(hwnd, src);
-		return ErrorResult("创建兼容位图失败（窗口可能正在销毁）").Dump();
-	}
-
-	HGDIOBJ old = SelectObject(mem, bitmap);
-	// PW_RENDERFULLCONTENT: the window paints itself, so the result does not
-	// depend on being on top - or on being visible at all.
-	BOOL painted = PrintWindow(hwnd, mem, 2);
+	// m208/m209 moved the DC / PrintWindow / GetDIBits dance into
+	// CaptureWindowPixels() so ui_diff can share it verbatim.
+	std::vector<unsigned char> pixels;
+	int stride = 0;
 	bool fromScreen = false;
-	if (!painted)
-	{
-		// Some windows never answer WM_PRINT; their own DC still holds pixels.
-		painted = BitBlt(mem, 0, 0, winW, winH, src, 0, 0, SRCCOPY);
-		fromScreen = painted != FALSE;
-	}
-
-	BITMAPINFO info = {};
-	info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-	info.bmiHeader.biWidth = winW;
-	info.bmiHeader.biHeight = -winH; // top-down: row 0 is the top of the window
-	info.bmiHeader.biPlanes = 1;
-	info.bmiHeader.biBitCount = 24;
-	info.bmiHeader.biCompression = BI_RGB;
-	// Rows are padded to 4 bytes. Reading them at winW*3 shifts every row when
-	// the padding is non-zero, which shears the picture - and reads past the
-	// buffer, because the real stride is larger.
-	const int stride = ((winW * 3 + 3) / 4) * 4;
-	info.bmiHeader.biSizeImage = (DWORD)stride * (DWORD)winH;
-	std::vector<unsigned char> pixels((size_t)stride * (size_t)winH + 4, 0);
-	const int lines = GetDIBits(mem, bitmap, 0, (UINT)winH, pixels.data(), &info,
-		DIB_RGB_COLORS);
-
-	SelectObject(mem, old);
-	DeleteObject(bitmap);
-	DeleteDC(mem);
-	ReleaseDC(hwnd, src);
-
-	if (!painted || lines != winH)
+	if (!CaptureWindowPixels(hwnd, winW, winH, pixels, stride, fromScreen))
 		return ErrorResult("这一帧没有取到像素（窗口可能正在销毁，或它拒绝 WM_PRINT）").Dump();
+
+	// m210: a frame taken mid-repaint reads as a defect that is not one - the
+	// scroll probes raced exactly this several times before it existed. With
+	// stable>=2 the frame is re-captured until it repeats that many times in a
+	// row (or the timeout hits, and the last frame is returned as-is).
+	int stableFrames = aArgs["stable"].AsInt(0);
+	stableFrames = stableFrames < 0 ? 0 : (stableFrames > 20 ? 20 : stableFrames);
+	if (stableFrames > 1)
+	{
+		int stableTimeout = aArgs["stable_timeout"].AsInt(3000);
+		stableTimeout = stableTimeout < 0 ? 0 : (stableTimeout > 10000 ? 10000 : stableTimeout);
+		const ULONGLONG stableDeadline = GetTickCount64() + (ULONGLONG)stableTimeout;
+		int consecutive = 1;
+		while (consecutive < stableFrames && GetTickCount64() < stableDeadline)
+		{
+			Sleep(60);
+			std::vector<unsigned char> cur;
+			int curStride = 0;
+			bool screen2 = false;
+			if (!CaptureWindowPixels(hwnd, winW, winH, cur, curStride, screen2))
+				break;
+			if (cur == pixels)
+			{
+				++consecutive;
+			}
+			else
+			{
+				consecutive = 1;
+				pixels.swap(cur);
+			}
+		}
+	}
 
 	const std::wstring work = AppTempDir(kTempWork);
 	if (work.empty())
@@ -3266,6 +3448,341 @@ std::string Toolbox::ToolCaptureUi(const Json &aArgs)
 	else if (fromScreen)
 		result.Set("note", Json("这个窗口不响应 WM_PRINT，已退回屏幕拷贝；"
 			"若此时窗口被遮挡，图里会是遮挡它的窗口内容。"));
+	return result.Dump();
+}
+
+// ------------------------------------------------------- m208: send_input
+//
+// 采集侧（inspect_ui / capture_ui / ui_pixel）只回答「长什么样」；K32 一类的问题
+// 只有把消息真的送进控件才暴露——回调用错、右键菜单挂错消息、滚轮焦点错位，
+// 截图全是常态。注入用 PostMessage 直发，不碰真实光标键盘：不抢前台（这台机器
+// 的前台常被占用）、目标是本宿主会话自己的窗口所以不受 UIPI 限制、失败不落任何
+// 系统状态。消息序列与真实输入一致（DOWN→UP；滚轮 wParam 带 delta），控件端
+// 无法区分来源，这正是验证所需要的。
+static int VkOfName(const char *aName)
+{
+	static const struct { const char *name; int vk; } table[] = {
+		{ "Enter", VK_RETURN }, { "Esc", VK_ESCAPE }, { "Escape", VK_ESCAPE },
+		{ "Tab", VK_TAB }, { "Space", VK_SPACE },
+		{ "PageUp", VK_PRIOR }, { "PageDown", VK_NEXT },
+		{ "Home", VK_HOME }, { "End", VK_END },
+		{ "Up", VK_UP }, { "Down", VK_DOWN }, { "Left", VK_LEFT }, { "Right", VK_RIGHT },
+		{ "Delete", VK_DELETE }, { "Backspace", VK_BACK }, { "Insert", VK_INSERT },
+	};
+	for (const auto &e : table)
+		if (_stricmp(e.name, aName) == 0)
+			return e.vk;
+	if (aName[0] == 'F' && aName[1] >= '1' && aName[1] <= '9')
+	{
+		const int n = std::atoi(aName + 1);
+		if (n >= 1 && n <= 12)
+			return VK_F1 + n - 1;
+	}
+	return 0;
+}
+
+std::string Toolbox::ToolSendInput(const Json &aArgs)
+{
+	if (!aArgs.Has("session") || !aArgs["session"].IsNumber())
+		return ErrorResult("session 是必需参数（来自 run_script、run_editor 或 list_sessions）").Dump();
+	const DWORD sessionId = (DWORD)aArgs["session"].AsInt(0);
+	Session session;
+	if (!Engine::Instance().GetSession(sessionId, session))
+		return ErrorResult("未知会话: " + std::to_string(sessionId)).Dump();
+	if (session.threadId == 0)
+		return ErrorResult("会话还没有脚本进程（脚本可能连加载都没走到）").Dump();
+
+	const std::string action = aArgs["action"].AsString();
+	if (action != "click" && action != "rclick" && action != "dblclick"
+		&& action != "wheel" && action != "key" && action != "text" && action != "move")
+		return ErrorResult("action 取值: click / rclick / dblclick / wheel / key / text / move").Dump();
+
+	std::vector<HWND> tops;
+	CollectTopWindows(session.threadId, tops);
+	std::vector<HWND> visible;
+	for (HWND hwnd : tops)
+		if (IsWindowVisible(hwnd))
+			visible.push_back(hwnd);
+	if (visible.empty())
+		return ErrorResult("该会话目前没有可见窗口：窗口可能还没建好，也可能脚本已经退出").Dump();
+	const int index = aArgs["window"].AsInt(0);
+	if (index < 0 || (size_t)index >= visible.size())
+		return ErrorResult("window 越界：本次只有 "
+			+ std::to_string(visible.size()) + " 个可见窗口（序号从 0 开始）").Dump();
+	HWND top = visible[(size_t)index];
+
+	RECT client = {};
+	GetClientRect(top, &client);
+	int x = aArgs["x"].AsInt(-1);
+	int y = aArgs["y"].AsInt(-1);
+	if (x < 0)
+		x = (client.right - client.left) / 2;
+	if (y < 0)
+		y = (client.bottom - client.top) / 2;
+	if (x >= client.right || y >= client.bottom)
+		return ErrorResult("坐标落在客户区之外（用 inspect_ui 的 client 口径，左上角为 0,0）").Dump();
+
+	// Same rule a real click follows: the point picks the deepest non-transparent
+	// child, so a Text block WITHOUT SS_NOTIFY (K19) correctly lands on its
+	// parent instead of magically reaching the control.
+	POINT pt = { x, y };
+	HWND target = RealChildWindowFromPoint(top, pt);
+	if (!target)
+		target = top;
+	POINT tpt = pt;
+	MapWindowPoints(top, target, &tpt, 1);
+	POINT origin = { 0, 0 };
+	ClientToScreen(top, &origin);
+	const POINT screenPt = { origin.x + x, origin.y + y };
+
+	int posted = 0;
+	HWND keyTarget = target;
+	Json resultExtra;
+	if (action == "click" || action == "dblclick" || action == "rclick")
+	{
+		const bool right = action == "rclick";
+		const UINT down = right ? WM_RBUTTONDOWN : WM_LBUTTONDOWN;
+		const UINT up = right ? WM_RBUTTONUP : WM_LBUTTONUP;
+		const WPARAM wk = right ? MK_RBUTTON : MK_LBUTTON;
+		const LPARAM lp = MAKELPARAM(tpt.x, tpt.y);
+		PostMessageW(target, down, wk, lp);
+		++posted;
+		Sleep(30);
+		PostMessageW(target, up, 0, lp);
+		++posted;
+		if (action == "dblclick")
+		{
+			Sleep(30);
+			PostMessageW(target, WM_LBUTTONDBLCLK, MK_LBUTTON, lp);
+			++posted;
+			Sleep(30);
+			PostMessageW(target, WM_LBUTTONUP, 0, lp);
+			++posted;
+		}
+	}
+	else if (action == "wheel")
+	{
+		int delta = aArgs["delta"].AsInt(-120);
+		delta = delta < -1200 ? -1200 : (delta > 1200 ? 1200 : delta);
+		if (!delta)
+			return ErrorResult("delta 不能为 0（一个滚轮格是 ±120）").Dump();
+		// WM_MOUSEWHEEL's lParam is screen coordinates, not client ones.
+		PostMessageW(target, WM_MOUSEWHEEL,
+			MAKEWPARAM(0, (WORD)(short)delta), MAKELPARAM(screenPt.x, screenPt.y));
+		++posted;
+	}
+	else if (action == "move")
+	{
+		PostMessageW(target, WM_MOUSEMOVE, 0, MAKELPARAM(tpt.x, tpt.y));
+		++posted;
+	}
+	else // key / text go to the focused control, like real input does
+	{
+		const DWORD guiThread = GetWindowThreadProcessId(top, nullptr);
+		HWND focus = nullptr;
+		bool focusAttached = false;
+		GUITHREADINFO ti = {};
+		ti.cbSize = sizeof(ti);
+		if (GetGUIThreadInfo(guiThread, &ti) && ti.hwndFocus)
+			focus = ti.hwndFocus;
+		if (!focus)
+		{
+			// 兜底路径 = 真实打字的等价物：临时挂进目标线程的输入队列，
+			// 读不到焦点就把焦点给坐标命中的那个控件（用户"点进去再打字"）。
+			const DWORD hostThread = GetCurrentThreadId();
+			if (AttachThreadInput(hostThread, guiThread, TRUE))
+			{
+				focus = GetFocus();
+				if (!focus && SetFocus(target))
+				{
+					focus = GetFocus();
+					focusAttached = focus != nullptr;
+				}
+				AttachThreadInput(hostThread, guiThread, FALSE);
+			}
+		}
+		if (!focus)
+			return ErrorResult("查不到该会话的焦点控件，挂入输入队列也没拿到："
+				"先用 action=click 点一下要输入的控件，再发 key / text").Dump();
+		keyTarget = focus;
+		Json focusInfo = Json::MakeObject();
+		focusInfo.Set("class", Json(ClassOf(keyTarget)));
+		focusInfo.Set("text", Json(TextOf(keyTarget)));
+		focusInfo.Set("set_by_tool", Json(focusAttached));
+		resultExtra = std::move(focusInfo);
+		if (action == "key")
+		{
+			if (!aArgs.Has("key"))
+				return ErrorResult("key 需要键名：Enter / Esc / Tab / Space / PageUp / PageDown /"
+					" Home / End / Up / Down / Left / Right / Delete / Backspace / Insert / F1..F12").Dump();
+			const std::string key = aArgs["key"].AsString();
+			const int vk = VkOfName(key.c_str());
+			if (!vk)
+				return ErrorResult("不认识的键名: " + key).Dump();
+			PostMessageW(keyTarget, WM_KEYDOWN, (WPARAM)vk, 0x00000001);
+			++posted;
+			Sleep(30);
+			PostMessageW(keyTarget, WM_KEYUP, (WPARAM)vk, 0xC0000001);
+			++posted;
+		}
+		else
+		{
+			if (!aArgs.Has("text"))
+				return ErrorResult("text 需要一段要输入的文字").Dump();
+			const std::wstring wide = WideOf(aArgs["text"].AsString());
+			if (wide.empty())
+				return ErrorResult("text 不能为空").Dump();
+			for (wchar_t ch : wide)
+			{
+				PostMessageW(keyTarget, WM_CHAR, (WPARAM)ch, 0x00000001);
+				++posted;
+			}
+		}
+	}
+
+	Json result = OkResult();
+	result.Set("session", Json((double)sessionId));
+	result.Set("action", Json(action));
+	result.Set("posted", Json((double)posted));
+	result.Set("point", BoxOf(x, y, 0, 0));
+	Json tgt = Json::MakeObject();
+	tgt.Set("kind", Json(keyTarget == top ? "window" : "control"));
+	tgt.Set("class", Json(ClassOf(keyTarget)));
+	tgt.Set("text", Json(TextOf(keyTarget)));
+	result.Set("target", std::move(tgt));
+	if (resultExtra.IsObject())
+		result.Set("focus", std::move(resultExtra));
+	// K46 in action: a ListView swallows WM_RBUTTONUP inside its DragDetect
+	// loop, so a right-click arriving there may never produce the UP. The menu
+	// must be raised on the DOWN - saying it here saves the caller a mystery.
+	if (action == "rclick" && ClassOf(target).find("SysListView32") != std::string::npos)
+		result.Set("note", Json("目标是 ListView：右键抬起会被它的 DragDetect 循环吞掉（K46），"
+			"脚本里的菜单应挂在按下（WM_RBUTTONDOWN）时弹。消息本身已按真实序列发出。"));
+	return result.Dump();
+}
+
+// ------------------------------------------------------- m209: ui_diff
+//
+// Pixel-level regressions (a caption that shifted 16px after sorting, rows
+// clipped every 4th line, a flash after scrolling) were verified by hand-rolled
+// throwaway BMP parsers every single time. Reading back two capture_ui shots
+// and reporting count / bounding box / worst row bands turns those checks into
+// one call an AI can assert against.
+std::string Toolbox::ToolUiDiff(const Json &aArgs)
+{
+	if (!aArgs.Has("a") || !aArgs.Has("b"))
+		return ErrorResult("a 与 b 都是必需参数（capture_ui 返回的 path）").Dump();
+	std::vector<unsigned char> pa, pb;
+	int wa = 0, ha = 0, sa = 0, wb = 0, hb = 0, sb = 0;
+	if (!ReadBmp24File(ResolveToolPath(aArgs["a"].AsString()), pa, wa, ha, sa))
+		return ErrorResult("读不了 a："
+			+ aArgs["a"].AsString() + "（应为 capture_ui 返回的 BMP 相对路径）").Dump();
+	if (!ReadBmp24File(ResolveToolPath(aArgs["b"].AsString()), pb, wb, hb, sb))
+		return ErrorResult("读不了 b："
+			+ aArgs["b"].AsString() + "（应为 capture_ui 返回的 BMP 相对路径）").Dump();
+	if (wa != wb || ha != hb)
+	{
+		Json result = ErrorResult("两张图尺寸不同，没法逐像素比：先确认两次截图之间窗口没被缩放");
+		result.Set("a", BoxOf(wa, ha, 0, 0));
+		result.Set("b", BoxOf(wb, hb, 0, 0));
+		return result.Dump();
+	}
+
+	int threshold = aArgs["threshold"].AsInt(0);
+	threshold = threshold < 0 ? 0 : (threshold > 255 ? 255 : threshold);
+	int rowsLimit = aArgs["rows"].AsInt(10);
+	rowsLimit = rowsLimit < 1 ? 1 : (rowsLimit > 50 ? 50 : rowsLimit);
+
+	long long changed = 0;
+	int minX = wa, minY = ha, maxX = -1, maxY = -1;
+	std::vector<long long> rowCount((size_t)ha, 0);
+	std::vector<std::pair<int, int>> samples;
+	for (int y = 0; y < ha; ++y)
+	{
+		const unsigned char *ra = pa.data() + (size_t)y * (size_t)sa;
+		const unsigned char *rb = pb.data() + (size_t)y * (size_t)sb;
+		for (int x = 0; x < wa; ++x)
+		{
+			const unsigned char *u = ra + (size_t)x * 3;
+			const unsigned char *v = rb + (size_t)x * 3;
+			const int d = std::abs(u[0] - v[0]) + std::abs(u[1] - v[1])
+				+ std::abs(u[2] - v[2]);
+			if (d <= threshold)
+				continue;
+			++changed;
+			++rowCount[(size_t)y];
+			if (x < minX) minX = x;
+			if (x > maxX) maxX = x;
+			if (y < minY) minY = y;
+			if (y > maxY) maxY = y;
+			if ((int)samples.size() < 5)
+				samples.push_back({ x, y });
+		}
+	}
+
+	Json result = OkResult();
+	result.Set("width", Json((double)wa));
+	result.Set("height", Json((double)ha));
+	result.Set("same", Json(changed == 0));
+	if (!changed)
+	{
+		result.Set("note", Json("两张图逐像素一致（threshold="
+			+ std::to_string(threshold) + "）"));
+		return result.Dump();
+	}
+	result.Set("diff_pixels", Json((double)changed));
+	const double total = (double)wa * (double)ha;
+	char ratio[32];
+	std::snprintf(ratio, sizeof(ratio), "%.4f", (double)changed / total);
+	result.Set("diff_ratio", Json(ratio));
+	result.Set("bbox", BoxOf(minX, minY, maxX - minX + 1, maxY - minY + 1));
+
+	// Contiguous row bands, worst first. This is what turned "some rows look
+	// clipped" into a fact: the clipped rows showed up as evenly spaced bands
+	// (every 4th row), and a repaint ghost showed up as one solid band.
+	std::vector<std::pair<long long, std::pair<int, int>>> bands; // count, {y0,y1}
+	for (int y = 0; y < ha;)
+	{
+		if (!rowCount[(size_t)y])
+		{
+			++y;
+			continue;
+		}
+		const int y0 = y;
+		long long sum = 0;
+		while (y < ha && rowCount[(size_t)y])
+		{
+			sum += rowCount[(size_t)y];
+			++y;
+		}
+		bands.push_back({ sum, { y0, y - 1 } });
+	}
+	std::sort(bands.begin(), bands.end(),
+		[](const auto &u, const auto &v) { return u.first > v.first; });
+	Json bandList = Json::MakeArray();
+	const size_t bandCount = bands.size() < (size_t)rowsLimit
+		? bands.size() : (size_t)rowsLimit;
+	for (int i = 0; i < bandCount; ++i)
+	{
+		Json b = Json::MakeObject();
+		b.Set("y0", Json((double)bands[(size_t)i].second.first));
+		b.Set("y1", Json((double)bands[(size_t)i].second.second));
+		b.Set("changed", Json((double)bands[(size_t)i].first));
+		bandList.Push(std::move(b));
+	}
+	result.Set("bands", std::move(bandList));
+	result.Set("band_total", Json((double)bands.size()));
+	Json sampleList = Json::MakeArray();
+	for (const auto &s : samples)
+	{
+		Json p = Json::MakeObject();
+		p.Set("x", Json((double)s.first));
+		p.Set("y", Json((double)s.second));
+		sampleList.Push(std::move(p));
+	}
+	result.Set("samples", std::move(sampleList));
+	result.Set("note", Json("bands 按变化量降序只列前几条；要全貌把 rows 调大。"
+		"等宽等距的 band 是行级缺陷（裁字/残影），一整片大 band 是整块重绘或位移。"));
 	return result.Dump();
 }
 

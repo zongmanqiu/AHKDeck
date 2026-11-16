@@ -2,6 +2,9 @@
 #include "core/ScriptCatalog.h"
 
 #include "core/AppPaths.h"
+#include "core/ZipPackage.h"
+
+#include "core/AppPaths.h"
 #include "core/Json.h"
 #include "core/ScriptHeader.h"
 #include "core/TextFile.h"
@@ -165,6 +168,8 @@ CatalogResult ParseScriptCatalog(const std::string &aText)
 		e.sizeKb = item["size_kb"].AsNumber(0.0);
 		e.gitee = item["gitee"].AsString();
 		e.github = item["github"].AsString();
+		e.package = item["package"].AsString();
+		e.packageGithub = item["packageGithub"].AsString();
 
 		if (!IsSafeScriptName(e.name) || e.version.empty())
 		{
@@ -177,6 +182,12 @@ CatalogResult ParseScriptCatalog(const std::string &aText)
 			e.gitee.clear();
 		if (!IsHttpsUrl(e.github))
 			e.github.clear();
+		// m211: a package URL is optional, but a broken one disqualifies the
+		// mirror column exactly like a broken text URL would.
+		if (!IsHttpsUrl(e.package))
+			e.package.clear();
+		if (!IsHttpsUrl(e.packageGithub))
+			e.packageGithub.clear();
 		if (e.gitee.empty() && e.github.empty())
 		{
 			++out.skipped;
@@ -237,6 +248,17 @@ const std::string &DownloadUrlFor(const CatalogEntry &aEntry,
 	// Custom: the manifest's own mirror choice is not ours to make, so take
 	// whichever field it publishes. Both are the publisher's bytes.
 	return aEntry.gitee.empty() ? aEntry.github : aEntry.gitee;
+}
+
+const std::string &PackageUrlFor(const CatalogEntry &aEntry,
+	ManifestSource aSource)
+{
+	if (aSource == ManifestSource::OfficialGithub)
+		return aEntry.packageGithub;
+	if (aSource == ManifestSource::OfficialGitee)
+		return aEntry.package;
+	// Custom: same publisher-picks rule as DownloadUrlFor.
+	return aEntry.package.empty() ? aEntry.packageGithub : aEntry.package;
 }
 
 std::string CustomSourceLabel(const std::string &aUrl)
@@ -381,9 +403,139 @@ bool VerifyDownloadedScript(const std::wstring &aPartPath,
 	return true;
 }
 
+// m211: shared package plumbing. Both installs and tests land here with the
+// zip already staged on disk.
+static std::string ParentOfUtf8(const std::string &aPath)
+{
+	const size_t p = aPath.find_last_of("\\/");
+	return p == std::string::npos ? std::string() : aPath.substr(0, p);
+}
+
+bool InstallPackageFromZip(const std::wstring &aZipPath,
+	const ScriptInstallRequest &aRequest, std::string &aError)
+{
+	if (aRequest.expectedName.empty() || aRequest.expectedVersion.empty())
+	{
+		aError = "包安装需要清单给出的名字与版本";
+		return false;
+	}
+
+	// Layout contract: targetPathUtf8 = <Scripts>\<名>\<名>.ahk
+	const std::string entryPath = aRequest.targetPathUtf8;
+	const std::string entryDir = ParentOfUtf8(entryPath);
+	const std::string scriptsDir = ParentOfUtf8(entryDir);
+	if (entryDir.empty() || scriptsDir.empty() || scriptsDir == entryDir)
+	{
+		aError = "包安装目标路径不是 <Scripts>\\<名>\\<名>.ahk 形态";
+		return false;
+	}
+	const std::string staging = scriptsDir + "\\" + aRequest.expectedName + ".part";
+	const std::string stagedEntry = staging + "\\" + aRequest.expectedName
+		+ "\\" + aRequest.expectedName + ".ahk";
+	const std::wstring wStaging = Utf8ToWideLocal(staging);
+	const std::wstring wEntryDir = Utf8ToWideLocal(entryDir);
+	const std::wstring wScriptsDir = Utf8ToWideLocal(scriptsDir);
+	const std::wstring wStagedEntry = Utf8ToWideLocal(stagedEntry);
+	if (wStaging.empty() || wEntryDir.empty() || wScriptsDir.empty())
+	{
+		aError = "包安装路径编码错误";
+		return false;
+	}
+
+	auto fail = [&](const std::string &msg) {
+		RemoveTreeWide(wStaging);
+		aError = msg;
+		return false;
+	};
+
+	RemoveTreeWide(wStaging);
+	CreateDirectoryW(wScriptsDir.c_str(), nullptr); // test sandboxes have no Scripts yet
+	if (!CreateDirectoryW(wStaging.c_str(), nullptr)
+		&& GetLastError() != ERROR_ALREADY_EXISTS)
+		return fail("无法创建包暂存目录");
+
+	if (!ExtractZipSafe(aZipPath, wStaging, aError))
+		return fail(aError);
+
+	// The manifest is still the truth: the entry script inside the package
+	// must prove itself exactly like a single-file download would.
+	std::string verifyError;
+	if (!VerifyDownloadedScript(wStagedEntry, aRequest, verifyError))
+		return fail(verifyError);
+
+	// Backups never destroy: an existing `<名>/` moves into temp\deleted, and
+	// so does a legacy flat `<名>.ahk` - the two layouts must not coexist.
+	const std::wstring wDeleted = AppTempDir(kTempDeleted);
+	if (wDeleted.empty())
+		return fail("无法确定备份目录");
+	CreateDirectoryW(wDeleted.c_str(), nullptr);
+	std::string movedDir;
+	const bool hadDir = GetFileAttributesW(wEntryDir.c_str()) != INVALID_FILE_ATTRIBUTES;
+	if (hadDir && !MoveDirToBackup(wEntryDir, wDeleted, movedDir))
+		return fail("无法备份原脚本目录（它可能正在运行，或跨盘移动失败）");
+	const std::string flatLegacy = scriptsDir + "\\" + aRequest.expectedName + ".ahk";
+	const std::wstring wFlat = Utf8ToWideLocal(flatLegacy);
+	std::string movedFlat;
+	const bool hadFlat = GetFileAttributesW(wFlat.c_str()) != INVALID_FILE_ATTRIBUTES;
+	if (hadFlat && !MoveDirToBackup(wFlat, wDeleted, movedFlat))
+	{
+		if (hadDir)
+		{
+			// Put the old directory back before giving up.
+			MoveFileW((wDeleted + L"\\" + Utf8ToWideLocal(movedDir)).c_str(),
+				wEntryDir.c_str());
+		}
+		return fail("无法备份旧的单文件脚本");
+	}
+
+	if (!MoveFileW((wStaging + L"\\" + Utf8ToWideLocal(aRequest.expectedName)).c_str(),
+			wEntryDir.c_str()))
+	{
+		const DWORD rc = GetLastError();
+		if (hadDir)
+			MoveFileW((wDeleted + L"\\" + Utf8ToWideLocal(movedDir)).c_str(),
+				wEntryDir.c_str());
+		return fail("无法安装包目录（错误码 " + std::to_string(rc) + "）");
+	}
+
+	RemoveTreeWide(wStaging);
+	return true;
+}
+
 bool InstallScriptFile(const ScriptInstallRequest &aRequest, std::string &aError,
 	ScriptInstallProgress aProgress)
 {
+	// m211: package mode. Same staging discipline as the file flow - the zip
+	// lands as `<名>.zip.part`, everything else happens under the staging dir.
+	if (!aRequest.packageUrl.empty())
+	{
+		const std::string entryPath = aRequest.targetPathUtf8;
+		const std::string scriptsDir = ParentOfUtf8(ParentOfUtf8(entryPath));
+		if (scriptsDir.empty())
+		{
+			aError = "包安装目标路径形态不对";
+			return false;
+		}
+		const std::string zipPart = scriptsDir + "\\" + aRequest.expectedName
+			+ ".zip.part";
+		const std::wstring wZipPart = Utf8ToWideLocal(zipPart);
+		if (wZipPart.empty())
+		{
+			aError = "包安装路径编码错误";
+			return false;
+		}
+		RemoveFile(wZipPart);
+		if (!DownloadFile(aRequest.packageUrl, zipPart, aProgress))
+		{
+			RemoveFile(wZipPart);
+			aError = "下载包失败（网络中断或安装目录不可写）";
+			return false;
+		}
+		const bool ok = InstallPackageFromZip(wZipPart, aRequest, aError);
+		RemoveFile(wZipPart);
+		return ok;
+	}
+
 	const std::string partUtf8 = aRequest.targetPathUtf8 + ".part";
 	const std::string oldUtf8 = aRequest.targetPathUtf8 + ".old";
 	const std::wstring wPart = Utf8ToWideLocal(partUtf8);

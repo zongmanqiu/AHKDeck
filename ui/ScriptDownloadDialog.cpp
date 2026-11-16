@@ -686,8 +686,11 @@ void ScriptDownloadDialog::RebuildView()
 		if (!query.empty() && !MatchesFilter(row.entry, query))
 			continue;
 
-		const std::wstring localPath = Utf8ToWideLocal(
-			ScriptsDirUtf8() + row.entry.name + ".ahk");
+		// m211: package entries live at <Scripts>\<名>\<名>.ahk; the flat file
+		// is the single-file layout only.
+		const std::wstring localPath = Utf8ToWideLocal(row.entry.package.empty()
+			? ScriptsDirUtf8() + row.entry.name + ".ahk"
+			: ScriptsDirUtf8() + row.entry.name + "\\" + row.entry.name + ".ahk");
 		const bool exists = !localPath.empty()
 			&& GetFileAttributesW(localPath.c_str()) != INVALID_FILE_ATTRIBUTES;
 		const std::string localVersion = exists
@@ -696,15 +699,17 @@ void ScriptDownloadDialog::RebuildView()
 		RowView view = row;
 		view.state = ClassifyInstall(row.entry, localVersion, exists);
 		const std::string &url = DownloadUrlFor(row.entry, KindFor(row.sourceIndex));
+		const std::string &pkgUrl = PackageUrlFor(row.entry, KindFor(row.sourceIndex));
+		const bool installable = !url.empty() || !pkgUrl.empty();
 
-		if (!url.empty() && view.state == ScriptInstallState::Absent)
+		if (installable && view.state == ScriptInstallState::Absent)
 		{
 			view.caption = "下载";
 			view.tone = ActionTone::Primary;
 			view.clickable = true;
 			++ready;
 		}
-		else if (!url.empty() && view.state == ScriptInstallState::Upgradable)
+		else if (installable && view.state == ScriptInstallState::Upgradable)
 		{
 			view.caption = "升级";
 			view.tone = ActionTone::Warning;
@@ -812,7 +817,13 @@ void ScriptDownloadDialog::OnRowAction(int aIndex)
 	}
 
 	const std::string name = view.entry.name;
-	const std::string target = ScriptsDirUtf8() + name + ".ahk";
+	// m211: package mode installs <Scripts>\<名>\<名>.ahk from a zip; the
+	// text URL is unused then (InstallScriptFile branches on packageUrl).
+	const std::string &pkgUrl = PackageUrlFor(view.entry, KindFor(view.sourceIndex));
+	const bool packageMode = !pkgUrl.empty();
+	const std::string target = packageMode
+		? ScriptsDirUtf8() + name + "\\" + name + ".ahk"
+		: ScriptsDirUtf8() + name + ".ahk";
 	// m160: the manifest entry is the truth the download is verified against -
 	// name and version, nothing else (no size check: the user's rule for
 	// official scripts, and entry.sizeKb stays for the 信息 display only).
@@ -827,10 +838,11 @@ void ScriptDownloadDialog::OnRowAction(int aIndex)
 	std::shared_ptr<bool> alive = mAlive;
 	try
 	{
-		std::thread([this, alive, name, url, target, version]() {
+		std::thread([this, alive, name, url, target, version, pkgUrl]() {
 			ScriptInstallRequest request;
 			request.targetPathUtf8 = target;
 			request.url = url;
+			request.packageUrl = pkgUrl;
 			request.expectedName = name;
 			request.expectedVersion = version;
 

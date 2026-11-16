@@ -18,6 +18,6 @@
 | [test/ui_gate/README.md](test/ui_gate/README.md) | UI 冒烟入口；测试步骤或参数变化时更新 |
 | [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) | 第三方来源、许可与分发义务；依赖或补丁变化时更新 |
 | [官方内核补丁说明](patches/AutoHotkey-v2.0.31/README.md) / [FLTK 补丁说明](patches/fltk-1.4.5/FLTK_PATCHES.md) | 现行补丁范围、理由与验证；修改第三方补丁时更新 |
-| [AHK_H 归档补丁](patches/AutoHotkey_H-v2.0.25/README.md) | **历史归档，m192 P4 起停用**：不再构建、不再分发，仅留作对照；现行内核见上一行 |
+| [docs/](docs/) 发行文档集 | 随 exe 发行的 AI/用户文档：UI规范 / UI组件手册 / UI踩坑 / 脚本开发流程 / 开发指南（脚本仓库同步副本）/ MCP接入 / MCP界面量测；改动任一主题时同步对应文件 |
 
 核对依据：目标与测试注册看 `CMakeLists.txt`，流水线看 `build/*.bat`，依赖看 `build/deps.txt`，行为看对应实现。所有文档使用相对路径，不记录密钥或本机路径，不写固定测试数量、未经实测的性能及全覆盖承诺。

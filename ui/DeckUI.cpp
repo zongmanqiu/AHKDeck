@@ -755,12 +755,16 @@ static const char *kColumnCaptions[7] =
 	{"运行", "菜单", "脚本", "CPU", "GPU", "内存", "快捷键"};
 
 // m202: the caption PLUS its always-reserved ↑/↓ slot is a column's FLOOR,
-// measured conservatively at the design fonts (s10 = 16px, s9 = 14px). These
-// are compile-time so the very first layout - before shown() lets fl_width()
-// measure - can never squeeze a caption or its sort marker out of view.
-// MeasureColumnNeeds() later replaces them with exact glyph measurements;
-// a larger caption or a wider sort glyph can only ever raise the floor.
-static constexpr int kHeaderFloor[7] = { 56, 56, 56, 48, 48, 56, 72 };
+// measured conservatively at the design font. These are compile-time so the
+// very first layout - before shown() lets fl_width() measure - can never
+// squeeze a caption or its sort marker out of view. MeasureColumnNeeds() later
+// replaces them with exact glyph measurements; a larger caption or a wider
+// sort glyph can only ever raise the floor.
+// m203: CPU/GPU used to sit at 48 because their captions were drawn at s9.
+// With the header row now uniformly s10, 48 no longer holds "CPU" + the ↑/↓
+// slot, so every text column shares the same 56 floor and the hotkey keeps
+// the wider one it needs for "Ctrl+Alt+F".
+static constexpr int kHeaderFloor[7] = { 56, 56, 56, 56, 56, 56, 72 };
 
 static void DrawGear(int aCx, int aCy, int aRadius, Fl_Color aColor)
 {
@@ -1498,7 +1502,9 @@ private:
 	// m199: click sorting. -1 = the store's natural name order. Numeric columns
 	// sort by a snapshot taken at click time, otherwise every 2 s sample would
 	// reorder rows under the cursor.
-	int mSortColumn = -1;
+	// m204: starts on 2 (脚本) ascending - the same order the store is kept in,
+	// but now the header draws the ↑ marker so the order is visible.
+	int mSortColumn = 2;
 	bool mSortDesc = false;
 	std::map<int, double> mSortKeys;
 	Fl_Text_Display *mConsole = nullptr;
@@ -3619,9 +3625,18 @@ DeckWindow::DeckWindow(Engine &aEngine)
 		// m202: all seven left, and so is every cell below them. The label is
 		// static, so the ↑/↓ marker in its reserved slot cannot displace it.
 		caption->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
-		// The three numeric headers share the cells' auxiliary s9 size.
-		caption->labelsize((i >= 3 && i <= 5) ? SubTextSize() : TextSize());
+		// m203: one size for the whole header row. The three numeric columns
+		// used to drop to SubTextSize (s9) to match their cells, which left
+		// "内存" visibly smaller than 运行/菜单/脚本 sitting in the same bar -
+		// a header row has to read as one line. The cells below keep s9.
+		caption->labelsize(TextSize());
 	}
+	// m204: the list opens in name ascending order. The store is already kept
+	// in that order, but leaving mSortColumn at -1 drew no sort marker at all,
+	// so the header gave no clue which order the rows were in - and one click
+	// on 脚本 flipped them to descending. Opening with column 2 ascending
+	// makes the marker match the order the user actually sees.
+	UpdateSortCaptions();
 	mFilterRule = new Fl_Box(0, 0, 0, 0);
 	mFilterRule->box(FL_FLAT_BOX);
 	mFilterRule->color(DeckColors().background2);
@@ -4352,8 +4367,10 @@ void DeckWindow::LayoutListPane(int x, int y, int w, int h)
 	// elastic one: a long script name must not push the numbers out of view.
 	// m198: a narrow pane costs the NAME first, and the hotkey button (a full
 	// "Ctrl+Alt+F" inside a bordered combo) is the last column we ever shrink.
-	const int baseStatic[7] = { 56, 56, 300, 48, 48, 56, 136 };
-	const int minStatic[7]  = { 56, 56, 120, 48, 48, 56, 112 };
+	// m203: CPU/GPU follow the header row to 56 - a 48px column cannot hold a
+	// 16px "CPU" caption plus its reserved ↑/↓ slot.
+	const int baseStatic[7] = { 56, 56, 300, 56, 56, 56, 136 };
+	const int minStatic[7]  = { 56, 56, 120, 56, 56, 56, 112 };
 	int base[7], minimum[7];
 	for (int i = 0; i < 7; ++i)
 	{
@@ -4922,6 +4939,32 @@ void DeckWindow::ScanScripts()
 		AddScript(scriptsDir + L"\\" + fd.cFileName);
 	} while (FindNextFileW(find, &fd));
 	FindClose(find);
+
+	// m211: folder layout - Scripts\<名>\<名>.ahk, what a zip package installs.
+	// A flat file with the same stem wins (legacy layout), so one name can
+	// never appear as two rows even while a user hand-copies both forms in.
+	WIN32_FIND_DATAW dd;
+	const std::wstring dirPattern = scriptsDir + L"\\*";
+	HANDLE dirFind = FindFirstFileW(dirPattern.c_str(), &dd);
+	if (dirFind != INVALID_HANDLE_VALUE)
+	{
+		do
+		{
+			if (!(dd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+				continue;
+			const std::wstring name = dd.cFileName;
+			if (name == L"." || name == L".." || name == L"temp")
+				continue;
+			const std::wstring flat = scriptsDir + L"\\" + name + L".ahk";
+			if (GetFileAttributesW(flat.c_str()) != INVALID_FILE_ATTRIBUTES)
+				continue;
+			const std::wstring entry = scriptsDir + L"\\" + name + L"\\"
+				+ name + L".ahk";
+			if (GetFileAttributesW(entry.c_str()) != INVALID_FILE_ATTRIBUTES)
+				AddScript(entry);
+		} while (FindNextFileW(dirFind, &dd));
+		FindClose(dirFind);
+	}
 
 	for (auto &row : mScripts)
 	{
@@ -6228,6 +6271,16 @@ void DeckWindow::DeleteSelected()
 		return;
 	}
 
+	// m211: a folder-layout script (Scripts\<名>\<名>.ahk) deletes as a whole
+	// folder - the companions belong to it. The flat layout keeps moving just
+	// the one file, exactly as before.
+	const std::wstring scriptsDir = ExeDirectory() + L"\\Scripts";
+	const size_t lastSlash = row.path.find_last_of(L"\\/");
+	const std::wstring parentDir = lastSlash == std::wstring::npos
+		? std::wstring() : row.path.substr(0, lastSlash);
+	const bool folderMode = !parentDir.empty()
+		&& _wcsicmp(parentDir.c_str(), scriptsDir.c_str()) != 0;
+
 	SYSTEMTIME st;
 	GetLocalTime(&st);
 	char stamp[32];
@@ -6235,7 +6288,9 @@ void DeckWindow::DeleteSelected()
 		st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
 
 	// row.name carries the ".ahk" leaf (m132); the stamp goes before the dot so
-	// the copy still opens by double-click.
+	// the copy still opens by double-click. In folder mode the same candidate
+	// names a backup FOLDER `<stem>-<stamp>\` instead of a file - the shape is
+	// still "recoverable by hand from temp\deleted".
 	const size_t dot = row.name.find_last_of('.');
 	const std::string stem = dot == std::string::npos ? row.name : row.name.substr(0, dot);
 	const std::string ext = dot == std::string::npos ? std::string(".ahk") : row.name.substr(dot);
@@ -6261,7 +6316,8 @@ void DeckWindow::DeleteSelected()
 		return;
 	}
 
-	if (!MoveFileW(row.path.c_str(), target.c_str()))
+	if (!MoveFileW(folderMode ? parentDir.c_str() : row.path.c_str(),
+			target.c_str()))
 	{
 		Append("[ui] 删除失败（" + std::to_string((unsigned long)GetLastError()) +
 			"）：脚本可能正在退出，稍后再试");

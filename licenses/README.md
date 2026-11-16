@@ -5,7 +5,7 @@
 
 | 文件 | 对应组件 | 说明 |
 |---|---|---|
-| `GPL-2.0.txt` | 官方 AutoHotkey v2.0.31（唯一内核 EXE） | 复制自上游 `license.txt`，裸 GPLv2 全文；与本产品 `LICENSE`、已归档的 AutoHotkey_H `license.txt` 逐字节相同 |
+| `GPL-2.0.txt` | 官方 AutoHotkey v2.0.31（唯一内核 EXE） | 复制自上游 `license.txt`，裸 GPLv2 全文；与本产品 `LICENSE` 逐字节相同 |
 | `LGPL-2.0-with-FLTK-exception.txt` | FLTK 1.4.5（GUI 框架） | 复制自上游 `COPYING`（2001-12-11 版）：LGPL-2.0 正文 ＋ FLTK 例外条款 |
 
 ## 为什么是"原件"而不是摘要

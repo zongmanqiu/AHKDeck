@@ -7,7 +7,7 @@
 `LGPL-2.0-with-FLTK-exception.txt`（FLTK 的 `COPYING` 原样），说明见
 [licenses/README.md](licenses/README.md)。本文件是组件摘要，不替代原文。
 
-## 1. 官方 AutoHotkey v2.0.31（唯一内核，进程外）
+## 2. 官方 AutoHotkey v2.0.31（唯一内核，进程外）
 
 - 来源：https://github.com/AutoHotkey/AutoHotkey ，tag `v2.0.31`；源码包 sha256
   `7ed1c04d26b60ea2b4c645768ec9d60d6831d34d53db3d926e451165bd3f467f`
@@ -26,7 +26,7 @@
   「脚本/编译为 EXE」复制并写入脚本资源的底座。旧的进程内 `AutoHotkey64.dll`（AutoHotkey_H
   v2.0.25）与 `tools\AutoHotkey64.exe` 编译底座已退场；其源码与补丁仅作历史归档，不再构建或分发。
 
-## 2. FLTK 1.4.5（GUI 框架）
+## 3. FLTK 1.4.5（GUI 框架）
 
 - 来源：https://github.com/fltk/fltk ，tag `release-1.4.5`
 - 许可：**LGPL-2.0 ＋ FLTK 例外条款**（上游 `COPYING`，2001-12-11 版）。与我们相关的关键例外
@@ -38,14 +38,14 @@
   阴影钩子带 `/alternatename` 空桩兜底；颜色全局仍由 AHKDeck 的 `ui/Theme.cpp` 定义，不能据此声称库可独立链接。
 - 修改版 FLTK 本身的源码修改：按 LGPL 第 4 条随本仓库源码公开（即上述补丁归档）。
 
-## 3. Microsoft Visual C++ 运行库（静态链接，无外部依赖）
+## 4. Microsoft Visual C++ 运行库（静态链接，无外部依赖）
 
 宿主使用 **静态 CRT（/MT，CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded）**，避免要求用户单独安装 VC++ 运行库。
 产品仍依赖 Windows 系统组件及随包的 `AutoHotkey64.exe`，不是仅依赖 USER32/KERNEL32。
 链接进 exe 的第三方库（FLTK）必须用同一旗标构建（4_build 已传
 `-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded`）。
 
-## 4. 单内核布局（m192 P4，替代旧「编译底座 `tools\AutoHotkey64.exe`」一节）
+## 5. 单内核布局（m192 P4，替代旧「编译底座 `tools\AutoHotkey64.exe`」一节）
 
 - 文件：程序旁唯一一个 `AutoHotkey64.exe`，即第 1 节的内核；包内不再有第二个 AHK PE。
 - 用途一：`engine\DeckEngine` 每个会话 spawn 一次，`AHKDECK_NO_TRAY` 收起子进程的托盘图标，
@@ -58,7 +58,7 @@
 - **构建期工具**（口径不变）：CMake、MSVC、Windows SDK、curl、bsdtar 仅为构建工具，
   不进入产物、不参与分发。
 
-## 5. AutoHotkey 应用图标（m030）
+## 6. AutoHotkey 应用图标（m030）
 
 - 文件：`.main\image\autohotkey.ico`（由 `.3rd\AutoHotkey-v2.0.25-src\source\resources\icon_main.ico` 原样复制）
 - 来源：AutoHotkey v2.0.25 源码（https://github.com/AutoHotkey/AutoHotkey ，tag `v2.0.25`）

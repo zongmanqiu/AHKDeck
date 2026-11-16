@@ -1,9 +1,9 @@
 # agent/ — 脚本工具层与 MCP 端（m063／m064／m205）
 
-一句话：**工具的唯一定义处**。谁驱动这 16 个工具都行，实现与清单只有一份。
+一句话：**工具的唯一定义处**。谁驱动这 18 个工具都行，实现与清单只有一份。
 
 ```
-Toolbox     16 个工具 + 中性工具定义（ToolDef）；线程安全；只经 core/AiPolicy 落盘
+Toolbox     18 个工具 + 中性工具定义（ToolDef）；线程安全；只经 core/AiPolicy 落盘
 McpServer   MCP stdio 端：换行分隔 JSON-RPC，stdout 只放协议帧，日志走 stderr
 ```
 
