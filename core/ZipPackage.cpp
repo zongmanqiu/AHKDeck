@@ -508,6 +508,24 @@ bool MoveDirToBackup(const std::wstring &aDir, const std::wstring &aTargetDir,
 	return false;
 }
 
+// Windows' CompressedFolder shell extension is registered for the ".zip"
+// extension only (HKCR\.zip -> CompressedFolder). Shell.NameSpace() therefore
+// cannot open an archive just because its bytes are a zip: a perfectly valid
+// package named *.part is rejected, and the generic Shell failure then reads
+// as "the file is corrupt". That is exactly what m226 fixed.
+bool HasZipExtension(const std::wstring &aPath)
+{
+	const size_t dot = aPath.find_last_of(L'.');
+	const size_t sep = aPath.find_last_of(L"\\/");
+	if (dot == std::wstring::npos || (sep != std::wstring::npos && dot < sep))
+		return false;
+	std::wstring ext = aPath.substr(dot + 1);
+	for (wchar_t &c : ext)
+		if (c >= L'A' && c <= L'Z')
+			c = (wchar_t)(c - L'A' + L'a');
+	return ext == L"zip";
+}
+
 bool ExtractZipSafe(const std::wstring &aZipPath, const std::wstring &aDestDir,
 	std::string &aError)
 {
@@ -524,6 +542,44 @@ bool ExtractZipSafe(const std::wstring &aZipPath, const std::wstring &aDestDir,
 		aError = "包内没有任何文件";
 		return false;
 	}
+
+	// Pass 2 hands the file to the Shell, which only recognises the .zip
+	// extension. Normalise the name here (copy next to the staging dir, delete
+	// it on every exit path) so no caller has to know that rule. The installer
+	// no longer stages as "<name>.zip.part" (m226 moved packages to
+	// temp\work\package-<pid>.zip), but this stays as the layer's own guard:
+	// a partial or oddly named archive must not turn into "corrupt file".
+	std::wstring shellZip = aZipPath;
+	std::wstring tempZip;
+	if (!HasZipExtension(aZipPath))
+	{
+		std::wstring base = aDestDir;
+		while (!base.empty() && (base.back() == L'\\' || base.back() == L'/'))
+			base.pop_back();
+		if (base.empty())
+		{
+			aError = "解压目标路径形态不对";
+			return false;
+		}
+		tempZip = base + L".package.zip";
+		DeleteFileW(tempZip.c_str());
+		if (!CopyFileW(aZipPath.c_str(), tempZip.c_str(), FALSE))
+		{
+			aError = "无法准备临时 zip 包（复制失败，错误码 " +
+				std::to_string(GetLastError()) + "）";
+			return false;
+		}
+		shellZip = tempZip;
+	}
+	struct TempZipGuard
+	{
+		std::wstring path;
+		~TempZipGuard()
+		{
+			if (!path.empty())
+				DeleteFileW(path.c_str());
+		}
+	} tempZipGuard{ tempZip };
 
 	// Pass 2: the system extracts. Everything below runs through wide BSTR
 	// paths, so non-ASCII install directories work without any code-page
@@ -558,8 +614,8 @@ bool ExtractZipSafe(const std::wstring &aZipPath, const std::wstring &aDestDir,
 	{
 		VariantGuard vZip;
 		vZip.v.vt = VT_BSTR;
-		vZip.v.bstrVal = SysAllocStringLen(aZipPath.c_str(),
-			(UINT)aZipPath.size());
+		vZip.v.bstrVal = SysAllocStringLen(shellZip.c_str(),
+			(UINT)shellZip.size());
 		VariantGuard vDest;
 		vDest.v.vt = VT_BSTR;
 		vDest.v.bstrVal = SysAllocStringLen(aDestDir.c_str(),

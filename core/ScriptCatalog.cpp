@@ -514,34 +514,39 @@ bool InstallPackageFromZip(const std::wstring &aZipPath,
 bool InstallScriptFile(const ScriptInstallRequest &aRequest, std::string &aError,
 	ScriptInstallProgress aProgress)
 {
-	// m211: package mode. Same staging discipline as the file flow - the zip
-	// lands as `<名>.zip.part`, everything else happens under the staging dir.
+	// m211: package mode. m226: the zip lands in temp\work with a real .zip
+	// name - the Shell extractor only opens that extension, and a package has
+	// no business sitting inside Scripts\ even for a moment.
 	if (!aRequest.packageUrl.empty())
 	{
-		const std::string entryPath = aRequest.targetPathUtf8;
-		const std::string scriptsDir = ParentOfUtf8(ParentOfUtf8(entryPath));
-		if (scriptsDir.empty())
+		const std::wstring workDir = AppTempDir(kTempWork);
+		if (workDir.empty())
 		{
-			aError = "包安装目标路径形态不对";
+			aError = "无法确定临时目录";
 			return false;
 		}
-		const std::string zipPart = scriptsDir + "\\" + aRequest.expectedName
-			+ ".zip.part";
-		const std::wstring wZipPart = Utf8ToWideLocal(zipPart);
-		if (wZipPart.empty())
+		CreateDirectoryW(workDir.c_str(), nullptr); // first run has no temp root
+		char leaf[64];
+		std::snprintf(leaf, sizeof(leaf), "\\package-%lu.zip",
+			(unsigned long)GetCurrentProcessId());
+		const std::wstring wZipPath = workDir + Utf8ToWideLocal(leaf);
+		const std::string zipPath = WideToUtf8Local(wZipPath);
+		if (zipPath.empty())
 		{
 			aError = "包安装路径编码错误";
 			return false;
 		}
-		RemoveFile(wZipPart);
-		if (!DownloadFile(aRequest.packageUrl, zipPart, aProgress))
+		RemoveFile(wZipPath);
+		std::string downloadError;
+		if (!DownloadFile(aRequest.packageUrl, zipPath, aProgress, &downloadError))
 		{
-			RemoveFile(wZipPart);
-			aError = "下载包失败（网络中断或安装目录不可写）";
+			RemoveFile(wZipPath);
+			aError = downloadError.empty() ? "下载包失败（网络中断或安装目录不可写）"
+				: ("下载包失败：" + downloadError);
 			return false;
 		}
-		const bool ok = InstallPackageFromZip(wZipPart, aRequest, aError);
-		RemoveFile(wZipPart);
+		const bool ok = InstallPackageFromZip(wZipPath, aRequest, aError);
+		RemoveFile(wZipPath);
 		return ok;
 	}
 
@@ -561,10 +566,12 @@ bool InstallScriptFile(const ScriptInstallRequest &aRequest, std::string &aError
 
 	// 1. Stage. Never point DownloadFile at the live script: on failure it
 	//    deletes the target it was given.
-	if (!DownloadFile(aRequest.url, partUtf8, aProgress))
+	std::string downloadError;
+	if (!DownloadFile(aRequest.url, partUtf8, aProgress, &downloadError))
 	{
 		RemoveFile(wPart);
-		aError = "下载失败（网络中断或安装目录不可写）";
+		aError = downloadError.empty() ? "下载失败（网络中断或安装目录不可写）"
+			: ("下载失败：" + downloadError);
 		return false;
 	}
 

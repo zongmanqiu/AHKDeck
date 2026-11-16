@@ -571,6 +571,30 @@ int main()
 		Check(!ahkdeck::InstallPackageFromZip(zipPath, req, nameErr),
 			"wrong @name package is rejected");
 
+		// m226: the installer staged the download as "<名>.zip.part", but the
+		// Shell zip namespace is bound to the .zip extension - a valid archive
+		// under any other name fails to open and surfaces as
+		// "打不开 zip 包（文件损坏或不是 zip）". Extraction now normalises the
+		// name itself, so this pins that no caller has to care.
+		Check(BuildZip(zipPath, {
+				{ name + "/", "", true },
+				{ name + "/" + name + ".ahk", entryText, false },
+			}), "part-suffix zip writes the good package");
+		const std::wstring partZip = zipPath + L".part";
+		Check(CopyFileW(zipPath.c_str(), partZip.c_str(), FALSE) != 0,
+			"non-.zip copy of the package is created");
+		std::string partErr;
+		Check(ahkdeck::InstallPackageFromZip(partZip, req, partErr),
+			"package whose path is not .zip still installs");
+		Check(ahkdeck::LocalScriptVersion(entryFile) == version,
+			"non-.zip install lands the manifest version");
+		const std::wstring tempCopy = sandbox + L"\\Scripts\\"
+			+ Utf8ToWideLocal(name) + L".part.package.zip";
+		Check(GetFileAttributesW(tempCopy.c_str()) == INVALID_FILE_ATTRIBUTES,
+			"the temporary .zip copy is cleaned up");
+		Check(GetFileAttributesW(partZip.c_str()) != INVALID_FILE_ATTRIBUTES,
+			"the caller's own package file is left alone");
+
 		ahkdeck::RemoveTreeWide(sandbox);
 	}
 

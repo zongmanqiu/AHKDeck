@@ -1,8 +1,8 @@
 {
-  "version": "0.4.2",
+  "version": "0.4.3",
   "published": "2026-11-17",
-  "notes": "0.4.2：地址、文档与发行包的修正。官方脚本清单和更新检查的 Gitee 默认地址改为直连 CDN，旧地址会跳转到带时效签名的地址，过期即打不开；随包《开发指南》重新对齐脚本仓库真源，副本里指向仓库 README／LICENSE 的链接改成绝对地址；维护者的待办文档不再随包发行；构建期文档落盘改为每次构建都跑，避免只改文档时把上一版文档打进发行包。",
-  "notes_en": "0.4.2: Address, documentation and package fixes. The Gitee defaults for the official script catalog and the update check now hit the CDN directly, since the old form redirected to a time-limited signed URL that eventually stopped working. The bundled script dev guide is resynced with the script repository (and its README/LICENSE links made absolute, they pointed at files missing from docs), the maintainer to-do list no longer ships in the package, and the build now stages the shipped docs on every build so a docs-only change can no longer ship the previous copy.",
-  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.4.2/AHKDeck_0.4.2.zip",
-  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.4.2/AHKDeck_0.4.2.zip"
+  "notes": "0.4.3：修复包模式脚本（硬件信息）一律报“打不开 zip 包（文件损坏或不是 zip）”。安装器把包下载成“<名>.zip.part”，而解压交给的是 Windows 自带的压缩文件夹组件，它只认 .zip 扩展名——内容是合法 zip 也打不开，于是被显示成“文件损坏”。单文件脚本不走这条路径，所以只有硬件信息这一个包模式脚本失败。现在包统一下到 temp\\work\\package-<pid>.zip，解压层自己也会把非 .zip 名字归一化，任何调用方都不必再记这条规则。另外下载失败会显示真实原因（HTTP 状态、截断字节数），不再一律说“网络中断或安装目录不可写”。",
+  "notes_en": "0.4.3: fixes package-mode scripts (Hardware Info) always failing with \"cannot open the zip (corrupt or not a zip)\". The installer saved the download as \"<name>.zip.part\", but extraction is delegated to the Windows compressed-folder shell extension, which only recognises the .zip extension - a perfectly valid archive under any other name cannot be opened, and the generic failure surfaces as \"corrupt file\". Single-file scripts never take that path, which is why only Hardware Info (the one package-mode script) failed. Packages now land in temp\\work\\package-<pid>.zip, and the extraction layer normalises any non-.zip name itself, so no caller has to know the rule. Download failures also report the real reason (HTTP status, truncated byte counts) instead of the blanket \"network interrupted or install folder not writable\".",
+  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.4.3/AHKDeck_0.4.3.zip",
+  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.4.3/AHKDeck_0.4.3.zip"
 }

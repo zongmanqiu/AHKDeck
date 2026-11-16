@@ -94,8 +94,11 @@ using DownloadProgress = std::function<void(long long, long long)>;
 // Download `aUrl` to `aSavePathUtf8` (UTF-8, may contain Chinese). Wide file
 // APIs throughout, so a Chinese install directory works. Returns true on
 // success; a failed/truncated transfer leaves no partial file behind.
+// aErrorOut (optional) receives the real reason - HTTP status, truncation
+// sizes, write failure - because "download failed" alone cannot tell a dead
+// link from a read-only folder, and the installer used to drop that detail.
 bool DownloadFile(const std::string &aUrl, const std::string &aSavePathUtf8,
-	DownloadProgress aProgress = nullptr);
+	DownloadProgress aProgress = nullptr, std::string *aErrorOut = nullptr);
 
 // Writes ahkdeck_update.bat. Once the app exits, the bat kills this
 // installation's AHKDeck.exe, extracts the zip, robocopies over the install,

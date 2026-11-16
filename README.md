@@ -1,7 +1,7 @@
 # AHKDeck
 
-**[⬇️ 下载 0.4.2 (Gitee)](https://gitee.com/qiuzongman/AHKDeck/releases/download/0.4.2/AHKDeck_0.4.2.zip)**
-｜ **[⬇️ 下载 0.4.2 (GitHub)](https://github.com/zongmanqiu/AHKDeck/releases/download/0.4.2/AHKDeck_0.4.2.zip)**
+**[⬇️ 下载 0.4.3 (Gitee)](https://gitee.com/qiuzongman/AHKDeck/releases/download/0.4.3/AHKDeck_0.4.3.zip)**
+｜ **[⬇️ 下载 0.4.3 (GitHub)](https://github.com/zongmanqiu/AHKDeck/releases/download/0.4.3/AHKDeck_0.4.3.zip)**
 
 
 > AHKDeck: [Gitee](https://gitee.com/qiuzongman/AHKDeck)

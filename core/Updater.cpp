@@ -701,13 +701,20 @@ UpdateCheckResult CheckUpdate(const std::string &aCurrentVersion,
 }
 
 bool DownloadFile(const std::string &aUrl, const std::string &aSavePathUtf8,
-	DownloadProgress aProgress)
+	DownloadProgress aProgress, std::string *aErrorOut)
 {
 	const std::wstring path = Utf8ToWide(aSavePathUtf8);
 	if (path.empty())
+	{
+		if (aErrorOut)
+			*aErrorOut = "保存路径无法转换";
 		return false;
+	}
 	std::string error;
-	return HttpDownload(aUrl, path, 60000, error, aProgress);
+	const bool ok = HttpDownload(aUrl, path, 60000, error, aProgress);
+	if (!ok && aErrorOut)
+		*aErrorOut = error;
+	return ok;
 }
 
 // Generates the updater batch. Proven recipe:
