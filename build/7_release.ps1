@@ -265,11 +265,12 @@ if ($Only -ne 'github' -and $giteeOwner -and -not $failures.Count) {
         Info "Gitee release $($rel.id) created"
     }
     $leaf = Split-Path -Leaf $zip
-    # curl reads the token from stdin config: it never appears in argv or logs.
+    # curl.exe reads the token from stdin config: it never appears in argv or
+    # logs. Use curl.exe, NOT curl - PowerShell aliases curl to Invoke-WebRequest.
     $config = "url = `"$base/$($rel.id)/attach_files`"`n" +
         "header = `"Authorization: Bearer $script:giteeToken`"`n" +
         "form = `"file=@$($zip -replace '\\','/')`"`n"
-    $attach = $config | & curl -s -K -
+    $attach = $config | & curl.exe -s -K -
     try {
         $a = $attach | ConvertFrom-Json
         Info "Gitee asset: $($a.browser_download_url)"
