@@ -1,8 +1,8 @@
 {
-  "version": "0.3.6",
+  "version": "0.3.7",
   "published": "2026-11-16",
-  "notes": "0.3.6：脚本列表修正、MCP 交互验证与像素回归、多文件脚本包、仓库清整。① 表头字号统一；② 列宽下限容纳表头与排序箭头，点表头不再位移；③ 启动时按脚本名升序并显示 ↑；④ MCP 新增 send_input 与 ui_diff，capture_ui 支持等画面稳定（工具 16 → 18）；⑤ 脚本支持 zip 多文件包发行（下载-校验-解压-整目录安装，附属文件随包）；⑥ 移除已停用的 AHK_H 补丁归档与退役门禁脚本，内核口径统一官方 2.0.31。",
-  "notes_en": "0.3.6: Script-list fixes, MCP interaction/pixel tools, zip script packages, repo cleanup. (1) Unified header font; (2) wider column minimums; (3) opens sorted by name; (4) new MCP tools send_input and ui_diff with stable capture, tools 16 -> 18; (5) scripts can now ship as zip packages with companion files (download - verify - extract - directory swap install); (6) removed retired AHK_H archives, kernel uniformly official 2.0.31.",
-  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.3.6/AHKDeck_0.3.6.zip",
-  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.3.6/AHKDeck_0.3.6.zip"
+  "notes": "0.3.7：MCP 开箱化。新增 --mcp-init 打印 WorkBuddy / Claude Code / Cursor 配置块；--mcp-install 直接合并写入对应客户端配置（写前确认、自动备份、保留其它 MCP 项），非交互环境加 --yes。",
+  "notes_en": "0.3.7: One-step MCP setup. --mcp-init prints ready-to-paste config blocks for WorkBuddy / Claude Code / Cursor; --mcp-install merges the stdio endpoint into the agent config with confirmation, backup and no clobbering (use --yes for non-interactive runs).",
+  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.3.7/AHKDeck_0.3.7.zip",
+  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.3.7/AHKDeck_0.3.7.zip"
 }
