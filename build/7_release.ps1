@@ -46,15 +46,15 @@ $sectionMatch = [regex]::Match($history, '(?ms)^## ' + [regex]::Escape($version)
     '.*?(?=^## |\z)')
 if (-not $sectionMatch.Success) { Fail "HISTORY.md has no section for $version" }
 $notes = $sectionMatch.Value.Trim()
-$notes = $notes -replace '(?i)[A-Za-z]:\\Users\\[^\s)"，。]+', '(local path omitted)'
-$notes = $notes -replace '(?i)[A-Za-z]:[\\/][^\s)"，。]+', '(local path omitted)'
+$notes = $notes -replace '(?i)[A-Za-z]:\\Users\\[^\s)"]+', '(local path omitted)'
+$notes = $notes -replace '(?i)[A-Za-z]:[\\/][^\s)"]+', '(local path omitted)'
 $notes = $notes -replace '[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}', '(email omitted)'
 $notesPath = Join-Path $TempDir ("release_notes_$version.md")
 [IO.File]::WriteAllText($notesPath, $notes + "`n", (New-Object Text.UTF8Encoding($false)))
 Info "notes: HISTORY.md section -> $notesPath ($($notes.Length) chars, scrubbed)"
 
-if ($notes -match '未发布' -and $Apply) {
-    Fail 'HISTORY section still says 未发布; bump/release it before -Apply'
+if ($notes -match ([string]::Concat([char]0x672A, [char]0x53D1, [char]0x5E03)) -and $Apply) {
+    Fail 'HISTORY section is marked unreleased; remove the marker before -Apply'
 }
 
 # --- git facts: branch, clean tree, HEAD pushed, remote identity ------------
