@@ -59,7 +59,8 @@ if ($notes -match ([string]::Concat([char]0x672A, [char]0x53D1, [char]0x5E03)) -
 
 # --- git facts: branch, clean tree, HEAD pushed, remote identity ------------
 function Invoke-Git([string[]]$Arguments) {
-    & git -C $Root @Arguments 2>&1
+    $out = @(& git -C $Root @Arguments 2>&1)
+    return (@($out) -join "`n")
 }
 $branch = (Invoke-Git @('rev-parse', '--abbrev-ref', 'HEAD')).Trim()
 $head = (Invoke-Git @('rev-parse', 'HEAD')).Trim()
