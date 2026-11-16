@@ -215,7 +215,17 @@ int FieldHeight(const InfoField &aField)
 {
 	// The value already carries its own newlines, so every field - including
 	// the selectable path - is as tall as the lines it was broken into.
-	return kLineH * LinesFor(aField.value);
+	// kLineH is the CONTROL row pitch (26 px): one line of text plus the
+	// breathing room that separates two rows. Charging a wrapped value that
+	// pitch for EVERY line left (kLineH - text line height) of dead space per
+	// extra line under the field, so a 4-line value pushed the row below it
+	// visibly further away than a single-line neighbour. Keep one row pitch for
+	// the first line and add the real text line height for each extra line.
+	const int lines = LinesFor(aField.value);
+	if (lines <= 1)
+		return kLineH;
+	fl_font(FL_HELVETICA, SubTextSize());
+	return kLineH + (lines - 1) * fl_height();
 }
 
 struct Placed
