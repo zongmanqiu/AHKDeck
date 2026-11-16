@@ -596,10 +596,18 @@ find_program(AHKDECK_PYTHON NAMES python python3)
 if(NOT AHKDECK_PYTHON)
     message(WARNING "python not found: the mcp gates (m064) are NOT registered")
 else()
+    # m217: the fake server emits ensure_ascii=False JSON. Without UTF-8 mode a
+    # PowerShell caller (no PYTHONUTF8/PYTHONIOENCODING in its environment) makes
+    # python encode stdout as cp936 and the gate blocks in readline() until the
+    # ctest timeout. Make the tests own their environment instead of relying on
+    # the shell that happened to launch ctest.
+    set(MCP_TEST_ENV "PYTHONUTF8=1;PYTHONIOENCODING=utf-8")
+
     add_test(NAME mcp_selftest COMMAND "${AHKDECK_PYTHON}"
         "${CMAKE_SOURCE_DIR}/test/mcp_gate/mcp_client.py" --selftest "${AHKDECK_MCP_DIR}")
     set_tests_properties(mcp_selftest PROPERTIES
         WORKING_DIRECTORY "${AHKDECK_MCP_DIR}"
+        ENVIRONMENT "${MCP_TEST_ENV}"
         TIMEOUT 120)
 
     add_test(NAME mcp_stdio COMMAND "${AHKDECK_PYTHON}"
@@ -607,6 +615,7 @@ else()
         "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/AHKDeck.exe" "${AHKDECK_MCP_DIR}")
     set_tests_properties(mcp_stdio PROPERTIES
         WORKING_DIRECTORY "${AHKDECK_MCP_DIR}"
+        ENVIRONMENT "${MCP_TEST_ENV}"
         LABELS "gui"
         TIMEOUT 180)
 endif()
