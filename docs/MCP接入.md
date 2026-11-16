@@ -11,6 +11,22 @@ Claude Desktop、Cursor…）之后，AI 可以：
 
 于是「AI 写 → 跑 → 读错 → 改 → 再跑」这条闭环不需要人复制粘贴。
 
+## 零配置接入（0.3.6 起）
+
+在解压后的程序目录打开终端，运行：
+
+```bat
+AHKDeck.exe --mcp-init                  :: 打印三种客户端的现成配置块，自己粘贴
+AHKDeck.exe --mcp-install workbuddy     :: 或直接写入 WorkBuddy 配置
+AHKDeck.exe --mcp-install claude        :: Claude Code（~/.claude.json）
+AHKDeck.exe --mcp-install cursor        :: Cursor（~/.cursor/mcp.json）
+```
+
+`--mcp-install` 写入前显示目标与当前条目并请求确认；已有配置会保留其它 MCP 项和未知字段，
+并留一份 `.bak` 备份。非交互脚本里加 `--yes` 可跳过确认。命令只写**本机用户目录**，
+不碰仓库、不写任何密钥。写完后重启客户端；若客户端要求，在连接器管理页对该服务点 **Trust**。
+手动配置仍然有效，下方第一节即配置块原文。
+
 ## 一、两个字段
 
 ```json

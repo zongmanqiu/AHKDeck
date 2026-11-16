@@ -20,6 +20,11 @@
 //     is JSONL: the kernel's load-error records, then {"ok":...,"rc":...}. This
 //     only works in a fresh process (the kernel refuses a second script once one
 //     is loaded), so the deck's validate_editor tool spawns this mode per call.
+//   * "AHKDeck.exe --mcp-init" -> prints ready-to-paste MCP config blocks for
+//     WorkBuddy / Claude Code / Cursor (m214); no file is touched.
+//   * "AHKDeck.exe --mcp-install <workbuddy|claude|cursor> [--yes]" -> merges
+//     our stdio endpoint into that agent's own config, preserving all other
+//     entries; shows the entry and asks for confirmation unless --yes.
 //   * "AHKDeck.exe --mcp-stdio" -> the same deck, plus an MCP endpoint on
 //     stdin/stdout (m064): newline-delimited JSON-RPC exposing the script tools,
 //     so an external agent can write into the editing area, run it, read the
@@ -39,11 +44,13 @@
 
 #include "core/ResourceStats.h"
 #include "core/Version.h"
+#include "core/Json.h"
 #include "engine/DeckEngine.h"
 #include "ui/DeckUI.h"
 #include "ui/NativeHooks.h"
 
 #include <windows.h>
+#include <shlobj.h>
 #include <dbghelp.h>
 #include <tlhelp32.h>
 
@@ -574,6 +581,210 @@ int RunStats()
 
 } // namespace
 
+// ---------------------------------------------------------------------------
+// m214: MCP 开箱化. --mcp-init prints config blocks; --mcp-install merges our
+// stdio endpoint into an agent's own config, never touching project files or
+// credentials. The endpoint identity is always this very exe (not a path typed
+// by hand), so a moved installation is just another --mcp-init run.
+// ---------------------------------------------------------------------------
+namespace {
+
+std::string Utf8OfWide(const std::wstring &aText)
+{
+	if (aText.empty())
+		return std::string();
+	const int n = WideCharToMultiByte(CP_UTF8, 0, aText.c_str(), (int)aText.size(),
+		nullptr, 0, nullptr, nullptr);
+	if (n <= 0)
+		return std::string();
+	std::string out((size_t)n, '\0');
+	WideCharToMultiByte(CP_UTF8, 0, aText.c_str(), (int)aText.size(), out.data(), n,
+		nullptr, nullptr);
+	return out;
+}
+
+bool ReadTextFileWide(const std::wstring &aPath, std::string &aOut)
+{
+	FILE *file = nullptr;
+	if (_wfopen_s(&file, aPath.c_str(), L"rb") != 0 || !file)
+		return false;
+	char buf[4096];
+	size_t got = 0;
+	while ((got = std::fread(buf, 1, sizeof(buf), file)) > 0)
+		aOut.append(buf, got);
+	const bool ok = std::ferror(file) == 0;
+	std::fclose(file);
+	// Notepad and Windows PowerShell 5 write UTF-8 with a BOM; JSON parsers
+	// reject those three bytes, so strip them at the file boundary.
+	if (aOut.size() >= 3 && (unsigned char)aOut[0] == 0xEF
+		&& (unsigned char)aOut[1] == 0xBB && (unsigned char)aOut[2] == 0xBF)
+		aOut.erase(0, 3);
+	return ok;
+}
+
+bool WriteTextFileWide(const std::wstring &aPath, const std::string &aText)
+{
+	FILE *file = nullptr;
+	if (_wfopen_s(&file, aPath.c_str(), L"wb") != 0 || !file)
+		return false;
+	const bool ok = std::fwrite(aText.data(), 1, aText.size(), file) == aText.size();
+	std::fclose(file);
+	return ok;
+}
+
+bool EnsureParentDir(const std::wstring &aPath)
+{
+	const size_t slash = aPath.find_last_of(L"\\/");
+	if (slash == std::wstring::npos)
+		return true;
+	const std::wstring dir = aPath.substr(0, slash);
+	if (dir.empty())
+		return true;
+	// SHCreateDirectoryExW is in shell32 (already linked by the deck UI).
+	const int rc = SHCreateDirectoryExW(nullptr, dir.c_str(), nullptr);
+	return rc == ERROR_SUCCESS || rc == ERROR_ALREADY_EXISTS;
+}
+
+struct AgentConfig
+{
+	const wchar_t *name;
+	const wchar_t *leaf; // under %USERPROFILE%
+};
+
+const AgentConfig kAgents[] = {
+	{ L"workbuddy", L"\\.workbuddy\\mcp.json" },
+	{ L"claude", L"\\.claude.json" },
+	{ L"cursor", L"\\.cursor\\mcp.json" },
+};
+
+const AgentConfig *FindAgent(const std::wstring &aName)
+{
+	for (const AgentConfig &a : kAgents)
+		if (aName == a.name)
+			return &a;
+	return nullptr;
+}
+
+ahkdeck::Json McpServerConfig(const std::string &aExeUtf8)
+{
+	ahkdeck::Json server = ahkdeck::Json::MakeObject();
+	server.Set("command", ahkdeck::Json(aExeUtf8));
+	ahkdeck::Json args = ahkdeck::Json::MakeArray();
+	args.Push(ahkdeck::Json("--mcp-stdio"));
+	server.Set("args", std::move(args));
+	return server;
+}
+
+ahkdeck::Json McpConfig(const std::string &aExeUtf8)
+{
+	ahkdeck::Json servers = ahkdeck::Json::MakeObject();
+	servers.Set("ahkdeck", McpServerConfig(aExeUtf8));
+	ahkdeck::Json root = ahkdeck::Json::MakeObject();
+	root.Set("mcpServers", std::move(servers));
+	return root;
+}
+
+std::wstring ConfigPath(const AgentConfig &aAgent)
+{
+	wchar_t home[MAX_PATH] = { 0 };
+	const DWORD n = GetEnvironmentVariableW(L"USERPROFILE", home, MAX_PATH);
+	if (n == 0 || n >= MAX_PATH)
+		return std::wstring();
+	return std::wstring(home) + aAgent.leaf;
+}
+
+void PrintMcpInit(const std::string &aExeUtf8)
+{
+	std::printf("AHKDeck MCP - paste the block for your agent (Trust it in the connector UI first)\n");
+	for (const AgentConfig &a : kAgents)
+	{
+		std::printf("\n[%s] %ls\n", Utf8OfWide(a.name).c_str(), a.leaf);
+		std::printf("%s\n", McpConfig(aExeUtf8).DumpPretty().c_str());
+	}
+	std::printf("\nInstall directly: AHKDeck.exe --mcp-install <workbuddy|claude|cursor>\n");
+}
+
+int InstallMcpConfig(const AgentConfig &aAgent, const std::string &aExeUtf8,
+	bool aAssumeYes)
+{
+	const std::wstring path = ConfigPath(aAgent);
+	if (path.empty())
+	{
+		std::printf("AHKDeck: USERPROFILE is not set; cannot locate the agent config\n");
+		return 1;
+	}
+	ahkdeck::Json root = ahkdeck::Json::MakeObject();
+	std::string oldText;
+	if (ReadTextFileWide(path, oldText) && !oldText.empty())
+	{
+		std::string err;
+		if (!ahkdeck::Json::Parse(oldText, root, err))
+		{
+			std::printf("AHKDeck: not JSON, refusing to overwrite: %ls (%s)\n",
+				path.c_str(), err.c_str());
+			return 1;
+		}
+	}
+	const bool had = root.Has("mcpServers") && root["mcpServers"].Has("ahkdeck");
+	// Rebuild from Items() so every unknown key survives the merge.
+	const auto items = root.Items();
+	ahkdeck::Json merged = ahkdeck::Json::MakeObject();
+	for (const auto &kv : items)
+		if (kv.first != "mcpServers")
+			merged.Set(kv.first, kv.second);
+	std::vector<std::pair<std::string, ahkdeck::Json>> servers;
+	if (root.Has("mcpServers"))
+		servers = root["mcpServers"].Items();
+	ahkdeck::Json mergedServers = ahkdeck::Json::MakeObject();
+	for (const auto &kv : servers)
+		if (kv.first != "ahkdeck")
+			mergedServers.Set(kv.first, kv.second);
+	mergedServers.Set("ahkdeck", McpServerConfig(aExeUtf8));
+	merged.Set("mcpServers", std::move(mergedServers));
+
+	std::printf("AHKDeck MCP install\n  target: %ls\n  entry:  %s (was %s)\n  args:   --mcp-stdio\n",
+		path.c_str(), aExeUtf8.c_str(), had ? "present, will be replaced" : "absent");
+	if (!aAssumeYes)
+	{
+		DWORD mode = 0;
+		if (!GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &mode))
+		{
+			std::printf("No interactive stdin. Re-run with --yes to confirm.\n");
+			return 1;
+		}
+		std::printf("Write? [y/N] ");
+		std::fflush(stdout);
+		char answer[16] = { 0 };
+		if (!std::fgets(answer, sizeof(answer), stdin)
+			|| (answer[0] != 'y' && answer[0] != 'Y'))
+		{
+			std::printf("Cancelled; nothing written.\n");
+			return 0;
+		}
+	}
+	if (!EnsureParentDir(path))
+	{
+		std::printf("AHKDeck: cannot create parent directory of %ls\n", path.c_str());
+		return 1;
+	}
+	if (!oldText.empty())
+	{
+		const std::wstring backup = path + L".bak";
+		(void)CopyFileW(path.c_str(), backup.c_str(), FALSE);
+		std::printf("  backup: %ls\n", backup.c_str());
+	}
+	const std::string text = merged.DumpPretty() + "\n";
+	if (!WriteTextFileWide(path, text))
+	{
+		std::printf("AHKDeck: cannot write %ls\n", path.c_str());
+		return 1;
+	}
+	std::printf("OK. Restart the agent; if it asks, Trust the new MCP server.\n");
+	return 0;
+}
+
+} // namespace
+
 int main()
 {
 	int argc = 0;
@@ -611,6 +822,32 @@ int main()
 	{
 		std::printf("AHKDeck %s\n", ahkdeck::VersionString());
 		result = 0;
+	}
+	else if (argc > 1 && std::wcscmp(argv[1], L"--mcp-init") == 0)
+	{
+		wchar_t module[MAX_PATH] = { 0 };
+		const DWORD n = GetModuleFileNameW(nullptr, module, MAX_PATH);
+		PrintMcpInit(Utf8OfWide(std::wstring(module, n)));
+		result = 0;
+	}
+	else if (argc > 1 && std::wcscmp(argv[1], L"--mcp-install") == 0)
+	{
+		const AgentConfig *agent = argc > 2 ? FindAgent(argv[2]) : nullptr;
+		if (!agent)
+		{
+			std::printf("usage: AHKDeck.exe --mcp-install <workbuddy|claude|cursor> [--yes]\n");
+			result = 2;
+		}
+		else
+		{
+			bool yes = false;
+			for (int i = 3; i < argc; ++i)
+				if (std::wcscmp(argv[i], L"--yes") == 0)
+					yes = true;
+			wchar_t module[MAX_PATH] = { 0 };
+			const DWORD n = GetModuleFileNameW(nullptr, module, MAX_PATH);
+			result = InstallMcpConfig(*agent, Utf8OfWide(std::wstring(module, n)), yes);
+		}
 	}
 	else if (argc > 1 && std::wcscmp(argv[1], L"--quit") == 0)
 	{
@@ -652,7 +889,7 @@ int main()
 	}
 	else if (argc > 1)
 	{
-		std::printf("usage: AHKDeck.exe [--version | --stats | --quit [pid] | --validate <script.ahk> | --mcp-stdio | [--journal] --run <script.ahk> [args...]]\n");
+		std::printf("usage: AHKDeck.exe [--version | --stats | --mcp-init | --mcp-install <agent> [--yes] | --quit [pid] | --validate <script.ahk> | --mcp-stdio | [--journal] --run <script.ahk> [args...]]\n");
 		result = 0;
 	}
 	else

@@ -517,6 +517,12 @@ set_tests_properties(journal PROPERTIES
     WORKING_DIRECTORY "${AHKDECK_GATE_DIR}"
     ENVIRONMENT "AHKDECK_KERNEL=${AHKDECK_KERNEL_EXE}")
 
+# m214: CLI config helper - --mcp-init prints three parseable agent blocks,
+# --mcp-install merges into a temporary USERPROFILE without clobbering others.
+add_test(NAME mcp_init COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+    -File "${CMAKE_SOURCE_DIR}/test/shipping_gate/gate_mcp_init.ps1"
+    -Exe "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/AHKDeck.exe")
+
 # m013: the shipped exe must not be a console image (rules-standing.md 13).
 # The gate self-tests against session_gate.exe, which IS console subsystem, so a
 # parser that calls everything "GUI" fails instead of passing vacuously.

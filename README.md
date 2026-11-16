@@ -56,11 +56,16 @@ AHKDeck.exe --version
 AHKDeck.exe --run Scripts\鼠标左键双击最小间隔.ahk
 AHKDeck.exe --journal --run Scripts\鼠标左键双击最小间隔.ahk
 AHKDeck.exe --mcp-stdio
+AHKDeck.exe --mcp-init
+AHKDeck.exe --mcp-install workbuddy
 AHKDeck.exe --quit 目标实例PID
 ```
 
 `--journal` 输出逐行 JSON 事件；`--run` 每次运行一个脚本，可在脚本路径后传参。
-`--quit` 可指定实例 PID，不指定则通知所有工作台退出。MCP 接入细节见 [agent/README.md](agent/README.md)。
+`--quit` 可指定实例 PID，不指定则通知所有工作台退出。
+`--mcp-init` 打印 WorkBuddy / Claude Code / Cursor 的现成配置；`--mcp-install <agent>` 直接
+合并进该客户端配置（写前确认、自动备份、不覆盖其它 MCP 项），非交互环境加 `--yes`。
+MCP 接入细节见 [agent/README.md](agent/README.md)。
 
 ## 构建
 
