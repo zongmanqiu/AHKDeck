@@ -19,7 +19,11 @@ param(
     [ValidateSet('gitee', 'github')][string]$Only = '',
     [switch]$SkipBuild
 )
-$ErrorActionPreference = 'Stop'
+# 'Stop' makes PowerShell 5.1 treat ANY native-command stderr as a terminating
+# error: git push's remote chatter and `gh release view` on a missing release
+# would abort the script before the $LASTEXITCODE checks below. This pipeline
+# decides success from $LASTEXITCODE / $failures, not from exceptions.
+$ErrorActionPreference = 'Continue'
 
 $Root = Split-Path -Parent $PSScriptRoot                 # .main
 $Deck = Split-Path -Parent $Root                         # AHKDeck
