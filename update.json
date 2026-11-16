@@ -1,8 +1,8 @@
 {
-  "version": "0.4.1",
+  "version": "0.4.2",
   "published": "2026-11-17",
-  "notes": "0.4.1：两处修复。脚本详情窗多行字段（如「入口」）底部留白过大，把「历史版本」推得比其它项远，已改为按真实文字行高排版；官方脚本的历史清单 Gitee 链接改为直连 CDN，旧地址会跳转到带时效签名的地址，过期即打不开。",
-  "notes_en": "0.4.1: Two fixes. Multi-line fields in the script detail dialog (e.g. Entry) left too much blank space below, pushing 版本历史 further away than other rows; heights now follow the real text line height. And the Gitee links in official script history lists now point directly at the CDN, since the old form redirected to a time-limited signed URL that eventually stopped working.",
-  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.4.1/AHKDeck_0.4.1.zip",
-  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.4.1/AHKDeck_0.4.1.zip"
+  "notes": "0.4.2：地址、文档与发行包的修正。官方脚本清单和更新检查的 Gitee 默认地址改为直连 CDN，旧地址会跳转到带时效签名的地址，过期即打不开；随包《开发指南》重新对齐脚本仓库真源，副本里指向仓库 README／LICENSE 的链接改成绝对地址；维护者的待办文档不再随包发行；构建期文档落盘改为每次构建都跑，避免只改文档时把上一版文档打进发行包。",
+  "notes_en": "0.4.2: Address, documentation and package fixes. The Gitee defaults for the official script catalog and the update check now hit the CDN directly, since the old form redirected to a time-limited signed URL that eventually stopped working. The bundled script dev guide is resynced with the script repository (and its README/LICENSE links made absolute, they pointed at files missing from docs), the maintainer to-do list no longer ships in the package, and the build now stages the shipped docs on every build so a docs-only change can no longer ship the previous copy.",
+  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.4.2/AHKDeck_0.4.2.zip",
+  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.4.2/AHKDeck_0.4.2.zip"
 }

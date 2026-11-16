@@ -12,7 +12,7 @@ if(CMAKE_GENERATOR MATCHES "Makefiles")
     set(CMAKE_DEPENDS_USE_COMPILER FALSE)
 endif()
 
-project(AHKDeck VERSION 0.4.1 LANGUAGES C CXX RC)
+project(AHKDeck VERSION 0.4.2 LANGUAGES C CXX RC)
 
 # Static CRT (/MT): the shipped exe must run with ZERO VC++ redistributable
 # dependencies ("单 exe 即装即用"). CMP0091 NEW lets CMAKE_MSVC_RUNTIME_LIBRARY
@@ -221,47 +221,62 @@ target_sources(AHKDeck PRIVATE "${CMAKE_BINARY_DIR}/version_info.rc")
 # m119: LICENSE and THIRD-PARTY-NOTICES.md are part of the distribution as well,
 # so the .build folder is already the complete release whitelist (see
 # build/打包清单.md); the packaging step only copies, never invents files.
-add_custom_command(TARGET AHKDeck POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_SOURCE_DIR}/docs" "$<TARGET_FILE_DIR:AHKDeck>/docs"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_SOURCE_DIR}/licenses" "$<TARGET_FILE_DIR:AHKDeck>/licenses"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/LICENSE" "$<TARGET_FILE_DIR:AHKDeck>/LICENSE"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/THIRD-PARTY-NOTICES.md" "$<TARGET_FILE_DIR:AHKDeck>/THIRD-PARTY-NOTICES.md"
-    COMMENT "Staging docs, licenses and notices next to AHKDeck.exe")
-
-# m146: the downloader is local-first, so a catalog copy must ship with the
-# exe. The script repository is the single source of truth; the build only
-# copies it, never invents or edits it. Missing repo (a standalone .main
-# checkout) simply leaves the dialog asking for a manual 刷新.
+#
+# m224: staging is an always-run target, not AHKDeck's POST_BUILD. A docs-only
+# or catalog-only change never relinks the exe, so POST_BUILD did not fire and
+# 6_package.ps1 zipped whatever stale copy .build already had (hit twice in the
+# 0.4.x cycle). Every command below is idempotent (copy_if_different /
+# copy_directory), so running them on each build costs milliseconds.
 set(AHKDECK_SCRIPT_CATALOG "${CMAKE_SOURCE_DIR}/../.ahk-v2-scripts/scripts.json")
-if(EXISTS "${AHKDECK_SCRIPT_CATALOG}")
-    add_custom_command(TARGET AHKDeck POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${AHKDECK_SCRIPT_CATALOG}" "$<TARGET_FILE_DIR:AHKDeck>/docs/scripts.json"
-        COMMENT "Staging the official script catalog next to AHKDeck.exe")
-endif()
+set(AHKDECK_KERNEL_OFFICIAL "${CMAKE_SOURCE_DIR}/../.temp/kernel_official/AutoHotkey64.exe")
 
+# m146: the downloader is local-first, so a catalog copy must ship with the exe.
+# The script repository is the single source of truth; the build only copies it,
+# never invents or edits it. Missing repo (a standalone .main checkout) simply
+# leaves the dialog asking for a manual 刷新.
+#
 # m192 P4: exactly ONE interpreter PE ships next to AHKDeck.exe. The engine
 # spawns <exeDir>\AutoHotkey64.exe once per session (NO_TRAY + JSON error/menu
 # bridges), and core/ExeCompiler.cpp bundles every compiled script into a copy
 # of that very image - the editor and the compiled exe are the same interpreter.
 # The old m172/m190 layout staged a second AutoHotkey64.exe under tools\ for the
 # compiler and an AutoHotkey64.dll for the in-process kernel; both were retired
-# with the m192 single-kernel plan. Same discipline as the script catalog: the build only copies, never
-# invents. A standalone .main checkout without .temp\kernel_official simply
-# leaves the deck reporting a missing kernel at run time, and the shipping gate
-# fails the package closed.
-set(AHKDECK_KERNEL_OFFICIAL "${CMAKE_SOURCE_DIR}/../.temp/kernel_official/AutoHotkey64.exe")
+# with the m192 single-kernel plan. Same discipline as the script catalog: the
+# build only copies, never invents. A standalone .main checkout without
+# .temp\kernel_official simply leaves the deck reporting a missing kernel at run
+# time, and the shipping gate fails the package closed.
+# The staging destination is spelled out instead of $<TARGET_FILE_DIR:AHKDeck>:
+# that generator expression makes this target depend on the exe, which would
+# close a cycle with the dependency below. RUNTIME_OUTPUT_DIRECTORY is .build
+# for every config (see the top of this file).
+set(AHKDECK_STAGE_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+set(AHKDECK_STAGE_COMMANDS
+    # copy_directory never deletes, so a doc removed from docs\ would linger in
+    # .build\docs and keep shipping. Wipe the shipped set, then re-copy it.
+    COMMAND ${CMAKE_COMMAND} -E remove_directory "${AHKDECK_STAGE_DIR}/docs"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${AHKDECK_STAGE_DIR}/docs"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/docs" "${AHKDECK_STAGE_DIR}/docs"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/licenses" "${AHKDECK_STAGE_DIR}/licenses"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/LICENSE" "${AHKDECK_STAGE_DIR}/LICENSE"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/THIRD-PARTY-NOTICES.md" "${AHKDECK_STAGE_DIR}/THIRD-PARTY-NOTICES.md")
+if(EXISTS "${AHKDECK_SCRIPT_CATALOG}")
+    list(APPEND AHKDECK_STAGE_COMMANDS
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${AHKDECK_SCRIPT_CATALOG}" "${AHKDECK_STAGE_DIR}/docs/scripts.json")
+endif()
 if(EXISTS "${AHKDECK_KERNEL_OFFICIAL}")
-    add_custom_command(TARGET AHKDeck POST_BUILD
+    list(APPEND AHKDECK_STAGE_COMMANDS
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${AHKDECK_KERNEL_OFFICIAL}"
-                "$<TARGET_FILE_DIR:AHKDeck>/AutoHotkey64.exe"
-        COMMENT "Staging the single official kernel EXE next to AHKDeck.exe")
+                "${AHKDECK_STAGE_DIR}/AutoHotkey64.exe")
 endif()
+add_custom_target(AHKDeckStage ALL ${AHKDECK_STAGE_COMMANDS}
+    COMMENT "Staging docs, licenses, notices, catalog and kernel next to AHKDeck.exe")
+add_dependencies(AHKDeck AHKDeckStage)
 
 # ----------------------------------------------------------------------------
 # Tests (ctest gate - build/5_test.bat fails on any failing test).
