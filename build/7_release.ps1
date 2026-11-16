@@ -98,12 +98,17 @@ if ($giteeMatch.Success) {
 Info "origin=$remoteUrl"
 Info "gitee=$giteeOwner/$giteeRepo github=$githubRepo"
 
-$remoteHead = (Invoke-Git @('ls-remote', 'origin', 'refs/heads/' + $branch))
+# PowerShell parses @('a', 'b' + $v) as THREE elements ('a','b',$v), not two.
+# Build the ref names first or git gets a broken argument list and the gate
+# wrongly reports "HEAD is not on origin" / "tag missing".
+$headRef = 'refs/heads/' + $branch
+$tagRef = 'refs/tags/' + $version
+$remoteHead = (Invoke-Git @('ls-remote', 'origin', $headRef))
 if ($remoteHead -notmatch ([regex]::Escape($head))) {
     Fail 'HEAD is not on origin; push first'
 }
-$localTag = (Invoke-Git @('rev-parse', '-q', '--verify', 'refs/tags/' + $version))
-$remoteTag = (Invoke-Git @('ls-remote', '--tags', 'origin', 'refs/tags/' + $version))
+$localTag = (Invoke-Git @('rev-parse', '-q', '--verify', $tagRef))
+$remoteTag = (Invoke-Git @('ls-remote', '--tags', 'origin', $tagRef))
 Info "tag $version local=$([bool]$localTag) remote=$([bool]$remoteTag)"
 
 $update = Get-Content $UpdatePath -Raw -Encoding UTF8 | ConvertFrom-Json
