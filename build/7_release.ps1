@@ -58,13 +58,13 @@ if ($notes -match ([string]::Concat([char]0x672A, [char]0x53D1, [char]0x5E03)) -
 }
 
 # --- git facts: branch, clean tree, HEAD pushed, remote identity ------------
-function Git([string[]]$Arguments) {
+function Invoke-Git([string[]]$Arguments) {
     & git -C $Root @Arguments 2>&1
 }
-$branch = (Git @('rev-parse', '--abbrev-ref', 'HEAD')).Trim()
-$head = (Git @('rev-parse', 'HEAD')).Trim()
-$dirty = (Git @('status', '--porcelain')).Trim()
-$remoteUrl = (Git @('remote', 'get-url', 'origin')).Trim()
+$branch = (Invoke-Git @('rev-parse', '--abbrev-ref', 'HEAD')).Trim()
+$head = (Invoke-Git @('rev-parse', 'HEAD')).Trim()
+$dirty = (Invoke-Git @('status', '--porcelain')).Trim()
+$remoteUrl = (Invoke-Git @('remote', 'get-url', 'origin')).Trim()
 Info "branch=$branch head=$head"
 if ($branch -notin @('main', 'master')) { Fail "unexpected branch '$branch'" }
 if ($dirty) { Fail "working tree is dirty: $dirty" }
@@ -84,12 +84,12 @@ if ($giteeMatch.Success) {
 Info "origin=$remoteUrl"
 Info "gitee=$giteeOwner/$giteeRepo github=$githubRepo"
 
-$remoteHead = (Git @('ls-remote', 'origin', 'refs/heads/' + $branch))
+$remoteHead = (Invoke-Git @('ls-remote', 'origin', 'refs/heads/' + $branch))
 if ($remoteHead -notmatch ([regex]::Escape($head))) {
     Fail 'HEAD is not on origin; push first'
 }
-$localTag = (Git @('rev-parse', '-q', '--verify', 'refs/tags/' + $version))
-$remoteTag = (Git @('ls-remote', '--tags', 'origin', 'refs/tags/' + $version))
+$localTag = (Invoke-Git @('rev-parse', '-q', '--verify', 'refs/tags/' + $version))
+$remoteTag = (Invoke-Git @('ls-remote', '--tags', 'origin', 'refs/tags/' + $version))
 Info "tag $version local=$([bool]$localTag) remote=$([bool]$remoteTag)"
 
 $update = Get-Content $UpdatePath -Raw -Encoding UTF8 | ConvertFrom-Json
