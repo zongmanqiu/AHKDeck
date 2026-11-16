@@ -1,8 +1,8 @@
 {
-  "version": "0.3.7",
-  "published": "2026-11-16",
-  "notes": "0.3.7：MCP 开箱化。新增 --mcp-init 打印 WorkBuddy / Claude Code / Cursor 配置块；--mcp-install 直接合并写入对应客户端配置（写前确认、自动备份、保留其它 MCP 项），非交互环境加 --yes。",
-  "notes_en": "0.3.7: One-step MCP setup. --mcp-init prints ready-to-paste config blocks for WorkBuddy / Claude Code / Cursor; --mcp-install merges the stdio endpoint into the agent config with confirmation, backup and no clobbering (use --yes for non-interactive runs).",
-  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.3.7/AHKDeck_0.3.7.zip",
-  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.3.7/AHKDeck_0.3.7.zip"
+  "version": "0.4.0",
+  "published": "2026-11-17",
+  "notes": "0.4.0：脚本版本走 release + MCP 自动验收闭环。每个脚本每个版本发到云端 release，信息窗可点「版本历史」链接退回旧版；新增 assert_ui / wait_ui 两个工具（18→20），脚本自测可写成硬断言直接跑。另修源码审查遗留多项（内存泄漏、IME 卸载、文件泵串行化等）。",
+  "notes_en": "0.4.0: Script versions on release + MCP auto-verification. Every script version is published to cloud releases with clickable 版本历史 links to roll back; adds assert_ui / wait_ui (18->20 tools) so script self-tests become hard assertions. Also fixes several source-review findings (memory leaks, IME unload, file-pump serialization).",
+  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.4.0/AHKDeck_0.4.0.zip",
+  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.4.0/AHKDeck_0.4.0.zip"
 }
