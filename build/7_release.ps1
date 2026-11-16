@@ -41,6 +41,19 @@ if (-not $versionMatch.Success) { Fail 'version not found in CMakeLists.txt'; ex
 $version = $versionMatch.Groups[1].Value
 Info "version=$version (CMakeLists.txt)"
 
+# --- version rule: strictly increase over the previous HISTORY section ------
+$histVersions = @([regex]::Matches($history, '(?m)^##\s+([0-9]+\.[0-9]+\.[0-9]+)') |
+    ForEach-Object { $_.Groups[1].Value })
+if ($histVersions.Count -lt 2) {
+    Fail 'HISTORY.md needs at least two version sections'
+} elseif ([version]$histVersions[0] -ne [version]$version) {
+    Fail "HISTORY top section $($histVersions[0]) != CMake version $version"
+} elseif ([version]$version -le [version]$histVersions[1]) {
+    Fail "version $version must strictly increase over previous $($histVersions[1])"
+} else {
+    Info "version rule: $($histVersions[1]) -> $version (strict increase OK)"
+}
+
 # --- release notes: HISTORY top section, privacy-scrubbed -------------------
 $sectionMatch = [regex]::Match($history, '(?ms)^## ' + [regex]::Escape($version) +
     '.*?(?=^## |\z)')
