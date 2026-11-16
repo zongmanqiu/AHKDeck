@@ -1,6 +1,6 @@
 # m004 phase C gate: block AutoHotkey_H-only built-in names in the AHK code we ship.
 #
-# Why: those names do not exist in official AutoHotkey 2.0.30, so a script that
+# Why: those names do not exist in official AutoHotkey v2, so a script that
 # uses one of them silently stops being "runs exactly like official AutoHotkey".
 # The list is generated from the phase A API diff (see ahkh_only_names.txt).
 #

@@ -862,6 +862,11 @@ void Engine::EnqueueStdout(Entry &aEntry, const std::string &aLine)
 
 void Engine::PumpRawFiles()
 {
+	// One pump at a time. Callers span the UI thread and the MCP thread; without
+	// this, both can snapshot the same rawOffset and push the same parsed lines
+	// twice. The session/error locks below stay as-is (held only for the short
+	// commit); this outer lock never nests with a caller-held lock.
+	std::lock_guard<std::mutex> pumpLock(mPumpMutex);
 	// Snapshot (id, path, offset) pairs, then read outside the lock: the child
 	// keeps appending and must never wait on the host's session lock.
 	struct Source
@@ -1449,16 +1454,26 @@ bool Engine::WaitSession(DWORD aSessionId, DWORD aTimeoutMs, DWORD *aExitCode)
 				*aExitCode = it->second.pub.rc;
 			return true; // already reaped: the entry stays queryable
 		}
-		handle = it->second.process;
+		// Own a private handle before leaving the lock. Another thread
+		// (Unload / Sessions -> ReapLocked) may close the entry's handle while
+		// we wait; a bare copy would then be a closed/reused handle. A
+		// duplicated handle stays valid (and keeps the process object alive)
+		// until we close it below.
+		if (!it->second.process ||
+			!DuplicateHandle(GetCurrentProcess(), it->second.process,
+				GetCurrentProcess(), &handle, 0, FALSE, DUPLICATE_SAME_ACCESS))
+			return false; // started but unopenable: never report a code we cannot read
 	}
 
-	if (!handle)
-		return false; // started but unopenable: never report a code we cannot read
-
 	if (WaitForSingleObject(handle, aTimeoutMs) != WAIT_OBJECT_0)
+	{
+		CloseHandle(handle);
 		return false; // still running; keep the entry
+	}
 	DWORD rc = 0;
-	if (!GetExitCodeProcess(handle, &rc))
+	const bool gotCode = GetExitCodeProcess(handle, &rc) != FALSE;
+	CloseHandle(handle);
+	if (!gotCode)
 		return false; // handle lacks query access; never report a guessed code
 
 	std::lock_guard<std::mutex> lock(mSessionsMutex);

@@ -402,6 +402,60 @@ int main()
 		Check(!broken.error.empty(), "object without a scripts array is rejected");
 	}
 
+	// ---- m221: optional id + version-history links ---------------------
+	// The host stays compatible with pre-m221 manifests (no such fields) and
+	// keeps a row alive when a history link is poisoned: only that link is
+	// cleared, the script remains downloadable.
+	{
+		const ahkdeck::CatalogResult full = ahkdeck::ParseScriptCatalog(
+			"[{\"name\":\"历史脚本\",\"version\":\"2.0.0\","
+			"\"id\":\"history-script\","
+			"\"gitee\":\"https://gitee.example/h.ahk\","
+			"\"github\":\"https://github.example/h.ahk\","
+			"\"history\":\"https://gitee.example/raw/master/history/history-script.json\","
+			"\"historyGithub\":\"https://raw.githubusercontent.com/o/r/master/history/history-script.json\"}]");
+		Check(full.error.empty() && full.entries.size() == 1,
+			"m221 manifest with history links parses");
+		if (full.entries.size() == 1)
+		{
+			const ahkdeck::CatalogEntry &e = full.entries[0];
+			Check(e.id == "history-script", "stable ascii id is kept");
+			Check(e.history == "https://gitee.example/raw/master/history/history-script.json",
+				"gitee history URL is kept");
+			Check(e.historyGithub == "https://raw.githubusercontent.com/o/r/master/history/history-script.json",
+				"github history URL is kept");
+		}
+
+		const ahkdeck::CatalogResult old = ahkdeck::ParseScriptCatalog(
+			"[{\"name\":\"老脚本\",\"version\":\"1.0.0\","
+			"\"gitee\":\"https://gitee.example/old.ahk\"}]");
+		Check(old.error.empty() && old.entries.size() == 1,
+			"pre-m221 manifest without id/history still parses");
+		if (old.entries.size() == 1)
+		{
+			const ahkdeck::CatalogEntry &e = old.entries[0];
+			Check(e.id.empty() && e.history.empty() && e.historyGithub.empty(),
+				"absent optional fields stay empty");
+		}
+
+		const ahkdeck::CatalogResult bad = ahkdeck::ParseScriptCatalog(
+			"[{\"name\":\"坏链脚本\",\"version\":\"1.0.0\","
+			"\"gitee\":\"https://gitee.example/bad.ahk\","
+			"\"history\":\"http://plain.example/history.json\","
+			"\"historyGithub\":\"ftp://bad.example/h.json\"}]");
+		Check(bad.error.empty() && bad.entries.size() == 1,
+			"malformed history links do not invalidate the row");
+		if (bad.entries.size() == 1)
+		{
+			const ahkdeck::CatalogEntry &e = bad.entries[0];
+			Check(e.history.empty() && e.historyGithub.empty(),
+				"non-HTTPS history links are cleared");
+			Check(ahkdeck::DownloadUrlFor(e, ahkdeck::ManifestSource::OfficialGitee)
+					== "https://gitee.example/bad.ahk",
+				"row with cleared history links is still downloadable");
+		}
+	}
+
 	// ---- m211: package install ----------------------------------------
 	// Network-free: the zip is built locally by the test's own stored-zip
 	// builder, then handed straight to InstallPackageFromZip (the same

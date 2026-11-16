@@ -25,12 +25,16 @@
 # everything from scratch.
 
 # Official AutoHotkey v2.0.31 - the ONE shipped kernel (m192 P4).
-# Source tarball patched by patches\AutoHotkey-v2.0.31 (four env-gated hooks)
+# Source tarball patched by patches\AutoHotkey-v2.0.31 (five env-gated hooks, incl. m194 AHKDECK_HOST_EXE)
 # and built by build_kernel.bat: Release|x64 ->
 # .temp\kernel_official\AutoHotkey64.exe. The engine spawns it per session and
 # ExeCompiler bundles scripts into a copy of it.
 # sha256 7ed1c04d26b60ea2b4c645768ec9d60d6831d34d53db3d926e451165bd3f467f
 AutoHotkey-v2.0.31-src=https://codeload.github.com/AutoHotkey/AutoHotkey/tar.gz/refs/tags/v2.0.31|source/script.cpp
+
+# m222: official 2.0.31 help file, the CHM source for docs/help-index.json.
+# Same version as the shipped kernel, and deps-governed like every other input.
+AutoHotkey-v2.0.31-help=https://github.com/AutoHotkey/AutoHotkey/releases/download/v2.0.31/AutoHotkey_2.0.31.zip|AutoHotkey.chm
 
 
 

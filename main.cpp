@@ -1,4 +1,4 @@
-// AHKDeck - in-process AHK v2 script deck.
+// AHKDeck - AHK v2 script deck (m192: each script runs in its own child process).
 //
 // Entries:
 //   * "AHKDeck.exe --version"  -> console line, exit 0 (scripted smoke probe,
@@ -8,9 +8,10 @@
 //     so they cannot kill a user's deck). Without pid it targets every deck
 //     (m023: the close box now hides to the tray);
 //   * "AHKDeck.exe [--journal] --run <script> [args...]" -> runs a real .ahk
-//     file inside this process (no second task-manager entry) and streams every
-//     error / warning to this console plus the session's
-//     logs/<script>-<id>-<timestamp>.jsonl. The process exit code is the
+//     file via the official interpreter as a child process (so it DOES show a
+//     second task-manager entry) and streams every error / warning to this
+//     console plus the session's temp/logs/<script>-<id>-<timestamp>.jsonl.
+//     The process exit code is the
 //     script's own official exit code (load failure = 2, just like
 //     AutoHotkey.exe). --journal replaces the human layout with one JSON object
 //     per line (started / kernel records / exited) for machines: AI agents and
@@ -28,7 +29,8 @@
 //   * "AHKDeck.exe --mcp-stdio" -> the same deck, plus an MCP endpoint on
 //     stdin/stdout (m064): newline-delimited JSON-RPC exposing the script tools,
 //     so an external agent can write into the editing area, run it, read the
-//     console and iterate - with the scripts still living in this one process.
+//     console and iterate - scripts run in child processes owned by this deck,
+//     so closing the deck still tears them all down (Job Object, m192).
 //     m117: the window starts hidden to the tray, so frequent tool calls never
 //     put a deck window in front of the user; the tray icon brings it back.
 //   * bare double-click launch -> the FLTK deck window (m014): script list,
@@ -42,6 +44,7 @@
 // License: GPL-2.0 (only), see LICENSE and
 // THIRD-PARTY-NOTICES.md for the embedded third-party components.
 
+#include "core/AppPaths.h"
 #include "core/ResourceStats.h"
 #include "core/Version.h"
 #include "core/Json.h"
@@ -65,17 +68,6 @@
 #pragma comment(lib, "dbghelp.lib")
 
 namespace {
-
-std::wstring ExeDirectory()
-{
-	wchar_t path[MAX_PATH] = {0};
-	const DWORD n = GetModuleFileNameW(nullptr, path, MAX_PATH);
-	if (n == 0 || n >= MAX_PATH)
-		return std::wstring();
-	std::wstring dir(path, n);
-	const size_t slash = dir.find_last_of(L"\\/");
-	return slash == std::wstring::npos ? dir : dir.substr(0, slash);
-}
 
 struct ModuleRange
 {
@@ -167,10 +159,10 @@ void AppendStack(std::string &aText, ULONGLONG aRsp,
 
 LONG __stdcall CrashFilter(EXCEPTION_POINTERS *aInfo)
 {
-	const std::wstring logs = ExeDirectory() + L"\\Logs";
-	const std::wstring dumps = logs + L"\\CrashDumps";
-	CreateDirectoryW(logs.c_str(), nullptr);
-	CreateDirectoryW(dumps.c_str(), nullptr);
+	// m177: crash dumps go under the single <exe>\temp\ write point, never a
+	// new exe-adjacent Logs\ folder. Reuse the logs subdir so the retention
+	// walk (core/Housekeeping) prunes old dumps like any other temp file.
+	const std::wstring dumps = ahkdeck::AppTempDir(ahkdeck::kTempLogs, true);
 
 	SYSTEMTIME st = {};
 	GetLocalTime(&st);
@@ -871,7 +863,7 @@ int main()
 		// newline-delimited JSON-RPC on stdin/stdout. This is the deck with one
 		// extra endpoint, not a proxy: the editing area, the sessions and the
 		// console all belong to this process, and when the client lets go the deck
-		// dies with every script inside it (AGENTS 11a). m117: the window goes
+		// dies and its child scripts are reaped with it (Job Object). m117: the window goes
 		// hidden to the tray right after startup, so an agent that calls tools all
 		// day never gets a deck window in the way; the tray icon is the way back.
 		//

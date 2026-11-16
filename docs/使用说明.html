@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AHKDeck 使用说明</title>
+<style>
+  :root{
+    --bg:#ffffff; --panel:#f0f0f0; --soft:#f1efe8; --frame:#8c8c8c;
+    --text:#000000; --muted:#6b6b6b; --accent:#185fa5; --accent-soft:#eaf2fb;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:15px/1.75 "Microsoft YaHei UI","Microsoft YaHei","Segoe UI",sans-serif}
+  /* ---- 左侧固定目录 ---- */
+  #toc{position:fixed;left:0;top:0;bottom:0;width:236px;overflow-y:auto;
+       background:var(--panel);border-right:1px solid var(--frame);padding:24px 0}
+  #toc h1{font-size:17px;margin:0 20px 18px;letter-spacing:.5px}
+  #toc a{display:block;padding:7px 20px;color:var(--muted);text-decoration:none;
+         border-left:3px solid transparent;font-size:14px}
+  #toc a:hover{background:var(--accent-soft);color:var(--accent)}
+  #toc a.active{border-left-color:var(--accent);background:var(--accent-soft);
+                color:var(--accent);font-weight:600}
+  /* ---- 正文 ---- */
+  main{margin-left:236px;padding:40px 56px 120px;max-width:1080px}
+  section{scroll-margin-top:24px;margin-bottom:56px}
+  h2{font-size:23px;margin:0 0 18px;padding-bottom:8px;border-bottom:2px solid var(--accent)}
+  h3{font-size:17px;margin:26px 0 10px}
+  p{margin:10px 0}
+  ul,ol{margin:10px 0;padding-left:24px}
+  li{margin:6px 0}
+  code{background:var(--soft);border:1px solid #e2e0d8;border-radius:3px;
+       padding:1px 5px;font-family:Consolas,"Courier New",monospace;font-size:13px}
+  a{color:var(--accent)}
+  table{border-collapse:collapse;width:100%;margin:16px 0;font-size:14px}
+  th,td{border:1px solid #d8d8d8;padding:9px 12px;text-align:left;vertical-align:top}
+  th{background:var(--soft);font-weight:600}
+  .lead{font-size:16px;color:#222}
+  .note{background:var(--accent-soft);border-left:3px solid var(--accent);
+        padding:12px 16px;margin:16px 0}
+  .warn{background:#fff4f4;border-left:3px solid #c62828;padding:12px 16px;margin:16px 0}
+  .path{font-family:Consolas,"Courier New",monospace;color:var(--accent)}
+  /* ---- 可复制的 AI 提示词 ---- */
+  #toc a.star{color:var(--accent);font-weight:600}
+  .copyhead{display:flex;align-items:center;justify-content:space-between;gap:12px;
+            margin:18px 0 0;padding:10px 14px;background:var(--soft);
+            border:1px solid #e2e0d8;border-bottom:0}
+  .copyhead button{font:inherit;font-size:13px;color:#fff;background:var(--accent);
+            border:1px solid var(--accent);border-radius:3px;padding:5px 14px;cursor:pointer}
+  .copyhead button:hover{background:#124b80}
+  pre#aiPrompt{white-space:pre-wrap;word-break:break-word;background:#fbfbf9;
+            border:1px solid #e2e0d8;margin:0;padding:16px;
+            font:13px/1.8 Consolas,"Microsoft YaHei UI",monospace}
+  /* 需要用户按自己情况替换的占位：一眼可见 */
+  pre#aiPrompt .ph{color:#c62828;font-weight:600}
+  footer{margin-left:236px;padding:20px 56px 40px;border-top:1px solid #ddd;
+         color:var(--muted);font-size:13px}
+  @media(max-width:820px){
+    #toc{position:static;width:auto;height:auto;border-right:0;border-bottom:1px solid var(--frame)}
+    main,footer{margin-left:0;padding-left:20px;padding-right:20px}
+  }
+</style>
+</head>
+<body>
+
+<nav id="toc">
+  <h1>AHKDeck 使用说明</h1>
+  <a href="#intro">它是什么</a>
+  <a href="#who">适合谁用</a>
+  <a href="#features">能做什么</a>
+  <a href="#start">快速上手</a>
+  <a href="#official">获取官方脚本</a>
+  <a href="#develop">自己开发脚本</a>
+  <a href="#share">让其他人也用上</a>
+  <a href="#docs">文档都在哪里</a>
+  <a href="#ai-write" class="star">★ 让 AI 帮你写脚本</a>
+  <a href="#ai">AI 接入能做什么</a>
+  <a href="#faq">常见问题</a>
+</nav>
+
+<main>
+
+<section id="intro">
+  <h2>它是什么</h2>
+  <p class="lead">AHKDeck 是一个给 <strong>AutoHotkey v2 脚本</strong>用的工作台：把散落的脚本收进一个窗口，
+  统一地运行、停止、编辑、看报错，并把各个脚本的托盘菜单合并到一处。</p>
+  <p>它是<strong>脚本的管理与开发环境</strong>，不是脚本本身，也不是一个通用编辑器。脚本内容由
+  AutoHotkey v2 编写，AHKDeck 负责把它们组织起来、跑起来，并让 AI 能安全地参与编写和验证。</p>
+  <ul>
+    <li>每个脚本在自己的进程里运行，互不干扰；一个脚本出错不会拖垮其它脚本或工作台。</li>
+    <li>关闭窗口通常只是<span class="path">隐藏到托盘</span>，脚本继续运行；要真正退出用托盘菜单或 <code>--quit</code>。</li>
+    <li>随包带官方内核，编译出的 exe 在没装 AutoHotkey 的 Windows 机器上也能直接运行。</li>
+  </ul>
+</section>
+
+<section id="who">
+  <h2>适合谁用</h2>
+  <table>
+    <tr><th>你是……</th><th>AHKDeck 能给你的</th></tr>
+    <tr><td>想用现成小工具的人</td><td>从官方脚本库一键下载、升级；不用自己找源码、配环境。</td></tr>
+    <tr><td>已经在写 AHK 脚本的人</td><td>一个统一的地方管理、运行、看日志和内核原话报错；脚本托盘菜单不再满屏都是图标。</td></tr>
+    <tr><td>让 AI 帮忙写脚本的人</td><td>标准 MCP 接口，AI 能写、能跑、能读结构化报错、还能量界面像素来验证结果。</td></tr>
+    <tr><td>想发布自己脚本集的人</td><td>用同一份清单格式做订阅源，别人在「获取脚本」里订阅即可。</td></tr>
+  </table>
+  <div class="note">只运行你信任的脚本。AHKDeck 会校验下载文件的名称和版本，但这不是沙箱——脚本本身拥有你账户的权限。</div>
+</section>
+
+<section id="features">
+  <h2>能做什么</h2>
+  <h3>脚本管理</h3>
+  <ul>
+    <li>把 <span class="path">.ahk</span> 放进程序旁的 <span class="path">Scripts\</span>，列表里就会出现；可运行、停止、重启、编辑、删除。</li>
+    <li>删除是移到 <span class="path">temp\deleted\</span>，不是永久抹掉；运行中的脚本会先停止，占用快捷键一并释放。</li>
+    <li>列表按脚本名升序排列，运行中的脚本单独标注，状态栏显示总 CPU / GPU / 内存占用。</li>
+  </ul>
+  <h3>运行与诊断</h3>
+  <ul>
+    <li>内置编辑器可保存、查找替换；运行回执与内核报错显示在控制台。</li>
+    <li>报错带<strong>行号、那一行原文、调用函数与调用链</strong>，不用再对着弹窗猜。</li>
+    <li>各会话日志写在 <span class="path">temp\logs\</span>。</li>
+  </ul>
+  <h3>托盘合并</h3>
+  <p>各脚本自己的托盘图标会被收起来，菜单汇集到工作台的「运行中」子菜单——这是本项目从一开始就坚持的硬需求：
+  托盘不再被十几个脚本图标占满。</p>
+  <h3>一键编译为 EXE</h3>
+  <p>行右键或「脚本 &gt; 编译为 EXE」，选好位置和名字，得到一个可独立分发的 exe。产物直接复制随包内核写入脚本资源，
+  不依赖机器上是否装了 AutoHotkey，也不需要额外的打包工具。</p>
+  <h3>获取与订阅</h3>
+  <p>「脚本 &gt; 获取脚本…」看官方脚本库；「订阅…」里填一份同格式的 <code>scripts.json</code> 地址，
+  就能把别人的脚本集并进同一个列表，每行「来源」列标明是官方还是哪个订阅。</p>
+  <h3>运行期产物收敛</h3>
+  <p>程序旁只有一个 <span class="path">temp\</span>：<span class="path">logs\</span>、
+  <span class="path">backups\</span>、<span class="path">work\</span>、<span class="path">deleted\</span>。
+  「设置 &gt; 选项…」里选保留时长（永不 / 7 / 30 / 180 天，默认 30），启动时和改设置时各清理一次。</p>
+</section>
+
+<section id="start">
+  <h2>快速上手</h2>
+  <ol>
+    <li>解压后双击 <span class="path">AHKDeck.exe</span>。第一次运行会建好 <span class="path">Scripts\</span> 和 <span class="path">temp\</span>。</li>
+    <li>点「脚本 &gt; 获取脚本…」下载一个官方脚本，或者把自己的 <span class="path">.ahk</span> 复制进 <span class="path">Scripts\</span>。</li>
+    <li>在列表里选中它，点「运行」。有托盘菜单的脚本，菜单会出现在工作台托盘图标的「运行中」子菜单里。</li>
+    <li>改脚本用内置编辑器；保存后重新运行即可生效。报错看控制台，完整日志在 <span class="path">temp\logs\</span>。</li>
+  </ol>
+  <p>命令行也支持一些常用操作：</p>
+  <table>
+    <tr><th>命令</th><th>作用</th></tr>
+    <tr><td><code>AHKDeck.exe --version</code></td><td>打印版本后退出</td></tr>
+    <tr><td><code>AHKDeck.exe --run Scripts\某脚本.ahk</code></td><td>运行一个脚本</td></tr>
+    <tr><td><code>AHKDeck.exe --journal --run …</code></td><td>逐行输出 JSON 事件，便于排查</td></tr>
+    <tr><td><code>AHKDeck.exe --quit</code></td><td>通知运行中的工作台退出</td></tr>
+  </table>
+</section>
+
+<section id="official">
+  <h2>获取官方脚本</h2>
+  <p>「脚本 &gt; 获取脚本…」打开下载窗口，列表来自官方仓库的 <code>scripts.json</code>。首次打开读随包清单，
+  点「刷新」才联网。选中一行点「已下载 / 升级」即可安装或更新到 <span class="path">Scripts\</span>。</p>
+  <h3>当前官方脚本（7 个）</h3>
+  <table>
+    <tr><th>名称</th><th>做什么</th></tr>
+    <tr><td>打开方式清理</td><td>扫描「打开方式」相关的 13 处注册表位置，列出并清理失效残留</td></tr>
+    <tr><td>夜灯</td><td>滑块调屏幕色温，并同步 Windows 夜间模式</td></tr>
+    <tr><td>双击防抖</td><td>拦截间隔过短的左键双击，抑制误触连点</td></tr>
+    <tr><td>文件时间修改</td><td>拖入文件/文件夹，改写创建、修改、访问三种时间</td></tr>
+    <tr><td>防休眠</td><td>两项托盘勾选阻止系统休眠与屏幕关闭，退出自动还原</td></tr>
+    <tr><td>文件哈希</td><td>一趟读出 MD5 / SHA1 / SHA256 / SHA384 / SHA512，双击即复制</td></tr>
+    <tr><td>硬件信息</td><td>八页分类列出 CPU、主板、内存、显卡、磁盘、网卡、显示器、系统规格</td></tr>
+  </table>
+  <h3>版本历史</h3>
+  <p>脚本详情窗里有一行「历史版本」，给出 <strong>Gitee | GitHub</strong> 两个可点击链接，指向该脚本的版本清单；
+  清单里每个版本都有对应下载地址。两个链接都与当前选用的下载源无关，随时可点。</p>
+  <p>「设置 &gt; 选项…」里的<strong>官方下载源</strong>是一个统一开关，同时决定脚本清单、脚本下载、宿主更新清单和更新包从哪个镜像取。</p>
+  <div class="warn">官方脚本仓库：
+    <a href="https://gitee.com/qiuzongman/ahk-v2-scripts">Gitee</a> ·
+    <a href="https://github.com/zongmanqiu/ahk-v2-scripts">GitHub</a>。
+    请只从这两个地址获取，避免第三方改包。</div>
+</section>
+
+<section id="develop">
+  <h2>自己开发脚本</h2>
+  <p>官方脚本都是<strong>一份纯 AHK v2 源码</strong>，可以用原版 AutoHotkey v2 独立运行，功能不依赖宿主私有 API。
+  想照着做，按这个顺序看随包的 <span class="path">docs\</span>：</p>
+  <ol>
+    <li><strong>先定形态、选范本</strong>：找一份和你想要的窗口最像的现成脚本源码，照它的结构起步。这一步比读任何规范都有效。</li>
+    <li><strong>读 <code>脚本开发流程.md</code></strong>：从建骨架到自测、实机验证、出货的完整步骤。</li>
+    <li><strong>读 <code>开发指南.md</code></strong>：目录约定、头部元数据、版本规矩、命名、产物放在哪里。</li>
+    <li><strong>写界面时读 <code>UI规范.md</code></strong>：八色配色、字号、尺寸令牌、控件画法。</li>
+    <li><strong>具体控件照 <code>UI组件手册.md</code></strong>；遇到诡异现象查 <code>UI踩坑.md</code>。</li>
+    <li><strong>让 AI 帮忙时读 <code>MCP接入.md</code></strong>：把工作台挂到支持 MCP 的 AI 客户端，AI 能写脚本、跑脚本、读结构化报错、量界面。</li>
+  </ol>
+  <h3>几条硬规矩</h3>
+  <ul>
+    <li>脚本产生的任何文件（配置、备份、报告、自测输出）都放进<strong>与脚本同名的文件夹</strong>，不要摊在脚本旁边。</li>
+    <li>不自设全局热键；入口走托盘菜单，这样宿主才能把图标合并起来。</li>
+    <li>只支持 Windows 10 / 11 与 AutoHotkey v2。</li>
+    <li>版本按三档递增：第一位＝破坏性改动，第二位＝用户可见新能力，第三位＝修复与打磨。</li>
+  </ul>
+</section>
+
+<section id="share">
+  <h2>让其他人也用上</h2>
+  <p>有三种由轻到重的方式，按需选择：</p>
+  <h3>1. 直接分发源码或编译后的 exe</h3>
+  <p>单个 <span class="path">.ahk</span> 拷给别人即可（对方需装 AutoHotkey v2）；或用「编译为 EXE」生成一个独立 exe，
+  对方双击就能跑，什么都不用装。</p>
+  <h3>2. 做成一个订阅源</h3>
+  <p>把你自己的脚本按官方仓库的形状放进一个目录，生成同样格式的 <code>scripts.json</code>，
+  放到任意 HTTPS 地址；别人在「获取脚本 → 订阅…」里填这个地址就能订阅，列表里会标明来源。</p>
+  <h3>3. 发布到 Release</h3>
+  <p>官方仓库对每个脚本的每个版本各建一个 release，tag 形如 <code>&lt;英文id&gt;-&lt;版本&gt;</code>；
+  清单里写下载地址与版本历史链接，两端镜像各发一份。工具和规矩见脚本仓库的
+  <a href="https://gitee.com/qiuzongman/ahk-v2-scripts">README 与开发指南</a>。</p>
+  <div class="note">所有链接都是 HTTPS 地址；宿主只接受 HTTPS，无效的历史链接会被忽略，但不会让整个脚本失效。</div>
+</section>
+
+<section id="docs">
+  <h2>文档都在哪里</h2>
+  <p>随程序解压目录的 <span class="path">docs\</span> 文件夹里，全部是纯文本，任何编辑器都能看：</p>
+  <table>
+    <tr><th>文件</th><th>读它为了什么</th></tr>
+    <tr><td><code>MCP接入.md</code></td><td>把工作台接到 AI 客户端：通用配置、便捷命令、20 个工具总览</td></tr>
+    <tr><td><code>MCP界面量测.md</code></td><td>AI 如何量控件树、像素、做交互与判定</td></tr>
+    <tr><td><code>脚本开发流程.md</code></td><td>从零做一个官方脚本的完整流程</td></tr>
+    <tr><td><code>开发指南.md</code></td><td>目录、头部、版本、命名、产物规则（脚本仓库副本）</td></tr>
+    <tr><td><code>UI规范.md</code></td><td>配色、字号、尺寸、控件画法</td></tr>
+    <tr><td><code>UI组件手册.md</code></td><td>各类控件的标准写法</td></tr>
+    <tr><td><code>UI踩坑.md</code></td><td>已踩过的坑与取证方法</td></tr>
+    <tr><td><code>help-index.json</code></td><td>随包的 AutoHotkey 函数离线索引，供 MCP 的 <code>lookup_help</code> 查询</td></tr>
+    <tr><td><code>scripts.json</code></td><td>官方脚本清单（与脚本仓库同步的那份）</td></tr>
+  </table>
+  <p>两个仓库地址：工作台 <a href="https://gitee.com/qiuzongman/AHKDeck">Gitee</a> ·
+  <a href="https://github.com/zongmanqiu/AHKDeck">GitHub</a>；官方脚本见上一节。</p>
+</section>
+
+<section id="ai-write">
+  <h2>★ 让 AI 通过 MCP 帮你写脚本（复制这段话就能开始）</h2>
+  <p class="lead">你不需要懂 MCP 协议，也不用记工具名。把下面这段话发给任何支持 MCP 的 AI，
+  它会自己去读随包文档、连上 AHKDeck、按规矩把脚本写出来，并且自己运行验证。</p>
+  <div class="copyhead">
+    <strong>可直接复制发给 AI 的话</strong>
+    <button id="copyAiPrompt" type="button">复制这段话</button>
+  </div>
+  <pre id="aiPrompt">我有一个 AHKDeck 项目，就在 <span class="ph">&lt;项目所在文件夹，留空则用当前工作目录&gt;</span>，这是 Windows 上管理 AutoHotkey v2 脚本的工作台，可以通过 MCP 让你读写脚本、运行脚本、看报错、量界面。
+
+请先打开 exe 同级目录的 docs 文件夹，仔细阅读这些文档，并严格遵守里面的准则：
+- 使用说明.html（整体功能）
+- 脚本开发流程.md（怎么从零做一个脚本）
+- 开发指南.md（目录、头部、版本、命名、产物放哪里）
+- UI规范.md、UI组件手册.md、UI踩坑.md（如果脚本有界面，这几个必须看）
+- MCP接入.md（怎么把你接到 AHKDeck 的 MCP 上）
+
+接好之后，先告诉我你看到了哪些工具、准备怎么做，等我确认再动手。
+
+我需要的脚本是这样的：<span class="ph">&lt;用大白话描述功能，越具体越好，比如「按 Win+Q 把当前窗口置顶，再按一次取消」&gt;</span>。
+
+另外请遵守：脚本产生的文件放进与脚本同名的文件夹；不要自设全局热键，入口走托盘菜单；只支持 Windows 10/11 和 AutoHotkey v2；写完自己跑一遍、读报错、确认没问题再告诉我。</pre>
+  <div class="note"><strong>红色标注的 &lt;...&gt; 就是需要你按自己情况改的地方</strong>：项目路径可以直接写，也可以留着让 AI 用当前工作目录；功能描述换成你真正想要的。其余文字原样发给 AI 即可。AI 连上后如果先问你问题，这很正常——它在确认需求边界。</div>
+  <h3>这段话为什么这么写</h3>
+  <ul>
+    <li>写明<strong>文档位置和「仔细读、守规矩」</strong>，AI 就不会凭记忆乱写，也不会把配置文件摊在脚本旁边。</li>
+    <li>要求它<strong>先报计划再动手</strong>，你可以在它改文件之前纠偏。</li>
+    <li>要求它<strong>自己运行验证</strong>，把「写 → 跑 → 读错 → 改」的闭环交给 AI，你只看结果。</li>
+  </ul>
+  <p>接好之后具体能做什么、背后是什么机制，看下一节；要改配置细节，去 <span class="path">docs\MCP接入.md</span>。</p>
+</section>
+
+<section id="ai">
+  <h2>AI 接入能做什么</h2>
+  <p>AHKDeck 自带一个<strong>标准 MCP stdio 端点</strong>，不绑定任何特定 AI 或 Agent。
+  任何支持 MCP stdio 的客户端，只要能配 <code>command</code> 和 <code>args</code> 两个字段就能接进来：</p>
+  <ul>
+    <li><code>command</code> 指向 <code>AHKDeck.exe</code></li>
+    <li><code>args</code> 为 <code>["--mcp-stdio"]</code></li>
+  </ul>
+  <p>接入后，AI 可以列脚本库、读写编辑区、运行脚本、拿内核原话的报错、读会话输出、停止脚本；
+  还能量出脚本窗口的控件树与像素色，<strong>改完自己验证</strong>——于是「AI 写 → 跑 → 读错 → 改 → 再跑」
+  这条闭环不用人复制粘贴。</p>
+  <p>不确定某个 AHK 函数的签名或参数含义时，AI 可以用 <code>lookup_help</code> 查随包离线索引，
+  不必凭记忆。详细配置与各客户端示例见 <code>docs\MCP接入.md</code>。</p>
+  <div class="note">程序本身不内建聊天面板——模型和修正循环由你选的 AI 客户端负责，AHKDeck 提供工具与可见的编辑区。</div>
+</section>
+
+<section id="faq">
+  <h2>常见问题</h2>
+  <h3>关掉窗口后脚本还在跑吗？</h3>
+  <p>在。标题栏关闭通常只是隐藏到托盘；要彻底退出，用托盘菜单的退出项或 <code>--quit</code>。</p>
+  <h3>托盘图标去哪了？</h3>
+  <p>被工作台收拢了。点工作台托盘图标，「运行中」子菜单里能找到各脚本原来的入口，功能不变。</p>
+  <h3>下载的脚本装到哪里？</h3>
+  <p>程序旁的 <span class="path">Scripts\</span>。脚本自己产生的文件则放在 <span class="path">Scripts\&lt;脚本名&gt;\</span>。</p>
+  <h3>脚本报错只有一行文字怎么办？</h3>
+  <p>看控制台：那里有行号、出错那行原文、函数名和调用链。完整日志在 <span class="path">temp\logs\</span>。</p>
+  <h3>能离线用吗？</h3>
+  <p>可以。运行、编辑、编译都不联网；只有「刷新」脚本列表、下载脚本、检查更新时才需要网络。</p>
+  <h3>官方脚本能独立运行吗？</h3>
+  <p>能。装上原版 AutoHotkey v2 后双击即可，不需要 AHKDeck——工作台只是让管理更省事。</p>
+</section>
+
+</main>
+
+<footer>AHKDeck · 面向 Windows x64 的 AutoHotkey v2 脚本工作台 · 本页为离线说明，随程序分发</footer>
+
+<script>
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('#toc a'));
+  var sections = links.map(function(a){ return document.querySelector(a.getAttribute('href')); });
+  function active(){
+    var y = window.scrollY + 120, idx = 0;
+    for (var i=0;i<sections.length;i++){
+      if (sections[i] && sections[i].offsetTop <= y) idx = i;
+    }
+    links.forEach(function(a,i){ a.classList.toggle('active', i===idx); });
+  }
+  window.addEventListener('scroll', active, {passive:true});
+  window.addEventListener('resize', active);
+  active();
+})();
+/* 一键复制 AI 提示词：file:// 下 clipboard API 未必可用，保留 execCommand 兜底 */
+(function(){
+  var btn = document.getElementById('copyAiPrompt');
+  if (!btn) return;
+  btn.addEventListener('click', function(){
+    var text = document.getElementById('aiPrompt').textContent;
+    function done(ok){
+      var old = btn.textContent;
+      btn.textContent = ok ? '已复制' : '请手动选中复制';
+      setTimeout(function(){ btn.textContent = old; }, 1800);
+    }
+    function fallback(){
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch(e) {}
+      document.body.removeChild(ta);
+      done(ok);
+    }
+    if (navigator.clipboard && window.isSecureContext)
+      navigator.clipboard.writeText(text).then(function(){ done(true); }, fallback);
+    else
+      fallback();
+  });
+})();
+</script>
+</body>
+</html>

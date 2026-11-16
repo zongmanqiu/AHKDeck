@@ -78,8 +78,6 @@ public:
 	void RefreshScripts();
 
 	std::vector<ToolDef> Definitions() const;
-	// OpenAI Chat Completions dialect: [{"type":"function","function":{...}}].
-	Json OpenAiSchema() const;
 
 	// Executes one tool. aArgumentsJson is the raw argument object the caller
 	// sent; the return value is always a JSON object string ({"ok":false,...}
@@ -128,6 +126,10 @@ private:
 	std::string ToolSendInput(const Json &aArgs);
 	// m209: pixel-level regression check between two captures.
 	std::string ToolUiDiff(const Json &aArgs);
+	// m218: one-shot verdict and bounded wait over inspect_ui's own output.
+	// The caller used to eyeball a diff; now the tool answers pass/fail.
+	std::string ToolAssertUi(const Json &aArgs);
+	std::string ToolWaitUi(const Json &aArgs);
 	std::string ToolPixel(const Json &aArgs);
 	// m177: the offline AutoHotkey help index, so a caller can confirm a
 	// signature instead of recalling one.

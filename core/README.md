@@ -7,7 +7,6 @@
 |---|---|
 | `Version.{h,cpp}` | **两个**版本常量，各自唯一源：`kVersionMajor/Minor/Patch` ＋ `VersionString()` 来自 CMakeLists 的 `project(... VERSION)`（产品版本）；`kKernelVersion` ＋ `KernelVersionString()` 是官方内核版本（m202，状态栏／关于界面／MCP 文案共用）。两者升级节奏不同，不要合并。`test_version` 钉住形状，`ctest kernel_version` 断言内核参数与 `ahkversion.h`／`deps.txt`／出货 PE 的 ProductVersion 一致 |
 | `TextFile.{h,cpp}` | 文本编码、换行与文件读写 |
-| `Library.{h,cpp}` | 路径清单读写、去重；GUI 当前扫描程序旁的 Scripts |
 | `Settings.{h,cpp}` | 窗口几何与旧 INI 读写；JSON 配置接线在 ui/DeckUI.cpp |
 | `Hotkeys.{h,cpp}` | 快捷键语法解析与绑定存储。**两个作用域**：`ParseAhkHotkey()` 是系统全局热键（RegisterHotKey，必须至少一个修饰键，**或裸功能键 F1–F24**，m117）；`ParseMenuShortcut()` 是菜单/命令快捷键（窗口内，允许裸命名键 F1–F24/Del/Enter，裸字母数字仍拒绝） |
 | `Json.{h,cpp}` | JSON 数据结构、解析与输出 |
@@ -17,6 +16,6 @@
 | `ResourceStats.{h,cpp}` | **m196/m197**：本体 ＋ 各运行中脚本的资源占用（CPU% / 内存＝专用工作集（任务管理器口径）/ 线程 / 句柄 / GPU）。`SampleWithChildren()` 一次 PDH 采集按 pid 分组、一次 Toolhelp 快照数线程、per-pid CPU 历史带创建时间防复用；返回 host / children / total 三段，状态栏画 total，`ResourceCellText()` 读 children 供列表三列（右对齐、s9 字号自绘），口径同源。`Sample()` 是 `--stats` 用的本体读数。只做测量（psapi、Toolhelp、PDH），不碰窗口、不依赖 UI/engine/FLTK。**指标定案只有 CPU/GPU/内存三项**，显存与磁盘/网络/提交量均不纳入（理由见 HISTORY m197） |
 | `AppPaths.{h,cpp}` | m177 运行期产物的唯一路径真源：`temp\` 及其 `logs\` / `backups\` / `work\` / `deleted\` 四个子目录（`TempDirUnder()` 逐级建目录，展示用 `AppTempRelative()` 给正斜杠相对路径）。**新增临时产物只能走这里**，别再往 exe 旁边另起一级目录 |
 | `Housekeeping.{h,cpp}` | 启动清理（m109/m177）：`settings.json` 的 `housekeeping.max_age_days`（默认 30，`0`＝关闭，界面档位 7/30/180）驱动**整个 `temp\` 根**的按时间清理；递归删文件后删空目录，不跟目录联接，占用中的文件只记数。删空子目录由调用方 `EnsureAppTempLayout()` 补回 |
-| `ExeCompiler.{h,cpp}` | m172 脚本编译为 EXE。**m188 起不调用 Ahk2Exe**：复制唯一内核 `AutoHotkey64.exe`（m192 P4 起不再有 `tools\` 底座，运行与编译共用同一个 PE），在同一个 `BeginUpdateResource` 句柄里依次写脚本（`RT_RCDATA` 序数 1）、图标（复用底座图组 id，只换帧）、版本（自拼 `VS_VERSIONINFO`）；编译期校验 spawn `AHKDeck.exe --validate`，失败时把内核诊断原文回传。覆盖契约＝旧目标先改名 `.old`（同下载器），`backedUp` 只报本轮事实；底座缺失 fail-closed 报「请用完整安装包」。无 FLTK、无窗口 API，阻塞式——由调用方放 worker 线程 |
+| `ExeCompiler.{h,cpp}` | m172 脚本编译为 EXE。**m188 起不调用 Ahk2Exe**：复制唯一内核 `AutoHotkey64.exe`（m192 P4 起不再有 `tools\` 底座，运行与编译共用同一个 PE），在同一个 `BeginUpdateResource` 句柄里依次写脚本（`RT_RCDATA` 序数 1）、图标（复用底座图组 id，只换帧）、版本（自拼 `VS_VERSIONINFO`）；编译期校验 spawn `AHKDeck.exe --validate`，失败时把内核诊断原文回传。覆盖契约＝先 `AHKDeck.exe --validate` 通过再把旧目标改名 `.old`（同下载器），`backedUp` 只报本轮事实；底座缺失 fail-closed 报「请用完整安装包」。无 FLTK、无窗口 API，阻塞式——由调用方放 worker 线程 |
 
 依赖方向见 [.main/目录结构说明.md](../目录结构说明.md)：`core ← engine ← ui`，反向 include 一律不许。

@@ -1,5 +1,5 @@
 # m131 GUI gate: the tray menu's Running submenu + the script's own menu.
-# Isolated run: AHKDECK_SETTINGS / AHKDECK_HOTKEYS / AHKDECK_LIBRARY point into
+# Isolated run: AHKDECK_SETTINGS / AHKDECK_HOTKEYS point into
 # .temp; the probe script lives in .build\Scripts for the run and is removed at
 # the end (m016/m023 convention: user scripts are stashed away, not deleted).
 #
@@ -285,11 +285,11 @@ function SendStartHotkey {
     [W]::keybd_event(0x11, 0, 2, [UIntPtr]::Zero)
 }
 
-# the ONLY trustworthy "probe running" signal is an AutoHotkey-class window
-# owned by the deck process: the in-process kernel has NO resident window of
-# its own (micro-test: empty before the hotkey, one window after), so window
-# presence ⇔ a script is really running. Markers cannot do this job - the
-# probe's hwnd write came out EMPTY (A_ScriptHwnd is useless in embedded mode)
+# the trustworthy "probe running" signal is an AutoHotkey-class window owned
+# by the script's CHILD process (m192: kernel is a separate process, keyed by
+# its pid via engine/FindScriptWindow). No child window exists before the
+# hotkey, one after, so window presence ⇔ a script is really running.
+# Markers cannot do this job - the probe's hwnd write came out EMPTY.
 # and a bare file-exists test raced with stop/start retries.
 function ProbeAlive([int]$procId) {
     return ([W]::OfClass([uint32]$procId, 'AutoHotkey')).Count -ge 1
@@ -397,8 +397,7 @@ SetTimer Keep, 500
 '@, $utf8)
 
 [System.IO.File]::WriteAllText($hotkeys, "m131-probe.ahk=^!+F9`r`n", $utf8)
-$envs = @{ AHKDECK_SETTINGS = $settings; AHKDECK_HOTKEYS = $hotkeys;
-    AHKDECK_LIBRARY = (Join-Path $work 'library') }
+$envs = @{ AHKDECK_SETTINGS = $settings; AHKDECK_HOTKEYS = $hotkeys }
 
 ClearMarkers
 $pA = $null; $pB = $null; $pC = $null; $script:deckThreadId = 0

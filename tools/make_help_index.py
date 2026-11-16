@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Build docs/help-index.json from the AutoHotkey v2 help file.
 
-Why the .chm and not a web mirror: the index has to describe the engine that
-actually runs the scripts. The chm next to AutoHotkey_2.0.30_setup.exe carries the
-2.0.30 text, which is
-what the shipped AutoHotkey64.exe is. A wrong signature in this file teaches the
-AI the wrong API, so the version match is the whole point.
+Why the .chm and not a web mirror: the index has to describe an official
+AutoHotkey v2 help file so the AI gets real signatures instead of guesses.
+
+Version note (m222): the CHM is the official 2.0.31 help file, the same
+version as the shipped kernel. It is governed by deps.txt (entry
+AutoHotkey-v2.0.31-help) and downloaded by build/2_download.bat, so a fresh
+machine no longer needs a hand-placed file. When the kernel is upgraded, bump
+that deps entry and regenerate this index. A wrong signature in this file
+teaches the AI the wrong API, so keep it in sync.
 
 Usage:
     python tools/make_help_index.py            # extract (once) + write the index
@@ -29,7 +33,7 @@ import subprocess
 import sys
 
 MAIN = pathlib.Path(__file__).resolve().parent.parent
-CHM = MAIN.parent / ".3rd" / "AutoHotkey_2.0.30" / "AutoHotkey.chm"
+CHM = MAIN.parent / ".3rd" / "AutoHotkey-v2.0.31-help" / "AutoHotkey.chm"
 EXTRACT = MAIN.parent / ".temp" / "chm_extract"
 OUT = MAIN / "docs" / "help-index.json"
 
@@ -217,7 +221,7 @@ def main() -> int:
     if len(entries) < 300:
         sys.exit(f"错误：只解析出 {len(entries)} 条，chm 结构可能变了（预期 350+）")
 
-    text = json.dumps({"engine": "2.0.30", "count": len(entries), "entries": entries},
+    text = json.dumps({"engine": "2.0.31", "count": len(entries), "entries": entries},
                       ensure_ascii=False, separators=(",", ":"), indent=0)
     out = pathlib.Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

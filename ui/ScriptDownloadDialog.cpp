@@ -1078,6 +1078,12 @@ void ScriptDownloadDialog::OnRowInfo(int aIndex) const
 		{ "运行环境", entry.requires, true, false },
 		{ "宿主要求", entry.host, true, false },
 		{ "入口", entry.entry, true, false },
+		// m221: one short label + two clickable mirrors, independent of the
+		// selected download source. Each link carries its own URL; a mirror
+		// absent from the manifest is pruned by ShowInfoDialog, and a script
+		// with no history at all gets no row.
+		{ "历史版本", "", false, false, false,
+			{ { "Gitee", entry.history }, { "GitHub", entry.historyGithub } } },
 	};
 	ShowInfoDialog("脚本详情", groups, true, true);
 }

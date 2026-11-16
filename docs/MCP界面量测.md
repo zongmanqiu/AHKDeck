@@ -1,8 +1,8 @@
-# 界面量测：inspect_ui、capture_ui、ui_pixel、ui_diff 与 send_input
+# 界面量测：inspect_ui、capture_ui、ui_pixel、ui_diff、send_input、assert_ui 与 wait_ui
 
-这三个工具回答同一个问题：**我刚写的界面，实际落在屏幕上的哪里、长什么样。**
-一个给几何与控件树（含列表条目与控件当前值），一个给整窗像素，一个给单点颜色。
-都是只读——不激活目标窗口、不改样式、不发输入。
+这七个工具回答同一个问题：**我刚写的界面，实际落在屏幕上的哪里、长什么样，交互对不对。**
+它们分三组：**测量组**（inspect_ui 给几何与控件树／capture_ui 给整窗像素／ui_pixel 给单点颜色／ui_diff 比对两帧像素）与**断言组**（assert_ui 判定条件、wait_ui 有界等待）是只读的——不激活目标窗口、不改样式、不发输入；
+**send_input 是唯一的写入工具**，会向目标窗口发送键鼠输入。用之前先看清这一条，别把交互工具当只读量具。
 
 只有在要核对布局时才需要读这一份；平时写脚本、跑脚本看 [MCP接入](MCP接入.md) 就够了。
 
@@ -218,6 +218,52 @@ HISTORY 或测试断言**。
 - 验证 Click 回调：点击后 `inspect_ui(items=true)` 看行数/状态，或 `get_session_output`
   看回调里的输出；改画面再用 capture_ui + ui_diff。
 
+## assert_ui / wait_ui（判定，不靠肉眼）
+
+前四个工具负责「看」和「动」，这两个负责「判」：内部调同一个 `inspect_ui` 拿快照，
+再按 `checks` 逐项求值，工具直接返回 `verdict=pass/fail`。`ok=true` 只表示工具调用成功，
+**`verdict` 才是断言结论**——脚本测试可以直接拿它当硬断言，不必自己解析界面树再判断。
+
+    session/hwnd/pid  三选一，与 inspect_ui 完全相同
+    items/rows/max/wait_ms  透传给内部 inspect_ui
+    checks            必填，非空数组，最多 64 项
+    timeout_ms        wait_ui 专用，默认 3000，上限 15000
+    interval_ms       wait_ui 专用，默认 100，范围 30-1000
+
+每项 check：
+
+    select   {class, text, hwnd, index}：class 精确（忽略大小写）、text 包含匹配、
+             index 取第几个命中（默认 0）；不传 select 则选顶层窗口
+    field    点分路径：text / class / visible / enabled / state.checked /
+             items.count / controls.count；数组上的 count 是元素数
+    op       eq（默认）/ ne / contains / gte / lte / gt / lt / truthy / exists
+    value    期望值，字符串 / 数字 / 布尔
+
+判读要点：
+
+- 顶层窗口 + 各窗口的 controls 是一个有序候选序列，`index` 按这个顺序数，
+  和 `inspect_ui` 返回里看到的顺序一致。
+- `select` 没匹配到控件时该 check 记 `pass=false`、`note="没有匹配的控件"`；
+  带 `items.count` 的断言要先传 `items=true`。
+- `wait_ui` 每轮内部 `wait_ms=0`，等待完全由 `timeout_ms`/`interval_ms` 控制，
+  不会出现每轮各等 1.5s 叠成十几秒。耗时看 `elapsed_ms` 与 `attempts`。
+- 超时回 `verdict=fail` + `timed_out=true`，并保留最后一次的逐项 `checks` 供诊断；
+  条件本来就已满足时一轮就返回。
+
+一组典型断言：
+
+```json
+{
+  "session": 1,
+  "items": true,
+  "checks": [
+    {"select": {}, "field": "visible", "op": "eq", "value": true},
+    {"select": {"class": "SysListView32"}, "field": "items.count", "op": "eq", "value": 2},
+    {"select": {"class": "Button", "text": "确定"}, "field": "text", "op": "contains", "value": "确定"}
+  ]
+}
+```
+
 ## ui_pixel
 
 ```
@@ -253,6 +299,8 @@ inspect_ui     → items=true 核对列表行、勾选状态、滑块值这些�
 patch_editor   → 改偏掉的那一行
 run_editor     → 再跑
 inspect_ui     → 复查
+assert_ui      → 直接判定通过与否（verdict=pass/fail），不必肉眼比对
+wait_ui        → 窗口/列表异步就绪时先等再判
 capture_ui     → 看整窗外观（间距、字号渲染、圆角）
 ui_pixel       → 需要确认颜色时补一个点
 ```

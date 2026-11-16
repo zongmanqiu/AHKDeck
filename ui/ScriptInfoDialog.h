@@ -23,12 +23,24 @@ namespace ahkdeck
 namespace ui
 {
 
+// m221: one short clickable label in a value row, e.g. "Gitee" -> URL.
+struct InfoLink
+{
+	std::string text;
+	std::string url;
+};
+
 struct InfoField
 {
 	std::string label;
 	std::string value;
 	bool wrap = false;       // long prose: wrap instead of clipping
 	bool selectable = false; // a path: a borderless Fl_Output the user can copy
+	bool link = false;       // value itself is one HTTPS URL, click to open
+	// m221: value row is several short clickable labels ("Gitee | GitHub").
+	// Kept last so existing initializers compile unchanged. Empty URLs are
+	// pruned; a field with no value and no live link is not drawn at all.
+	std::vector<InfoLink> links;
 };
 
 using InfoGroup = std::vector<InfoField>;

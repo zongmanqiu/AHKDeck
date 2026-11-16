@@ -77,8 +77,8 @@ full.bat                 :: 一键全链路
 **m202 的版本一致性**：`kernel_version` 断言 `core/Version.h::kKernelVersion` 与 `ahkversion.h` 的
 `RAW_AHK_VERSION`／`AHK_VERSION_N`、`deps.txt` 的 tag、出货 `AutoHotkey64.exe` 的 ProductVersion 四处一致；
 `kernel_version_selftest` 用两份污染样本反证该门禁会变红。升级官方内核时，改完参数必须同步改这三处，
-门禁会拦住漏改。默认非 GUI 门禁共 23 项。
-测试注册以 [CMakeLists.txt](../CMakeLists.txt) 为准；Python 不可用时 MCP 测试不会注册。
+门禁会拦住漏改。默认非 GUI 门禁共 23 项（m214 加入 mcp_init、m222 删除 library 单测后）。Python 不可用时不注册真实 MCP 测试，改注册 `mcp_python_missing` 哨兵：它打印 `AHKDECK_SKIP:` 让 `gate_no_skip` 判红，测试数仍是 23（22 真测试 + 1 哨兵），但整链失败，不会假绿。`housekeeping_gate` 标了 `gui`，只在 AHKDECK_GATE_UI=1 时跑，不计入默认。
+测试注册以 [CMakeLists.txt](../CMakeLists.txt) 为准；Python 不可用时真实 MCP 测试不注册，只留 `mcp_python_missing` 哨兵（见上）。
 默认流水线不含 `gui` 标签用例，也不运行所有 `test/` 脚本；手动 UI 冒烟和成品对拍需单独调用并满足各自前置条件。
 
 ## 打包

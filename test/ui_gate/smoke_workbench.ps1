@@ -508,7 +508,6 @@ ExitApp 0
     $psi.FileName = (Resolve-Path $Exe).Path
     $psi.UseShellExecute = $false
     $psi.EnvironmentVariables["AHKDECK_SETTINGS"] = $settings
-    $psi.EnvironmentVariables["AHKDECK_LIBRARY"] = $library
     $psi.EnvironmentVariables["AHKDECK_HOTKEYS"] = $hotkeys
     $deck = [System.Diagnostics.Process]::Start($psi)
     [void]$deck.WaitForInputIdle(5000)

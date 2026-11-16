@@ -1,5 +1,5 @@
 {
-"engine":"2.0.30",
+"engine":"2.0.31",
 "count":356,
 "entries":[
 {
@@ -613,7 +613,7 @@
 "name":"ComObjFlags",
 "page":"docs/lib/ComObjFlags.htm",
 "syntax":"Flags := ComObjFlags(ComObj , NewFlags, Mask)",
-"summary":"Retrieves or changes flags which control a COM wrapper object's behaviour.",
+"summary":"Retrieves or changes flags which control a COM wrapper object's behavior.",
 "params":[
 {
 "name":"ComObj",
@@ -740,7 +740,7 @@
 {
 "name":"Flags",
 "type":"Integer",
-"desc":"Flags affecting the behaviour of the wrapper object; see ComObjFlags for details."
+"desc":"Flags affecting the behavior of the wrapper object; see ComObjFlags for details."
 }
 ],
 "example":"#Requires AutoHotkey v2 32-bit ; 32-bit for ScriptControl. code := \" ( Sub Example(Var) MsgBox Var Var = \"out value!\" End Sub )\" sc := ComObject(\"ScriptControl\"), sc.Language := \"VBScript\", sc.AddCode(code) ; Example: Pass a VARIANT ByRef to a COM method. var := ComVar() var[] := \"in value\" sc.Run(\"Example\", var.ref) MsgBox var[] ; The same thing again,..."
@@ -2607,7 +2607,7 @@
 "desc":"An expression which results in an enumerable value, or a variable which contains an enumerable value."
 }
 ],
-"example":"colours := {red: 0xFF0000, blue: 0x0000FF, green: 0x00FF00} ; The above expression could be used directly in place of \"colours\" below: s := \"\" for k, v in colours.OwnProps() s .= k \"=\" v \"`n\" MsgBox s"
+"example":"colors := {red: 0xFF0000, blue: 0x0000FF, green: 0x00FF00} ; The above expression could be used directly in place of \"colors\" below: s := \"\" for k, v in colors.OwnProps() s .= k \"=\" v \"`n\" MsgBox s"
 },
 {
 "name":"Format",
@@ -4861,7 +4861,7 @@
 {
 "name":"RegView",
 "type":"Integer or String",
-"desc":"Specify 32 to view the registry as a 32-bit application would, or 64 to view the registry as a 64-bit application would. Specify the word Default to restore normal behaviour."
+"desc":"Specify 32 to view the registry as a 32-bit application would, or 64 to view the registry as a 64-bit application would. Specify the word Default to restore normal behavior."
 }
 ],
 "returns":"String",

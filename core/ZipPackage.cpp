@@ -287,9 +287,9 @@ long CountFilesOnDisk(const std::wstring &aDir)
 bool WaitForExtraction(const std::wstring &aDestDir, long aExpectedFiles,
 	std::string &aError)
 {
-	const DWORD deadline = GetTickCount() + 60000;
+	const ULONGLONG deadline = GetTickCount64() + 60000;
 	long stable = 0;
-	while (GetTickCount() < deadline)
+	while (GetTickCount64() < deadline)
 	{
 		Sleep(120);
 		const long got = CountFilesOnDisk(aDestDir);
@@ -504,7 +504,6 @@ bool MoveDirToBackup(const std::wstring &aDir, const std::wstring &aTargetDir,
 			RemoveTreeWide(target); // half a copy is worse than no copy
 			return false;
 		}
-		// Same name taken between the check and the move: retry with a suffix.
 	}
 	return false;
 }
@@ -536,14 +535,10 @@ bool ExtractZipSafe(const std::wstring &aZipPath, const std::wstring &aDestDir,
 		return false;
 	}
 
+	// An existing apartment (RPC_E_CHANGED_MODE / S_FALSE) is fine for Shell
+	// dispatch; ownInit only records whether we must CoUninitialize later.
 	HRESULT hrInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 	const bool ownInit = SUCCEEDED(hrInit);
-	if (hrInit == RPC_E_CHANGED_MODE || hrInit == S_FALSE || SUCCEEDED(hrInit))
-	{
-		// An apartment already exists (the deck runs STA) or the model differs
-		// - both are fine for Shell dispatch, we only must not balance a init
-		// we did not perform.
-	}
 	ComPtr<IShellDispatch> shell;
 	HRESULT hr = CoCreateInstance(__uuidof(Shell), nullptr, CLSCTX_INPROC_SERVER,
 		__uuidof(IShellDispatch), (void **)&shell.p);

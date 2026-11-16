@@ -7,7 +7,7 @@
 `LGPL-2.0-with-FLTK-exception.txt`（FLTK 的 `COPYING` 原样），说明见
 [licenses/README.md](licenses/README.md)。本文件是组件摘要，不替代原文。
 
-## 2. 官方 AutoHotkey v2.0.31（唯一内核，进程外）
+## 1. 官方 AutoHotkey v2.0.31（唯一内核，进程外）
 
 - 来源：https://github.com/AutoHotkey/AutoHotkey ，tag `v2.0.31`；源码包 sha256
   `7ed1c04d26b60ea2b4c645768ec9d60d6831d34d53db3d926e451165bd3f467f`
@@ -17,16 +17,19 @@
 - 落位：源码快照在 `.3rd\AutoHotkey-v2.0.31-src\`（只上游源码，无编译产物）；补丁归档在
   `.main\patches\AutoHotkey-v2.0.31\`；构建产物在 `.temp\kernel_official\AutoHotkey64.exe`，
   再复制到程序旁 `AutoHotkey64.exe`。
-- 补丁：四处由环境变量门控的修改（版本回落、JSON 错误/警告汇、`NO_TRAY` ＋托盘菜单快照、
-  启动钩子），未设置 `AHKDECK_*` 环境变量时与上游行为一致。理由与验证见
-  [补丁说明](patches/AutoHotkey-v2.0.31/README.md)。
+- 补丁：**五处**修改，清单以 [补丁说明](patches/AutoHotkey-v2.0.31/README.md) 为准：
+  版本回落钉定 2.0.31（`ahkversion.h`，编译期 `#ifndef RAW_AHK_VERSION`，**非**环境变量门控）、
+  `AHKDECK_ERROR_FILE` 错误/警告 JSON 汇（`error.cpp`）、`AHKDECK_NO_TRAY=1` 抑制托盘图标
+  （`AutoHotkey.cpp`）、`AHKDECK_DUMP_MENU` / `AHKDECK_MENU_FILE` 托盘菜单 JSON（`script2.cpp`）、
+  m194 `AHKDECK_HOST_EXE` 修正 `A_AhkPath`（`script.cpp`）。后四处由 `AHKDECK_*` 环境变量门控，
+  未设置时与上游逐字节一致；理由与验证见上面的补丁说明。
 - 对本产品的影响：宿主**按会话启动该 EXE 为独立子进程**，不 LoadLibrary、不在进程内嵌入；
   双方通过环境变量、JSON 文件、stdout 管道与 Win32 消息通信。本产品源码按 GPL-2.0 公开。
 - m192 P4 起**一个 PE 两用**：这同一个 `AutoHotkey64.exe` 既是编辑器运行脚本的解释器，也是
   「脚本/编译为 EXE」复制并写入脚本资源的底座。旧的进程内 `AutoHotkey64.dll`（AutoHotkey_H
   v2.0.25）与 `tools\AutoHotkey64.exe` 编译底座已退场；其源码与补丁仅作历史归档，不再构建或分发。
 
-## 3. FLTK 1.4.5（GUI 框架）
+## 2. FLTK 1.4.5（GUI 框架）
 
 - 来源：https://github.com/fltk/fltk ，tag `release-1.4.5`
 - 许可：**LGPL-2.0 ＋ FLTK 例外条款**（上游 `COPYING`，2001-12-11 版）。与我们相关的关键例外
@@ -38,14 +41,14 @@
   阴影钩子带 `/alternatename` 空桩兜底；颜色全局仍由 AHKDeck 的 `ui/Theme.cpp` 定义，不能据此声称库可独立链接。
 - 修改版 FLTK 本身的源码修改：按 LGPL 第 4 条随本仓库源码公开（即上述补丁归档）。
 
-## 4. Microsoft Visual C++ 运行库（静态链接，无外部依赖）
+## 3. Microsoft Visual C++ 运行库（静态链接，无外部依赖）
 
 宿主使用 **静态 CRT（/MT，CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded）**，避免要求用户单独安装 VC++ 运行库。
 产品仍依赖 Windows 系统组件及随包的 `AutoHotkey64.exe`，不是仅依赖 USER32/KERNEL32。
 链接进 exe 的第三方库（FLTK）必须用同一旗标构建（4_build 已传
 `-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded`）。
 
-## 5. 单内核布局（m192 P4，替代旧「编译底座 `tools\AutoHotkey64.exe`」一节）
+## 4. 单内核布局（m192 P4，替代旧「编译底座 `tools\AutoHotkey64.exe`」一节）
 
 - 文件：程序旁唯一一个 `AutoHotkey64.exe`，即第 1 节的内核；包内不再有第二个 AHK PE。
 - 用途一：`engine\DeckEngine` 每个会话 spawn 一次，`AHKDECK_NO_TRAY` 收起子进程的托盘图标，
@@ -58,7 +61,7 @@
 - **构建期工具**（口径不变）：CMake、MSVC、Windows SDK、curl、bsdtar 仅为构建工具，
   不进入产物、不参与分发。
 
-## 6. AutoHotkey 应用图标（m030）
+## 5. AutoHotkey 应用图标（m030）
 
 - 文件：`.main\image\autohotkey.ico`（由 `.3rd\AutoHotkey-v2.0.25-src\source\resources\icon_main.ico` 原样复制）
 - 来源：AutoHotkey v2.0.25 源码（https://github.com/AutoHotkey/AutoHotkey ，tag `v2.0.25`）

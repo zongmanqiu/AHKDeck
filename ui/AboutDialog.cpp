@@ -31,6 +31,12 @@ namespace ui
 namespace
 {
 
+// The engine row ("内核 AutoHotkey x.y.z") makes just the product name a
+// link to upstream. Kept here so the painter and the hit-test share one
+// spelling and one destination.
+constexpr const char *kAutoHotkeyWord = "AutoHotkey";
+constexpr const char *kAutoHotkeyUrl = "https://github.com/AutoHotkey/AutoHotkey";
+
 // Clickable repository row: "项目仓库： Gitee | GitHub". Each name is its own
 // hit region, so both URLs are reachable from the one row.
 class RepoLinksWidget : public Fl_Widget
@@ -273,8 +279,9 @@ public:
 	// RepoLinksWidget, not by draw()); panel layout and the widgets must agree.
 	// m178: the scripts repository gets its own row - a user who wants to fork
 	// one script should not have to guess that it lives in another project.
-	static constexpr size_t kRepoLineIndex = 5;
-	static constexpr size_t kScriptsLineIndex = 6;
+	static constexpr size_t kRepoLineIndex = 6;
+	static constexpr size_t kScriptsLineIndex = 7;
+	static constexpr size_t kEngineLineIndex = 1;  // "内核 AutoHotkey x.y.z"
 	static constexpr int kBottomPad = 5;
 
 	AboutPanel(int X, int Y, int W, int H, int fs, std::vector<std::string> lines)
@@ -317,6 +324,72 @@ public:
 			y += ((i == 0) ? m_fs + 14 : m_fs) + 8;
 		}
 		return y;
+	}
+
+	// Horizontal extent of the clickable "AutoHotkey" word inside the engine
+	// row (index 1). The row is drawn centered with fl_draw, so the word's x
+	// = row-left + width(prefix). hitTest() uses the same numbers as draw(),
+	// which is why both go through this one helper.
+	bool engineLinkBounds(int *outX, int *outW) const
+	{
+		if (m_lines.size() <= kEngineLineIndex)
+			return false;
+		const std::string &row = m_lines[kEngineLineIndex];
+		const size_t pos = row.find(kAutoHotkeyWord);
+		if (pos == std::string::npos)
+			return false;
+		fl_font(FL_HELVETICA, m_fs);
+		const std::string prefix = row.substr(0, pos);
+		const int rowLeft = x() + (w() - (int)fl_width(row.c_str())) / 2;
+		*outX = rowLeft + (int)fl_width(prefix.c_str());
+		*outW = (int)fl_width(kAutoHotkeyWord);
+		return true;
+	}
+
+	// Vertical band of the engine row, matching draw()'s baseline advance.
+	bool hitTest(int px, int py) const
+	{
+		int lx = 0, lw = 0;
+		if (!engineLinkBounds(&lx, &lw))
+			return false;
+		const int top = y() + lineTopY(kEngineLineIndex);
+		return px >= lx && px < lx + lw && py >= top && py <= top + m_fs + 8;
+	}
+
+	int handle(int event) override
+	{
+		if (event == FL_MOVE || event == FL_ENTER)
+		{
+			const bool hot = hitTest(Fl::event_x(), Fl::event_y());
+			if (hot != m_engineHover)
+			{
+				m_engineHover = hot;
+				redraw();
+			}
+			return hot ? 1 : 0;
+		}
+		if (event == FL_LEAVE)
+		{
+			if (m_engineHover)
+			{
+				m_engineHover = false;
+				redraw();
+			}
+			return 0;
+		}
+		if (event == FL_PUSH)
+			return hitTest(Fl::event_x(), Fl::event_y()) ? 1 : 0;
+		if (event == FL_RELEASE)
+		{
+			if (hitTest(Fl::event_x(), Fl::event_y()))
+			{
+				ShellExecuteA(nullptr, "open", kAutoHotkeyUrl, nullptr,
+					nullptr, SW_SHOWNORMAL);
+				return 1;
+			}
+			return 0;
+		}
+		return Fl_Widget::handle(event);
 	}
 
 	// SVG -> pre-rasterized at kQrSize; PNG -> as-is; missing -> placeholder.
@@ -391,13 +464,50 @@ public:
 				y += 2 * (m_fs / 2 + 4);
 				continue;
 			}
-			const bool isTitle = (i == 0);
-			fl_font(isTitle ? FL_HELVETICA_BOLD : FL_HELVETICA,
-				isTitle ? m_fs + 14 : m_fs);
+		const bool isTitle = (i == 0);
+		fl_font(isTitle ? FL_HELVETICA_BOLD : FL_HELVETICA,
+			isTitle ? m_fs + 14 : m_fs);
+		const int rowH = (isTitle ? m_fs + 14 : m_fs) + 8;
+		// hover redraws only THIS panel, so every non-empty text row must be
+		// cleared before it is painted again - otherwise the old glyphs sit
+		// under the new ones and their antialiased edges stack into a bolder,
+		// blurred look. Clear ONLY rows this panel actually draws: empty rows
+		// are placeholders for the repo-link sibling widgets, which do NOT
+		// repaint on our hover; touching them wiped them out (first attempt).
+		fl_rectf(x(), y, w(), rowH, DeckColors().background1);
+		const int baseline = y + (isTitle ? m_fs + 14 : m_fs);
+		if (i == kEngineLineIndex &&
+			s.find(kAutoHotkeyWord) != std::string::npos)
+		{
+			// Split "内核 AutoHotkey x.y.z" into plain / link / plain so the
+			// product name can be drawn as a link; bounds match engineLinkBounds().
+			const size_t pos = s.find(kAutoHotkeyWord);
+			const std::string prefix = s.substr(0, pos);
+			const std::string suffix =
+				s.substr(pos + std::string(kAutoHotkeyWord).size());
+			const int rowLeft = cx - (int)fl_width(s.c_str()) / 2;
+			const int wordX = rowLeft + (int)fl_width(prefix.c_str());
+			const int wordW = (int)fl_width(kAutoHotkeyWord);
 			fl_color(DeckColors().text1);
-			fl_draw(s.c_str(), cx - (int)fl_width(s.c_str()) / 2,
-				y + (isTitle ? m_fs + 14 : m_fs));
-			y += (isTitle ? m_fs + 14 : m_fs) + 8;
+			if (!prefix.empty())
+				fl_draw(prefix.c_str(), rowLeft, baseline);
+			const Fl_Color linkCol = m_engineHover
+				? DeckColors().highlight3 : DeckColors().text1;
+			fl_color(linkCol);
+			fl_draw(kAutoHotkeyWord, wordX, baseline);
+			fl_line_style(FL_SOLID, 1);
+			fl_line(wordX, baseline + 2, wordX + wordW, baseline + 2);
+			fl_line_style(0);
+			fl_color(DeckColors().text1);
+			if (!suffix.empty())
+				fl_draw(suffix.c_str(), wordX + wordW, baseline);
+		}
+		else
+		{
+			fl_color(DeckColors().text1);
+			fl_draw(s.c_str(), cx - (int)fl_width(s.c_str()) / 2, baseline);
+		}
+		y += rowH;
 		}
 
 		// Two QR images side by side, centered at the bottom, each with a
@@ -436,6 +546,7 @@ private:
 	Fl_Image *m_qr1 = nullptr;
 	std::string m_qr0Name, m_qr1Name;
 	std::vector<std::string> m_urlLabels;
+	bool m_engineHover = false;
 };
 
 class AboutDialog : public DeckDialog
@@ -463,20 +574,22 @@ public:
 		const std::string scriptsGithub =
 			"https://github.com/zongmanqiu/ahk-v2-scripts";
 
-		// m202: slot 1 was the empty line left by m091. Filling it with the
-		// kernel version keeps the line COUNT and therefore kRepoLineIndex /
-		// kScriptsLineIndex exactly where they were - an empty line and a
-		// body line advance y by the same 24px, so no layout shifts.
+		// m202: slot 1 was the empty line left by m091, later filled with the
+		// kernel version. The user asked for a blank line between the kernel
+		// and the copyright, so a new slot 2 is inserted here and both link
+		// row indices below shift by one (empty and body lines advance y by
+		// the same amount, so only the indices need updating).
 		std::vector<std::string> lines = {
 			title,                          // 0. name + product version
 			engine,                         // 1. kernel version (same parameter as the status bar)
-			copyright,                      // 2. copyright w/ author
-			license,                        // 3. license
-			"",                             // 4. blank
-			"",                             // 5. 项目仓库 row (RepoLinksWidget)
-			"",                             // 6. 脚本仓库 row (RepoLinksWidget)
-			"",                             // 7. blank
-			"赞助",                         // 8. sponsor
+			"",                             // 2. blank - kernel / copyright breathing room
+			copyright,                      // 3. copyright w/ author
+			license,                        // 4. license
+			"",                             // 5. blank
+			"",                             // 6. 项目仓库 row (RepoLinksWidget)
+			"",                             // 7. 脚本仓库 row (RepoLinksWidget)
+			"",                             // 8. blank
+			"赞助",                         // 9. sponsor
 		};
 
 		begin();

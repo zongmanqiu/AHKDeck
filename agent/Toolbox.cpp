@@ -1154,13 +1154,55 @@ std::vector<ToolDef> Toolbox::Definitions() const
 	}
 	{
 		ToolDef d;
+		d.name = "assert_ui";
+		d.description = "对界面做一次性断言，工具自己给结论：内部调 inspect_ui 拿同一份控件树与条目，"
+			"再按 checks 逐项判定，返回 verdict=pass/fail。ok=true 只表示工具调用成功，"
+			"verdict 才是断言结论——不必自己解析 inspect_ui 输出再判断。"
+			"checks 每项：select{class,text,hwnd,index} 选控件（class 精确忽略大小写、text 包含匹配、"
+			"index 取第几个命中，默认 0；不传 select 则选顶层窗口）；"
+			"field 是点分路径（text/class/visible/enabled/state.checked/items.count/controls.count，"
+			"数组上的 count 解析成元素数）；op 默认 eq，可 ne/contains/gte/lte/gt/lt/truthy/exists；"
+			"value 是期望值。典型用法：run_editor → send_input → assert_ui 直接判通过。";
+		d.properties.Set("session", arg("integer", "会话编号，与 hwnd、pid 三选一"));
+		d.properties.Set("hwnd", arg("string", "窗口句柄（十六进制或十进制），与 session、pid 三选一"));
+		d.properties.Set("pid", arg("integer", "进程编号，与 session、hwnd 三选一"));
+		d.properties.Set("items", arg("boolean", "true 时让内部 inspect_ui 读取条目，默认 false"));
+		d.properties.Set("rows", arg("integer", "items=true 时最多读多少行，默认 50"));
+		d.properties.Set("max", arg("integer", "最多枚举多少控件，默认 200"));
+		d.properties.Set("wait_ms", arg("integer", "内部 inspect_ui 等窗口出现的最长毫秒数，默认 1500"));
+		d.properties.Set("checks", argArray("object",
+			"断言数组，非空、最多 64 项；每项 {select,field,op,value}"));
+		d.required.push_back("checks");
+		defs.push_back(std::move(d));
+	}
+	{
+		ToolDef d;
+		d.name = "wait_ui";
+		d.description = "有界等待界面满足条件：反复调 inspect_ui（内部 wait_ms=0，避免每次等待叠加），"
+			"直到 checks 全部通过或超时。参数同 assert_ui，另加 timeout_ms（默认 3000，上限 15000）"
+			"与 interval_ms（默认 100，范围 30-1000）。返回 verdict=pass/fail、matched、timed_out、"
+			"elapsed_ms、attempts 与最后一次的逐项 checks。"
+			"窗口异步创建、列表异步填充时用它在断言前等一等，别自己 sleep 再逐个字段核对。";
+		d.properties.Set("session", arg("integer", "会话编号，与 hwnd、pid 三选一"));
+		d.properties.Set("hwnd", arg("string", "窗口句柄（十六进制或十进制），与 session、pid 三选一"));
+		d.properties.Set("pid", arg("integer", "进程编号，与 session、hwnd 三选一"));
+		d.properties.Set("items", arg("boolean", "true 时让内部 inspect_ui 读取条目，默认 false"));
+		d.properties.Set("rows", arg("integer", "items=true 时最多读多少行，默认 50"));
+		d.properties.Set("max", arg("integer", "最多枚举多少控件，默认 200"));
+		d.properties.Set("checks", argArray("object",
+			"等待条件数组，非空、最多 64 项；每项 {select,field,op,value}"));
+		d.properties.Set("timeout_ms", arg("integer", "最长等待毫秒数，默认 3000，上限 15000"));
+		d.properties.Set("interval_ms", arg("integer", "每轮间隔毫秒数，默认 100，范围 30-1000"));
+		d.required.push_back("checks");
+		defs.push_back(std::move(d));
+	}
+	{
+		ToolDef d;
 		d.name = "lookup_help";
-		// m202: the kernel version is one parameter, not a typed-out number.
-		// The 2.0.30 above is different on purpose - that is the handbook the
-		// bundled help-index.json was generated from, not the running kernel.
+		// m222: index and kernel are both 2.0.31 - no version split to explain.
 		d.description = "查 AutoHotkey v2 的函数、内建变量与对象的官方语法：签名、每个参数的类型和含义、"
-			"返回值、示例。数据来自随包的 help-index.json（356 页，取自官方 2.0.30 手册，内核为 "
-			+ std::string(ahkdeck::KernelVersionString()) + "），"
+			"返回值、示例。数据来自随包的 help-index.json（356 页，取自官方 "
+			+ std::string(ahkdeck::KernelVersionString()) + " 手册），"
 			"不是凭记忆生成的，所以和你正在跑的内核一致。"
 			"**写 AHK 代码前，只要不确定函数名、参数顺序、某个参数留空会怎样，就先查它。**"
 			"凭记忆写出来的 API 常常语法合法、语义错（参数位置颠倒、选项名拼错、把格式串当初始值），"
@@ -1181,32 +1223,6 @@ std::vector<ToolDef> Toolbox::Definitions() const
 	}
 
 	return defs;
-}
-
-Json Toolbox::OpenAiSchema() const
-{
-	Json tools = Json::MakeArray();
-	for (const auto &def : Definitions())
-	{
-		Json parameters = Json::MakeObject();
-		parameters.Set("type", Json("object"));
-		parameters.Set("properties", def.properties);
-		Json required = Json::MakeArray();
-		for (const auto &name : def.required)
-			required.Push(Json(name));
-		parameters.Set("required", std::move(required));
-
-		Json function = Json::MakeObject();
-		function.Set("name", Json(def.name));
-		function.Set("description", Json(def.description));
-		function.Set("parameters", std::move(parameters));
-
-		Json tool = Json::MakeObject();
-		tool.Set("type", Json("function"));
-		tool.Set("function", std::move(function));
-		tools.Push(std::move(tool));
-	}
-	return tools;
 }
 
 std::string Toolbox::Call(const std::string &aName, const std::string &aArgumentsJson)
@@ -1271,6 +1287,10 @@ std::string Toolbox::Call(const std::string &aName, const std::string &aArgument
 		return ToolSendInput(args);
 	if (aName == "ui_diff")
 		return ToolUiDiff(args);
+	if (aName == "assert_ui")
+		return ToolAssertUi(args);
+	if (aName == "wait_ui")
+		return ToolWaitUi(args);
 	if (aName == "lookup_help")
 		return ToolLookupHelp(args);
 	return ErrorResult("未知工具: " + aName).Dump();
@@ -3817,8 +3837,9 @@ std::string Toolbox::ToolPixel(const Json &aArgs)
 
 // --------------------------------------------------------------- m177: help
 //
-// The deck ships the AutoHotkey 2.0.30 help text as an index (docs\help-index.json,
-// built by tools/make_help_index.py from AutoHotkey.chm). This is the only way a
+// The deck ships the AutoHotkey 2.0.31 help text as an index (docs\help-index.json,
+// built by tools/make_help_index.py from the deps-governed AutoHotkey.chm, m222).
+// This is the only way a
 // caller can confirm a signature: the chm itself is compressed HTML that no model
 // can read, and the vendored markdown mirror stops at 2.0.18.
 //
@@ -4052,6 +4073,261 @@ std::string Toolbox::ToolStopAll()
 	result.Set("still_running", Json((double)still));
 	Note("stop_all 已发送停止 " + std::to_string(ids.size())
 		+ " 个会话，1 秒后仍在 " + std::to_string(still) + " 个");
+	return result.Dump();
+}
+
+// ---------------------------------------------- m218: verdict over inspect_ui
+namespace
+{
+// Pass the target/measurement arguments straight through to the one tool that
+// actually walks windows. wait_ui forces wait_ms=0 because its own loop owns
+// the clock - a per-iteration 1.5s internal wait would multiply out.
+Json InspectionArgs(const Json &aArgs, bool aNoWait)
+{
+	Json out = Json::MakeObject();
+	for (const char *key : {"session", "hwnd", "pid", "items", "rows", "max", "wait_ms"})
+	{
+		if (aArgs.Has(key))
+			out.Set(key, aArgs[key]);
+	}
+	if (aNoWait)
+		out.Set("wait_ms", Json(0.0));
+	return out;
+}
+
+// Flattens the inspect_ui shape into one ordered candidate list: top-level
+// windows first, then each window's controls. Same order the caller sees, so
+// `index` means the same thing in both tools.
+const Json *SelectUiNode(const Json &aSnapshot, const Json &aSelect)
+{
+	const std::string cls = LowerAscii(aSelect["class"].AsString());
+	const std::string needle = aSelect["text"].AsString();
+	const std::string hwnd = LowerAscii(aSelect["hwnd"].AsString());
+	const int wanted = aSelect["index"].AsInt(0);
+
+	const Json &windows = aSnapshot["windows"];
+	std::vector<const Json *> candidates;
+	for (size_t i = 0; i < windows.Size(); ++i)
+	{
+		candidates.push_back(&windows[i]);
+		const Json &controls = windows[i]["controls"];
+		for (size_t j = 0; j < controls.Size(); ++j)
+			candidates.push_back(&controls[j]);
+	}
+
+	int matched = 0;
+	for (const Json *node : candidates)
+	{
+		if (!cls.empty() && LowerAscii((*node)["class"].AsString()) != cls)
+			continue;
+		if (!needle.empty() && (*node)["text"].AsString().find(needle) == std::string::npos)
+			continue;
+		if (!hwnd.empty() && LowerAscii((*node)["hwnd"].AsString()) != hwnd)
+			continue;
+		if (matched++ == wanted)
+			return node;
+	}
+	return nullptr;
+}
+
+// Dotted field path. `count` on an array is the element count, which makes
+// items.count / controls.count / windows.count work without special cases.
+Json FieldValue(const Json &aNode, const std::string &aPath)
+{
+	size_t pos = 0;
+	Json cur = aNode;
+	for (;;)
+	{
+		const size_t dot = aPath.find('.', pos);
+		const std::string key = aPath.substr(pos,
+			dot == std::string::npos ? std::string::npos : dot - pos);
+		if (cur.IsArray() && key == "count")
+			return Json((double)cur.Size());
+		if (!cur.IsObject() || !cur.Has(key))
+			return Json();
+		Json next = cur[key];
+		cur = std::move(next);
+		if (dot == std::string::npos)
+			return cur;
+		pos = dot + 1;
+	}
+}
+
+bool CompareValue(const Json &aActual, const std::string &aOp, const Json &aExpected)
+{
+	if (aOp == "exists")
+		return !aActual.IsNull();
+	if (aOp == "truthy")
+	{
+		if (aActual.IsBool())
+			return aActual.AsBool();
+		if (aActual.IsNumber())
+			return aActual.AsNumber() != 0;
+		if (aActual.IsString())
+			return !aActual.AsString().empty();
+		return !aActual.IsNull();
+	}
+	const bool equal = (aActual.IsNumber() && aExpected.IsNumber())
+		? aActual.AsNumber() == aExpected.AsNumber()
+		: (aActual.IsBool() && aExpected.IsBool())
+			? aActual.AsBool() == aExpected.AsBool()
+			: aActual.AsString() == aExpected.AsString();
+	if (aOp == "eq" || aOp == "ne")
+		return aOp == "eq" ? equal : !equal;
+	if (aOp == "contains")
+		return aActual.AsString().find(aExpected.AsString()) != std::string::npos;
+	const double lhs = aActual.IsNumber()
+		? aActual.AsNumber() : std::atof(aActual.AsString().c_str());
+	const double rhs = aExpected.IsNumber()
+		? aExpected.AsNumber() : std::atof(aExpected.AsString().c_str());
+	if (aOp == "gte") return lhs >= rhs;
+	if (aOp == "lte") return lhs <= rhs;
+	if (aOp == "gt") return lhs > rhs;
+	if (aOp == "lt") return lhs < rhs;
+	return false;
+}
+
+Json EvaluateChecks(const Json &aSnapshot, const Json &aChecks)
+{
+	Json rows = Json::MakeArray();
+	int passed = 0;
+	for (size_t i = 0; i < aChecks.Size(); ++i)
+	{
+		const Json &check = aChecks[i];
+		const Json *node = SelectUiNode(aSnapshot, check["select"]);
+		const std::string field = check["field"].AsString();
+		std::string op = check["op"].AsString();
+		if (op.empty())
+			op = "eq";
+		const Json actual = node ? FieldValue(*node, field) : Json();
+		const bool pass = CompareValue(actual, op, check["value"]);
+		if (pass)
+			++passed;
+
+		Json row = Json::MakeObject();
+		row.Set("pass", Json(pass));
+		row.Set("field", Json(field));
+		row.Set("op", Json(op));
+		if (check.Has("value"))
+			row.Set("expected", check["value"]);
+		if (!actual.IsNull())
+			row.Set("actual", actual);
+		if (node)
+		{
+			Json target = Json::MakeObject();
+			target.Set("class", (*node)["class"]);
+			target.Set("text", (*node)["text"]);
+			target.Set("hwnd", (*node)["hwnd"]);
+			row.Set("target", std::move(target));
+		}
+		else
+		{
+			row.Set("note", Json("没有匹配的控件"));
+		}
+		rows.Push(std::move(row));
+	}
+
+	Json verdict = Json::MakeObject();
+	verdict.Set("checks", std::move(rows));
+	verdict.Set("passed", Json((double)passed));
+	verdict.Set("failed", Json((double)(aChecks.Size() - (size_t)passed)));
+	verdict.Set("total", Json((double)aChecks.Size()));
+	verdict.Set("verdict", Json(passed == (int)aChecks.Size() ? "pass" : "fail"));
+	return verdict;
+}
+
+bool ReadChecks(const Json &aArgs, Json &aChecks, std::string &aError)
+{
+	const Json &checks = aArgs["checks"];
+	if (!checks.IsArray() || checks.Size() == 0)
+	{
+		aError = "checks 必须是非空数组";
+		return false;
+	}
+	if (checks.Size() > 64)
+	{
+		aError = "checks 最多 64 项";
+		return false;
+	}
+	for (size_t i = 0; i < checks.Size(); ++i)
+	{
+		if (!checks[i].IsObject() || checks[i]["field"].AsString().empty())
+		{
+			aError = "checks[" + std::to_string(i) + "] 必须是带 field 的对象";
+			return false;
+		}
+	}
+	aChecks = checks;
+	return true;
+}
+} // namespace
+
+std::string Toolbox::ToolAssertUi(const Json &aArgs)
+{
+	Json checks;
+	std::string error;
+	if (!ReadChecks(aArgs, checks, error))
+		return ErrorResult(error).Dump();
+
+	const std::string raw = ToolInspectUi(InspectionArgs(aArgs, false));
+	Json snapshot;
+	if (!Json::Parse(raw, snapshot, error))
+		return ErrorResult("界面快照解析失败: " + error).Dump();
+	if (!snapshot["ok"].AsBool(false))
+		return ErrorResult("界面快照读取失败: " + snapshot["error"].AsString()).Dump();
+
+	Json verdict = EvaluateChecks(snapshot, checks);
+	Json result = OkResult();
+	result.Set("verdict", verdict["verdict"]);
+	result.Set("passed", verdict["passed"]);
+	result.Set("failed", verdict["failed"]);
+	result.Set("total", verdict["total"]);
+	result.Set("checks", verdict["checks"]);
+	return result.Dump();
+}
+
+std::string Toolbox::ToolWaitUi(const Json &aArgs)
+{
+	Json checks;
+	std::string error;
+	if (!ReadChecks(aArgs, checks, error))
+		return ErrorResult(error).Dump();
+
+	int timeoutMs = aArgs["timeout_ms"].AsInt(3000);
+	timeoutMs = timeoutMs < 0 ? 0 : (timeoutMs > 15000 ? 15000 : timeoutMs);
+	int intervalMs = aArgs["interval_ms"].AsInt(100);
+	intervalMs = intervalMs < 30 ? 30 : (intervalMs > 1000 ? 1000 : intervalMs);
+
+	const Json snapshotArgs = InspectionArgs(aArgs, true);
+	const ULONGLONG started = GetTickCount64();
+	const ULONGLONG deadline = started + (ULONGLONG)timeoutMs;
+	int attempts = 0;
+	Json last = Json::MakeObject();
+	for (;;)
+	{
+		++attempts;
+		const std::string raw = ToolInspectUi(snapshotArgs);
+		Json snapshot;
+		if (!Json::Parse(raw, snapshot, error) || !snapshot["ok"].AsBool(false))
+			return ErrorResult("界面快照读取失败: " + error).Dump();
+		last = EvaluateChecks(snapshot, checks);
+		if (last["verdict"].AsString() == "pass" || Cancelled() || GetTickCount64() >= deadline)
+			break;
+		Sleep((DWORD)intervalMs);
+	}
+
+	const bool matched = last["verdict"].AsString() == "pass";
+	const bool timedOut = !matched && GetTickCount64() >= deadline;
+	Json result = OkResult();
+	result.Set("verdict", Json(matched ? "pass" : "fail"));
+	result.Set("matched", Json(matched));
+	result.Set("timed_out", Json(timedOut));
+	result.Set("elapsed_ms", Json((double)(GetTickCount64() - started)));
+	result.Set("attempts", Json((double)attempts));
+	result.Set("passed", last["passed"]);
+	result.Set("failed", last["failed"]);
+	result.Set("total", last["total"]);
+	result.Set("checks", last["checks"]);
 	return result.Dump();
 }
 

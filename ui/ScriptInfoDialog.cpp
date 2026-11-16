@@ -18,6 +18,9 @@
 #include <FL/Fl_Widget.H>
 #include <FL/fl_draw.H>
 
+#include <windows.h>
+#include <shellapi.h>
+
 #include <string>
 #include <vector>
 
@@ -70,11 +73,22 @@ std::vector<InfoGroup> Pruned(const std::vector<InfoGroup> &aGroups)
 		kept.reserve(group.size());
 		for (const InfoField &field : group)
 		{
-			std::string value = Trimmed(field.value);
-			if (value.empty())
-				continue;
 			InfoField copy = field;
-			copy.value = value;
+			copy.value = Trimmed(field.value);
+			// m221: a link row keeps its content in `links`, not `value`.
+			// Trim both halves and drop unusable links, so a field with no
+			// value and no live link disappears just like an empty old field.
+			copy.links.clear();
+			for (const InfoLink &link : field.links)
+			{
+				InfoLink l = link;
+				l.text = Trimmed(l.text);
+				l.url = Trimmed(l.url);
+				if (!l.text.empty() && !l.url.empty())
+					copy.links.push_back(l);
+			}
+			if (copy.value.empty() && copy.links.empty())
+				continue;
 			kept.push_back(copy);
 		}
 		if (!kept.empty())
@@ -272,6 +286,232 @@ public:
 	}
 };
 
+// m221: a clickable URL value. The value carries the newlines WrapAll inserted
+// for display, so the browser gets them stripped before ShellExecute. Hover
+// and underline follow AboutDialog's repository links - one link look for the
+// whole app.
+class LinkValueWidget : public Fl_Widget
+{
+public:
+	LinkValueWidget(int X, int Y, int W, int H, const std::string &aValue,
+		int aLineH, int aFont, int aSize, Fl_Color aBase, Fl_Color aHot,
+		Fl_Color aBg)
+		: Fl_Widget(X, Y, W, H), m_value(aValue), m_lineH(aLineH),
+		  m_font(aFont), m_size(aSize), m_base(aBase), m_hot(aHot), m_bg(aBg)
+	{
+		box(FL_NO_BOX);
+	}
+
+	void draw() override
+	{
+		fl_push_clip(x(), y(), w(), h());
+		fl_rectf(x(), y(), w(), h(), m_bg);
+		fl_font(m_font, m_size);
+		const Fl_Color col = m_hover ? m_hot : m_base;
+		fl_color(col);
+		size_t begin = 0;
+		int line = 0;
+		while (true)
+		{
+			const size_t nl = m_value.find('\n', begin);
+			const std::string part = m_value.substr(
+				begin, nl == std::string::npos ? std::string::npos : nl - begin);
+			const int ty = y() + line * m_lineH + (m_lineH - m_size) / 2 + m_size;
+			fl_draw(part.c_str(), x(), ty);
+			int tw = 0;
+			int th = 0;
+			fl_measure(part.c_str(), tw, th);
+			fl_line_style(FL_SOLID, 1);
+			fl_color(col);
+			fl_line(x(), ty + 2, x() + tw, ty + 2);
+			fl_line_style(0);
+			if (nl == std::string::npos)
+				break;
+			begin = nl + 1;
+			++line;
+		}
+		fl_pop_clip();
+	}
+
+	int handle(int event) override
+	{
+		switch (event)
+		{
+		case FL_ENTER:
+		case FL_MOVE:
+			if (!m_hover)
+			{
+				m_hover = true;
+				redraw();
+			}
+			return 1;
+		case FL_LEAVE:
+			if (m_hover)
+			{
+				m_hover = false;
+				redraw();
+			}
+			return 1;
+		case FL_PUSH:
+			return 1;
+		case FL_RELEASE:
+		{
+			if (!Fl::event_inside(this))
+				return 0;
+			std::string url;
+			for (char c : m_value)
+			{
+				if (c != '\n' && c != '\r')
+					url += c;
+			}
+			if (!url.empty())
+				ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr,
+					SW_SHOWNORMAL);
+			return 1;
+		}
+		}
+		return 0;
+	}
+
+private:
+	std::string m_value;
+	int m_lineH;
+	int m_font;
+	int m_size;
+	Fl_Color m_base;
+	Fl_Color m_hot;
+	Fl_Color m_bg;
+	bool m_hover = false;
+};
+
+// m221: one row holding several short clickable labels ("Gitee | GitHub").
+// Mirrors AboutDialog's RepoLinksWidget: each label is its own hit region, so
+// both mirrors stay reachable from one field regardless of the chosen source.
+class LinkRowWidget : public Fl_Widget
+{
+public:
+	LinkRowWidget(int X, int Y, int W, int H,
+		const std::vector<InfoLink> &aLinks, int aFont, int aSize,
+		Fl_Color aBase, Fl_Color aHot, Fl_Color aBg)
+		: Fl_Widget(X, Y, W, H), m_links(aLinks), m_font(aFont),
+		  m_size(aSize), m_base(aBase), m_hot(aHot), m_bg(aBg)
+	{
+		box(FL_NO_BOX);
+	}
+
+	int handle(int event) override
+	{
+		switch (event)
+		{
+		case FL_ENTER:
+		case FL_MOVE:
+		{
+			const int hit = hitAt(Fl::event_x());
+			if (hit != m_hover)
+			{
+				m_hover = hit;
+				redraw();
+			}
+			return 1;
+		}
+		case FL_LEAVE:
+			if (m_hover != -1)
+			{
+				m_hover = -1;
+				redraw();
+			}
+			return 1;
+		case FL_PUSH:
+			return 1;
+		case FL_RELEASE:
+		{
+			if (!Fl::event_inside(this))
+				return 0;
+			const int hit = hitAt(Fl::event_x());
+			if (hit >= 0 && hit < (int)m_links.size())
+				ShellExecuteA(nullptr, "open", m_links[hit].url.c_str(),
+					nullptr, nullptr, SW_SHOWNORMAL);
+			return 1;
+		}
+		}
+		return 0;
+	}
+
+	void draw() override
+	{
+		fl_push_clip(x(), y(), w(), h());
+		fl_rectf(x(), y(), w(), h(), m_bg);
+		int starts[8] = { 0 }, widths[8] = { 0 };
+		int ty = 0;
+		layout(starts, widths, &ty);
+		fl_color(m_base);
+		for (size_t i = 0; i < m_links.size(); ++i)
+		{
+			if (i > 0)
+			{
+				fl_color(m_base);
+				fl_draw(m_sep, starts[i] - m_sepW, ty);
+			}
+			const Fl_Color col = (i == (size_t)m_hover) ? m_hot : m_base;
+			fl_color(col);
+			fl_draw(m_links[i].text.c_str(), starts[i], ty);
+			fl_line_style(FL_SOLID, 1);
+			fl_color(col);
+			// Tight underlines: the label uses the same baseline but has no
+			// underline, so a 2px gap here made the whole row read as low.
+			fl_line(starts[i], ty + 1, starts[i] + widths[i], ty + 1);
+			fl_line_style(0);
+		}
+		fl_pop_clip();
+	}
+
+private:
+	// draw() and hitAt() share these numbers, so the painted links and their
+	// clickable regions cannot drift apart.
+	void layout(int *aStarts, int *aWidths, int *aTy)
+	{
+		fl_font(m_font, m_size);
+		m_sepW = (int)fl_width(m_sep);
+		int cx = x();
+		for (size_t i = 0; i < m_links.size() && i < 8; ++i)
+		{
+			if (i > 0)
+				cx += m_sepW;
+			aStarts[i] = cx;
+			aWidths[i] = (int)fl_width(m_links[i].text.c_str());
+			cx += aWidths[i];
+		}
+		// Exact baseline of a sibling Fl_Box drawn with FL_ALIGN_TOP.
+		// fl_draw.cxx: ypos = y + height (FL_ALIGN_TOP), then the glyphs are
+		// drawn at ypos - desc (line 369). So the real baseline is
+		// y + fl_height() - fl_descent(), NOT y + fl_height() - that extra
+		// descent (~3px) is why the links still sat visibly low.
+		*aTy = y() + fl_height() - fl_descent();
+	}
+
+	int hitAt(int aMouseX)
+	{
+		int starts[8] = { 0 }, widths[8] = { 0 }, ty = 0;
+		layout(starts, widths, &ty);
+		for (size_t i = 0; i < m_links.size() && i < 8; ++i)
+		{
+			if (aMouseX >= starts[i] && aMouseX < starts[i] + widths[i])
+				return (int)i;
+		}
+		return -1;
+	}
+
+	std::vector<InfoLink> m_links;
+	int m_font;
+	int m_size;
+	Fl_Color m_base;
+	Fl_Color m_hot;
+	Fl_Color m_bg;
+	const char *m_sep = " | ";
+	int m_sepW = 0;
+	int m_hover = -1;
+};
+
 class InfoDialog : public DeckDialog
 {
 public:
@@ -344,7 +584,22 @@ private:
 			label->labelcolor(aColors.text2);
 
 			const int valueX = kMargin + kLabelW + kGap;
-			if (placed.field->selectable)
+			if (!placed.field->links.empty())
+			{
+				// m221: a row of short clickable mirrors ("Gitee | GitHub").
+				new LinkRowWidget(valueX, placed.y, valueWidth, placed.h,
+					placed.field->links, FL_HELVETICA, SubTextSize(),
+					aColors.text1, aColors.highlight3, aColors.background1);
+			}
+			else if (placed.field->link)
+			{
+				// m221: an HTTPS URL the user may click to open. Styled like
+				// AboutDialog's repository links (same base/hover tokens).
+				new LinkValueWidget(valueX, placed.y, valueWidth, placed.h,
+					placed.field->value, kLineH, FL_HELVETICA, SubTextSize(),
+					aColors.text1, aColors.highlight3, aColors.background1);
+			}
+			else if (placed.field->selectable)
 			{
 				// Borderless so it reads as text, but selectable: a path is the
 				// one value here a user may want on the clipboard.

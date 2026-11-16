@@ -861,22 +861,10 @@ ExeCompileOutcome CompileScriptToExe(const std::wstring &aExeDir,
 	const std::wstring tag = std::to_wstring(GetCurrentProcessId()) + L"-" +
 		std::to_wstring(static_cast<unsigned long long>(GetTickCount64()));
 
-	// Preserve an earlier artifact BEFORE anything is produced: the overwrite
-	// contract is rename-to-.old (same as the downloader), never truncate.
-	if (FileExists(aOutPath))
-	{
-		const std::wstring backup = aOutPath + L".old";
-		DeleteFileW(backup.c_str());
-		if (!MoveFileW(aOutPath.c_str(), backup.c_str()))
-		{
-			outcome.error = "旧产物无法备份（可能正被占用），编译已中止";
-			return outcome;
-		}
-		outcome.backedUp = true;
-	}
-
-	// Validate first: a bundle of a script that cannot load is a trap the user
-	// only discovers by double-clicking the result.
+	// Validate FIRST: a bundle of a script that cannot load is a trap the user
+	// only discovers by double-clicking the result. Same contract as the
+	// downloader (ScriptCatalog.cpp) - on validation failure the old artifact
+	// is untouched, so nothing is renamed until the verdict is clean.
 	std::string report;
 	std::string validateError;
 	const int verdict = ValidateInChild(root, aScriptPath, tempDir, tag, aTimeoutMs,
@@ -892,6 +880,20 @@ ExeCompileOutcome CompileScriptToExe(const std::wstring &aExeDir,
 		const std::string readable = ReadableDiagnostics(report);
 		outcome.output = readable.empty() ? report : readable;
 		return outcome;
+	}
+
+	// Only now, with a clean verdict, preserve the earlier artifact. The
+	// overwrite contract is rename-to-.old (never truncate).
+	if (FileExists(aOutPath))
+	{
+		const std::wstring backup = aOutPath + L".old";
+		DeleteFileW(backup.c_str());
+		if (!MoveFileW(aOutPath.c_str(), backup.c_str()))
+		{
+			outcome.error = "旧产物无法备份（可能正被占用），编译已中止";
+			return outcome;
+		}
+		outcome.backedUp = true;
 	}
 
 	// Defaults come from the script, never from a question the user did not ask.

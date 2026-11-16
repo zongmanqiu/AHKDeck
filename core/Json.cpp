@@ -172,11 +172,59 @@ private:
 
 	bool ParseNumber(Json &aOut)
 	{
-		char *end = nullptr;
-		const double value = std::strtod(mText.c_str() + mPos, &end);
-		if (end == mText.c_str() + mPos)
+		// Strict JSON number grammar, not strtod: strtod also accepts 0x hex
+		// floats and signed inf/nan, which are not JSON and can smuggle
+		// non-finite values into a config parsed by the AI tools.
+		const size_t start = mPos;
+		if (mPos < mText.size() && mText[mPos] == '-')
+			++mPos;
+		if (mPos >= mText.size())
 			return Fail("invalid number");
-		mPos = (size_t)(end - mText.c_str());
+		if (mText[mPos] == '0')
+		{
+			++mPos; // leading zeros like 01 are rejected by the tail check
+		}
+		else if (mText[mPos] >= '1' && mText[mPos] <= '9')
+		{
+			while (mPos < mText.size() && mText[mPos] >= '0' && mText[mPos] <= '9')
+				++mPos;
+		}
+		else
+		{
+			mPos = start;
+			return Fail("invalid number");
+		}
+		if (mPos < mText.size() && mText[mPos] == '.')
+		{
+			++mPos;
+			if (mPos >= mText.size() || mText[mPos] < '0' || mText[mPos] > '9')
+			{
+				mPos = start;
+				return Fail("invalid number");
+			}
+			while (mPos < mText.size() && mText[mPos] >= '0' && mText[mPos] <= '9')
+				++mPos;
+		}
+		if (mPos < mText.size() && (mText[mPos] == 'e' || mText[mPos] == 'E'))
+		{
+			++mPos;
+			if (mPos < mText.size() && (mText[mPos] == '+' || mText[mPos] == '-'))
+				++mPos;
+			if (mPos >= mText.size() || mText[mPos] < '0' || mText[mPos] > '9')
+			{
+				mPos = start;
+				return Fail("invalid number");
+			}
+			while (mPos < mText.size() && mText[mPos] >= '0' && mText[mPos] <= '9')
+				++mPos;
+		}
+		char *end = nullptr;
+		const double value = std::strtod(mText.substr(start, mPos - start).c_str(), &end);
+		if (end == nullptr || *end != '\0')
+		{
+			mPos = start;
+			return Fail("invalid number");
+		}
 		aOut = Json(value);
 		return true;
 	}
@@ -236,19 +284,39 @@ private:
 				unsigned int codePoint = 0;
 				if (!ParseHex4(codePoint))
 					return false;
-				if (codePoint >= 0xD800 && codePoint <= 0xDBFF && mPos + 6 <= mText.size()
-					&& mText[mPos] == '\\' && mText[mPos + 1] == 'u')
+				bool appended = false;
+				if (codePoint >= 0xD800 && codePoint <= 0xDBFF)
 				{
-					mPos += 2;
-					unsigned int low = 0;
-					if (!ParseHex4(low))
-						return false;
-					if (low >= 0xDC00 && low <= 0xDFFF)
-						codePoint = 0x10000 + ((codePoint - 0xD800) << 10) + (low - 0xDC00);
-					else
-						AppendUtf8(0xFFFD, aOut);
+					const size_t afterHigh = mPos; // start of a possible \u low
+					if (afterHigh + 6 <= mText.size()
+						&& mText[afterHigh] == '\\' && mText[afterHigh + 1] == 'u')
+					{
+						mPos = afterHigh + 2;
+						unsigned int low = 0;
+						if (!ParseHex4(low))
+							return false;
+						if (low >= 0xDC00 && low <= 0xDFFF)
+							codePoint = 0x10000 + ((codePoint - 0xD800) << 10) + (low - 0xDC00);
+						else
+						{
+							// Not a low surrogate: rewind so the next iteration
+							// parses that \uXXXX on its own - it may be an
+							// ordinary char like \u0041 that must not be eaten.
+							mPos = afterHigh;
+							AppendUtf8(0xFFFD, aOut); // replacement for lone high
+							appended = true;
+						}
+					}
 				}
-				AppendUtf8(codePoint, aOut);
+				if (!appended && codePoint >= 0xD800 && codePoint <= 0xDFFF)
+				{
+					// Lone high/low surrogate with no valid pair: replacement
+					// only. Never encode a surrogate - that is invalid UTF-8.
+					AppendUtf8(0xFFFD, aOut);
+					appended = true;
+				}
+				if (!appended)
+					AppendUtf8(codePoint, aOut);
 				break;
 			}
 			default:

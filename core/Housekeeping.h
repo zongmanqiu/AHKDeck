@@ -1,9 +1,10 @@
-// m109: startup housekeeping for the three per-machine directories.
+// m177: startup housekeeping for the single <exe>\temp\ root.
 //
-// Every launch the deck deletes files older than a retention window from
-// .temp\ (MCP/validate scratch), Backups\ (pre-write script copies) and Logs\
-// (session JSONL). The window is 30 days by default and lives in settings.json
-// (housekeeping.max_age_days) - an advanced-user knob, never a UI control.
+// Every launch the deck deletes files older than a retention window from the
+// temp root (logs\, backups\, work\, deleted\) - the one runtime write point,
+// per core/AppPaths.h. The window is 30 days by default, stored in settings.json
+// (housekeeping.max_age_days) and exposed to users in 设置 > 选项 as 保留时长
+// (永不 / 7 / 30 / 180 天); changing it also triggers one cleanup pass.
 //
 // The time rules are pure functions so the test suite can pin them without
 // creating files: a file exactly N days old is KEPT ("older than" is strict),

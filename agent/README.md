@@ -1,9 +1,9 @@
 # agent/ — 脚本工具层与 MCP 端（m063／m064／m205）
 
-一句话：**工具的唯一定义处**。谁驱动这 18 个工具都行，实现与清单只有一份。
+一句话：**工具的唯一定义处**。谁驱动这 20 个工具都行，实现与清单只有一份。
 
 ```
-Toolbox     18 个工具 + 中性工具定义（ToolDef）；线程安全；只经 core/AiPolicy 落盘
+Toolbox     20 个工具 + 中性工具定义（ToolDef）；线程安全；只经 core/AiPolicy 落盘
 McpServer   MCP stdio 端：换行分隔 JSON-RPC，stdout 只放协议帧，日志走 stderr
 ```
 
@@ -21,7 +21,8 @@ m065 把那个循环删了：模型、重试、上下文管理交给外部 MCP �
 
 `list_scripts` / `read_script` / `edit_editor` / `check_editor` / `validate_editor`
 / `patch_editor` / `run_editor` / `run_script` / `get_session_output` / `stop_script`
-/ `list_sessions` / `stop_all` / `inspect_ui` / `ui_pixel` / `capture_ui` / `lookup_help`
+/ `list_sessions` / `stop_all` / `inspect_ui` / `ui_pixel` / `capture_ui` / `send_input`
+/ `ui_diff` / `assert_ui` / `wait_ui` / `lookup_help`
 
 - 界面量测（m174／m187／m205）：`inspect_ui` 走 Win32 消息层，先看 HWND 树（全部控件），
   `items=true` 再补七类控件的条目与所有控件的当前值 `state`；`capture_ui` 用 `PrintWindow`
@@ -60,7 +61,7 @@ m065 把那个循环删了：模型、重试、上下文管理交给外部 MCP �
 
 ## 接入 MCP 客户端
 
-**面向用户/AI 的接入说明就在发行包里**：`docs\MCP接入.md`（配置示例、16 个工具、
+**面向用户/AI 的接入说明就在发行包里**：`docs\MCP接入.md`（配置示例、20 个工具、
 典型提示词、边界、排错）；界面量测的字段语义与判读口径在 `docs\MCP界面量测.md`（m174／m205）。
 程序内「帮助 > MCP 接入」用系统默认程序打开前者。
 本节是开发者视角的同一份事实，不重复那份文档的内容。

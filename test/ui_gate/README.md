@@ -41,7 +41,7 @@ powershell -STA -NoProfile -ExecutionPolicy Bypass -File .main\test\ui_gate\tray
 把门禁挂在图片上没有意义；`CopyFromScreen` 可行但要先把窗口拉到前台。
 截图落点在 `.temp\ui_gate_shots`，**不写项目根**。
 探针脚本临时复制到 `.build\Scripts`，结束时连同产物一起删除。
-清单类用例通过 `AHKDECK_LIBRARY` 指向 `.temp`，不碰真实用户目录；
+隔离靠 `AHKDECK_SETTINGS` / `AHKDECK_HOTKEYS` 指向 `.temp`，不碰真实用户目录；
 需要单行清单时，先把 `.build\Scripts\*.ahk` 临时挪到 `.temp\m016\scripts-stash`，结束后再移回。
 **点击坐标会随布局变**：m037 之后列表占了 `x=0..575`、编辑区从 `x≈578` 才开始；
 旧的 `(520,200)` 那一击现在打在列表栏上（会抢走焦点）。

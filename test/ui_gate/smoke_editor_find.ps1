@@ -203,7 +203,6 @@ function Start-Deck([string]$library) {
     # m084: FLTK's errors are written to stderr by the error channel. Reading
     # them here is what turns "a popup nobody saw" into a red cell.
     $psi.RedirectStandardError = $true
-    $psi.EnvironmentVariables["AHKDECK_LIBRARY"] = $library
     $psi.EnvironmentVariables["AHKDECK_SETTINGS"] = $settingsFile
     return [System.Diagnostics.Process]::Start($psi)
 }

@@ -114,7 +114,6 @@ function Start-Deck {
     $psi.FileName = (Resolve-Path $Exe).Path
     $psi.UseShellExecute = $false
     $psi.EnvironmentVariables["AHKDECK_SETTINGS"] = $settings
-    $psi.EnvironmentVariables["AHKDECK_LIBRARY"] = $library
     return [System.Diagnostics.Process]::Start($psi)
 }
 

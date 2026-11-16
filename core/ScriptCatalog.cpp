@@ -4,7 +4,6 @@
 #include "core/AppPaths.h"
 #include "core/ZipPackage.h"
 
-#include "core/AppPaths.h"
 #include "core/Json.h"
 #include "core/ScriptHeader.h"
 #include "core/TextFile.h"
@@ -168,6 +167,10 @@ CatalogResult ParseScriptCatalog(const std::string &aText)
 		e.sizeKb = item["size_kb"].AsNumber(0.0);
 		e.gitee = item["gitee"].AsString();
 		e.github = item["github"].AsString();
+		// m221: optional id + version-history links. Absent in old manifests.
+		e.id = item["id"].AsString();
+		e.history = item["history"].AsString();
+		e.historyGithub = item["historyGithub"].AsString();
 		e.package = item["package"].AsString();
 		e.packageGithub = item["packageGithub"].AsString();
 
@@ -182,6 +185,12 @@ CatalogResult ParseScriptCatalog(const std::string &aText)
 			e.gitee.clear();
 		if (!IsHttpsUrl(e.github))
 			e.github.clear();
+		// m221: history links are optional but must be https when present.
+		// A poisoned/non-https link clears that mirror silently (row still valid).
+		if (!e.history.empty() && !IsHttpsUrl(e.history))
+			e.history.clear();
+		if (!e.historyGithub.empty() && !IsHttpsUrl(e.historyGithub))
+			e.historyGithub.clear();
 		// m211: a package URL is optional, but a broken one disqualifies the
 		// mirror column exactly like a broken text URL would.
 		if (!IsHttpsUrl(e.package))
@@ -572,7 +581,8 @@ bool InstallScriptFile(const ScriptInstallRequest &aRequest, std::string &aError
 		return false;
 	}
 
-	// 3. Keep the old file as both a backup of local edits and a restore point.
+	// 3. Stage the old file as a temporary restore point for the swap below.
+	// It is removed on success (step 4) and only kept if the swap fails.
 	const bool hadOld = GetFileAttributesW(wTarget.c_str()) != INVALID_FILE_ATTRIBUTES;
 	if (hadOld && !ReplaceFileWin(wTarget, wOld))
 	{

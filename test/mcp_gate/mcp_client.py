@@ -56,6 +56,14 @@ EXPECTED_TOOLS = {
     # only ever returns whatever is in front, and on this machine the foreground
     # is routinely another application (see the gate cells in 5.7).
     "capture_ui",
+    # m208/m209: interaction and pixel regression - the "act" and "compare"
+    # halves of the verification loop.
+    "send_input",
+    "ui_diff",
+    # m218: the verdict half - the tool answers pass/fail instead of leaving
+    # the caller to eyeball an inspect_ui dump or a diff.
+    "assert_ui",
+    "wait_ui",
 }
 
 # m101: the legal write_script success path needs a file inside Scripts; the
@@ -587,6 +595,66 @@ def probe(client: McpStdio, resident_file: Path, exe_dir: Path,
              byhwnd.get("count") == 1 and byhwnd.get("session") == 0
              and (byhwnd.get("controls") or 0) >= 3,
              json.dumps(byhwnd, ensure_ascii=False)[:200])
+
+        # --- m218: verdict tools ------------------------------------------
+        # The caller used to read the tree above and decide pass/fail itself.
+        # assert_ui/wait_ui return that verdict as data, so a script test can
+        # assert on it without a human squinting at a dump.
+        av, _ = client.tool("assert_ui", {
+            "session": gsid,
+            "checks": [{"select": {}, "field": "visible", "op": "eq", "value": True}],
+        })
+        cell("assert_ui returns pass for a true check",
+             av.get("ok") is True and av.get("verdict") == "pass"
+             and av.get("passed") == 1 and av.get("failed") == 0,
+             json.dumps(av, ensure_ascii=False)[:220])
+        cell("assert_ui reports per-check evidence",
+             (av.get("checks") or [{}])[0].get("actual") is True,
+             json.dumps(av.get("checks"), ensure_ascii=False)[:200])
+
+        av2, _ = client.tool("assert_ui", {
+            "session": gsid,
+            "items": True,
+            "checks": [{"select": {"class": "SysListView32"},
+                        "field": "items.count", "op": "eq", "value": 2}],
+        })
+        cell("assert_ui reads items.count as a number",
+             av2.get("verdict") == "pass"
+             and (av2.get("checks") or [{}])[0].get("actual") == 2,
+             json.dumps(av2, ensure_ascii=False)[:220])
+
+        av3, _ = client.tool("assert_ui", {
+            "session": gsid,
+            "checks": [{"select": {"class": "NoSuchControlEver"},
+                        "field": "text", "op": "eq", "value": "x"}],
+        })
+        cell("assert_ui returns fail but ok=true for a false check",
+             av3.get("ok") is True and av3.get("verdict") == "fail"
+             and av3.get("failed") == 1
+             and "没有匹配" in str((av3.get("checks") or [{}])[0].get("note", "")),
+             json.dumps(av3, ensure_ascii=False)[:220])
+
+        wv, _ = client.tool("wait_ui", {
+            "session": gsid,
+            "checks": [{"select": {}, "field": "visible", "op": "eq", "value": True}],
+            "timeout_ms": 600, "interval_ms": 30,
+        })
+        cell("wait_ui returns immediately when already satisfied",
+             wv.get("verdict") == "pass" and wv.get("matched") is True
+             and wv.get("timed_out") is False and (wv.get("attempts") or 0) <= 2,
+             json.dumps(wv, ensure_ascii=False)[:220])
+
+        wv2, _ = client.tool("wait_ui", {
+            "session": gsid,
+            "checks": [{"select": {"class": "NoSuchControlEver"},
+                        "field": "text", "op": "eq", "value": "x"}],
+            "timeout_ms": 240, "interval_ms": 30,
+        })
+        cell("wait_ui times out on an impossible condition",
+             wv2.get("verdict") == "fail" and wv2.get("timed_out") is True
+             and (wv2.get("attempts") or 0) >= 2,
+             json.dumps(wv2, ensure_ascii=False)[:220])
+
         client.tool("stop_script", {"session": gsid})
 
     # --- 5.5 a script with chinese text (m083) ---------------------------

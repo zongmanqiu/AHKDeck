@@ -215,7 +215,23 @@ bool FollowRedirect(const std::wstring &aLocation, std::string &aHost,
 		aPath = location; // same host, new path
 		return true;
 	}
-	return SplitUrl(location, aHost, aPath, aTls, aPort);
+	// Never let a 3xx downgrade https to http. An absolute http Location would
+	// otherwise flip aTls in SplitUrl and send the update/manifest download in
+	// clear text, letting a MITM swap the payload. Relative hops keep the
+	// current scheme. A hop to a different https host is still allowed.
+	const bool wasTls = aTls;
+	std::string newHost, newPath;
+	bool newTls = wasTls;
+	INTERNET_PORT newPort = aPort;
+	if (!SplitUrl(location, newHost, newPath, newTls, newPort))
+		return false;
+	if (wasTls && !newTls)
+		return false;
+	aHost = std::move(newHost);
+	aPath = std::move(newPath);
+	aTls = newTls;
+	aPort = newPort;
+	return true;
 }
 
 // Rebuilds the absolute URL of the next hop after a redirect.
@@ -316,7 +332,7 @@ bool HttpGetBody(const std::string &aUrl, int aTimeoutMs, std::string &aOut,
 					WinHttpCloseHandle(session);
 					continue;
 				}
-				aError = "server redirected but no usable Location header";
+				aError = "server redirected to an unsafe http downgrade or provided no usable Location header";
 				WinHttpCloseHandle(request);
 				WinHttpCloseHandle(connection);
 				WinHttpCloseHandle(session);
@@ -452,7 +468,7 @@ bool HttpDownload(const std::string &aUrl, const std::wstring &aSavePath,
 					WinHttpCloseHandle(session);
 					continue;
 				}
-				aError = "server redirected but no usable Location header";
+				aError = "server redirected to an unsafe http downgrade or provided no usable Location header";
 				WinHttpCloseHandle(request);
 				WinHttpCloseHandle(connection);
 				WinHttpCloseHandle(session);

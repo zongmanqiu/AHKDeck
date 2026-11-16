@@ -40,6 +40,12 @@ struct CatalogEntry
 	double sizeKb = 0.0;
 	std::string gitee;
 	std::string github;
+	// m221: stable ASCII id (release tag key) + optional version-history
+	// manifest URLs (two mirrors). All optional so pre-m221 manifests still
+	// parse; empty means "this script has no published history link".
+	std::string id;
+	std::string history;
+	std::string historyGithub;
 	// m211: package mode. Empty for the classic single .ahk file; non-empty
 	// means the script ships as a zip (root folder `<名>/`, entry
 	// `<名>/<名>.ahk`) that must be extracted, not just overwritten. Two

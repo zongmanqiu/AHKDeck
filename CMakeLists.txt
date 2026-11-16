@@ -69,7 +69,6 @@ add_library(core STATIC
     core/Version.cpp
     core/AppPaths.cpp
     core/TextFile.cpp
-    core/Library.cpp
     core/Settings.cpp
     core/Hotkeys.cpp
     core/Json.cpp
@@ -302,24 +301,6 @@ add_test(NAME textfile COMMAND test_textfile)
 set_tests_properties(textfile PROPERTIES
     WORKING_DIRECTORY "${AHKDECK_TEXTFILE_DIR}")
 
-# m016: the user's script library (persistence reads/writes/dedup).
-set(AHKDECK_LIBRARY_DIR "${CMAKE_SOURCE_DIR}/../.temp/library_gate")
-file(MAKE_DIRECTORY "${AHKDECK_LIBRARY_DIR}")
-add_executable(test_library
-    test/test_library.cpp
-)
-target_link_libraries(test_library PRIVATE core)
-if(MSVC)
-    target_compile_options(test_library PRIVATE /W4 /WX)
-endif()
-set_target_properties(test_library PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${AHKDECK_TEMP_BIN}"
-    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${AHKDECK_TEMP_BIN}"
-    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${AHKDECK_TEMP_BIN}")
-add_test(NAME library COMMAND test_library)
-set_tests_properties(library PROPERTIES
-    WORKING_DIRECTORY "${AHKDECK_LIBRARY_DIR}")
-
 # m017: window geometry persistence (hand-editable ui.ini).
 set(AHKDECK_SETTINGS_DIR "${CMAKE_SOURCE_DIR}/../.temp/settings_gate")
 file(MAKE_DIRECTORY "${AHKDECK_SETTINGS_DIR}")
@@ -523,6 +504,15 @@ add_test(NAME mcp_init COMMAND powershell -NoProfile -ExecutionPolicy Bypass
     -File "${CMAKE_SOURCE_DIR}/test/shipping_gate/gate_mcp_init.ps1"
     -Exe "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/AHKDeck.exe")
 
+# m222/D2: end-to-end temp cleanup. The ps1 launches the real deck window in a
+# throwaway copy, so it is labelled "gui" like mcp_stdio: absent from the
+# default headless pipeline, run by 5_test.bat under AHKDECK_GATE_UI=1.
+add_test(NAME housekeeping_gate COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+    -File "${CMAKE_SOURCE_DIR}/test/shipping_gate/gate_housekeeping.ps1")
+set_tests_properties(housekeeping_gate PROPERTIES
+    LABELS "gui"
+    TIMEOUT 120)
+
 # m013: the shipped exe must not be a console image (rules-standing.md 13).
 # The gate self-tests against session_gate.exe, which IS console subsystem, so a
 # parser that calls everything "GUI" fails instead of passing vacuously.
@@ -595,6 +585,11 @@ file(MAKE_DIRECTORY "${AHKDECK_MCP_DIR}")
 find_program(AHKDECK_PYTHON NAMES python python3)
 if(NOT AHKDECK_PYTHON)
     message(WARNING "python not found: the mcp gates (m064) are NOT registered")
+    # A missing interpreter must never be a silent 22/22 green: register a
+    # passing sentinel that prints the skip marker gate_no_skip.ps1 audits,
+    # so 5_test.bat fails loudly (same contract as test_execompiler's arms).
+    add_test(NAME mcp_python_missing COMMAND "${CMAKE_COMMAND}" -E echo
+        "AHKDECK_SKIP: python not found, mcp_selftest and mcp_stdio not registered")
 else()
     # m217: the fake server emits ensure_ascii=False JSON. Without UTF-8 mode a
     # PowerShell caller (no PYTHONUTF8/PYTHONIOENCODING in its environment) makes

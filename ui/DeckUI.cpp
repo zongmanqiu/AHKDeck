@@ -1011,9 +1011,10 @@ public:
 	// m180: 获取脚本 > 订阅 - the subscription list on its own. Public for the
 	// screenshot hook, like the four above.
 	void ShowSubscribeManager();
-	// m097/m098: Help > MCP 接入 - opens docs\MCP接入.md next to the exe.
-	// A dialog would only be a second copy of what that file already says.
-	void OpenMcpDocs();
+	// m221: Help > 使用说明 - the offline HTML overview for end users.
+	// The only help entry: technical details live in docs\, reachable from
+	// the guide itself. A separate MCP menu item just duplicated that.
+	void OpenUserGuide();
 	bool ConfirmRestartForUpdate();
 	// m088: the command table, read by the shortcut dialog (the rows it
 	// lists) and by the key dispatcher (the editor asks first, the window
@@ -1198,9 +1199,9 @@ private:
 		IdAbout,
 		// m092: Help > Check for Updates (About moved into the same group).
 		IdCheckUpdate,
-		// m097: MCP access lives next to 检查更新 - both are "help me use this
-		// from outside the deck".
-		IdMcpAccess,
+		// m221: the user-facing guide (single offline HTML with a side nav) -
+		// the only 帮助 entry that opens documentation.
+		IdUserGuide,
 		// m088: the 编辑 menu and the commands that own a
 		// button but no menu entry (the middle band, the editor's own reload).
 		IdEditUndo,
@@ -3483,10 +3484,11 @@ const std::vector<DeckWindow::CommandSpec> &DeckWindow::Commands()
 		// m092: the About box and the updater live in their own 帮助 group,
 		// after 设置. The key menu.about is unchanged, so existing rebinds
 		// keep working.
+		// m221: 使用说明 is the only documentation entry - technical details
+		// are linked from the guide, not a second 帮助 item.
+		{IdUserGuide, "userGuide", "帮助/使用说明", "菜单", "使用说明", 0, 0, false},
 		{IdAbout, "about", "帮助/关于", "菜单", "关于", 0, 0, false},
 		{IdCheckUpdate, "checkUpdate", "帮助/检查更新", "菜单", "检查更新", 0, 0, false},
-		// m097: no default key - it is a one-time setup step, not a daily action.
-		{IdMcpAccess, "mcpAccess", "帮助/MCP 接入", "菜单", "MCP 接入", 0, 0, false},
 		// m090: what is left of the middle band owns buttons but no menu item -
 		// 清空 is a console action, 运行 belongs to 脚本/运行 - so the list keeps
 		// those as "Window > ..." rows in the same dialog.
@@ -6043,8 +6045,10 @@ void DeckWindow::OpenScriptForGate(const std::string &aLeaf)
 bool DeckWindow::SaveEditorTo(const std::wstring &aPath)
 {
 	std::string error;
-	const char *text = mEditBuffer->text();
-	if (!WriteTextDocument(aPath, text, TextEncoding::Utf8NoBom, true, nullptr, error))
+	// Fl_Text_Buffer::text() returns a heap copy the caller must free; the
+	// auto-save tick calls this repeatedly, so a raw pointer leaks every time.
+	std::unique_ptr<char, decltype(&std::free)> text(mEditBuffer->text(), &std::free);
+	if (!WriteTextDocument(aPath, text ? text.get() : "", TextEncoding::Utf8NoBom, true, nullptr, error))
 	{
 		Append("[editor] 保存失败: " + Utf8(LeafOf(aPath)) + " - " + error);
 		return false;
@@ -7567,24 +7571,21 @@ void DeckWindow::ShowScriptDownloadDialog()
 	dialog.Run();
 }
 
-void DeckWindow::OpenMcpDocs()
+void DeckWindow::OpenUserGuide()
 {
-	// m098: 帮助 > MCP 接入 opens the doc itself - it is the only place the
-	// client config is written down, so there is nothing for a dialog to keep
-	// in sync.
-	const std::wstring path = ExeDirectory() + L"\\docs\\MCP接入.md";
+	// m221: a single offline HTML file with a side navigation. Unlike the
+	// .md docs this opens in the system browser with no editor association
+	// needed, so it works on a freshly installed Windows machine.
+	const std::wstring path = ExeDirectory() + L"\\docs\\使用说明.html";
 	if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES)
 	{
-		Append("未找到 docs\\MCP接入.md；发行包里应带有 docs 文件夹。");
+		Append("未找到 docs\\使用说明.html；发行包里应带有 docs 文件夹。");
 		return;
 	}
-	// m099: hand it to the shell so it opens in whatever the user actually reads
-	// markdown with - forcing Notepad was a guess about their setup. ShellExecute
-	// returning <= 32 means "no handler took it".
 	const HINSTANCE result = ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr,
 		SW_SHOWNORMAL);
 	if ((INT_PTR)result <= 32)
-		Append("没有程序能打开 docs\\MCP接入.md（.md 未关联任何编辑器）。");
+		Append("没有程序能打开 docs\\使用说明.html（需要系统浏览器）。");
 }
 
 // The update replaces the exe and restarts it, so unsaved edits must not
@@ -7990,8 +7991,10 @@ void DeckWindow::OnClear(Fl_Widget *, void *aSelf)
 void DeckWindow::OnCopy(Fl_Widget *, void *aSelf)
 {
 	auto *self = static_cast<DeckWindow *>(aSelf);
-	const char *text = self->mBuffer->text();
-	Fl::copy(text, (int)std::strlen(text), 1);
+	// Same Fl_Text_Buffer contract as SaveEditorTo: text() must be freed.
+	std::unique_ptr<char, decltype(&std::free)> text(self->mBuffer->text(), &std::free);
+	if (text)
+		Fl::copy(text.get(), (int)std::strlen(text.get()), 1);
 	self->Append("[ui] 控制台文本已复制");
 }
 
@@ -8498,8 +8501,8 @@ void DeckWindow::HandleMenu(int aId)
 	case IdCheckUpdate:
 		ShowUpdateDialog();
 		break;
-	case IdMcpAccess:
-		OpenMcpDocs();
+	case IdUserGuide:
+		OpenUserGuide();
 		break;
 	default:
 		break;

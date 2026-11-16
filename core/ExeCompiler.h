@@ -83,9 +83,10 @@ ExeCompileOptions DefaultCompileOptionsFor(const std::wstring &aScriptPath);
 
 // Compiles one script. Blocks while the validator runs; `aTimeoutMs` bounds
 // that child (the bundling itself is a copy plus resource writes).
-// An existing target is preserved first: renamed to "<target>.old", replacing
-// any earlier .old - the same contract as the downloader's overwrite path
-// (m160), so a recompile can never silently destroy an artifact the user kept.
+// The script is validated FIRST; only after a clean verdict is an existing
+// target renamed to "<target>.old" (replacing any earlier .old) and the new
+// artifact moved in - the same overwrite contract as the downloader (m160),
+// so a recompile can never silently destroy an artifact the user kept.
 // The artifact is built under <exeDir>\temp\work and moved into place, so a
 // failure cannot leave a half-written exe at the destination.
 ExeCompileOutcome CompileScriptToExe(const std::wstring &aExeDir,

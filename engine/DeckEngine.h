@@ -264,6 +264,11 @@ private:
 	mutable std::mutex mErrorMutex;
 	std::condition_variable mErrorCv;
 	std::deque<ErrorRecord> mErrors;
+
+	// Serializes the whole PumpRawFiles read-then-commit: UI (PendingRecords /
+	// PopRecord) and MCP (WaitForLogDrain) threads can both call it, and two
+	// snapshots of the same rawOffset would push identical records twice.
+	std::mutex mPumpMutex;
 };
 
 } // namespace ahkdeck

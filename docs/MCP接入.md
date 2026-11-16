@@ -1,7 +1,9 @@
 # AHKDeck 的 MCP 接入
 
-AHKDeck 自带一个 **MCP stdio 端点**。挂到支持 MCP 的 AI 客户端（Trae、Qoder、WorkBuddy、
-Claude Desktop、Cursor…）之后，AI 可以：
+AHKDeck 自带一个 **MCP stdio 端点**，实现的是标准 MCP 协议，**不绑定任何 AI 客户端或 Agent**。
+只要对方支持 MCP stdio，就能按本文的通用配置接入；文中列出的客户端只是配置示例，不是支持范围。
+
+挂到支持 MCP 的 AI 客户端（Trae、Qoder、WorkBuddy、Claude Desktop、Cursor…）之后，AI 可以：
 
 - 列出脚本库、读取任意脚本；
 - 往编辑区写脚本（不落盘，等人检查）；
@@ -11,21 +13,28 @@ Claude Desktop、Cursor…）之后，AI 可以：
 
 于是「AI 写 → 跑 → 读错 → 改 → 再跑」这条闭环不需要人复制粘贴。
 
-## 零配置接入（0.3.6 起）
+## 通用接入：两个字段就够了
 
-在解压后的程序目录打开终端，运行：
+AHKDeck 是一个**标准 MCP stdio 服务**。任何支持 MCP stdio 的客户端，只要能配置
+`command` 和 `args` 两个字段就能接入，不需要装插件，也不绑定某个特定 AI。最小配置见
+下方「一、两个字段」：`command` 指向 `AHKDeck.exe`，`args` 为 `["--mcp-stdio"]`。
+配好后重启客户端即可；若客户端要求，在它的连接器管理页对该服务点 **Trust**。
+
+## 便捷命令（可选，不是接入前提）
+
+不想手写 JSON 时，程序提供两条便捷命令帮你把上面两个字段写进本机配置：
 
 ```bat
-AHKDeck.exe --mcp-init                  :: 打印三种客户端的现成配置块，自己粘贴
-AHKDeck.exe --mcp-install workbuddy     :: 或直接写入 WorkBuddy 配置
-AHKDeck.exe --mcp-install claude        :: Claude Code（~/.claude.json）
-AHKDeck.exe --mcp-install cursor        :: Cursor（~/.cursor/mcp.json）
+AHKDeck.exe --mcp-init                  :: 打印通用配置块，粘贴到任意 MCP 客户端
+AHKDeck.exe --mcp-install workbuddy     :: 可选：写入 WorkBuddy 配置
+AHKDeck.exe --mcp-install claude        :: 可选：Claude Code（~/.claude.json）
+AHKDeck.exe --mcp-install cursor        :: 可选：Cursor（~/.cursor/mcp.json）
 ```
 
-`--mcp-install` 写入前显示目标与当前条目并请求确认；已有配置会保留其它 MCP 项和未知字段，
+`--mcp-install <客户端>` 只是**便捷示例**，不在列表里的客户端用 `--mcp-init` 拿到配置块
+照样能接。写入前显示目标与当前条目并请求确认；已有配置会保留其它 MCP 项和未知字段，
 并留一份 `.bak` 备份。非交互脚本里加 `--yes` 可跳过确认。命令只写**本机用户目录**，
-不碰仓库、不写任何密钥。写完后重启客户端；若客户端要求，在连接器管理页对该服务点 **Trust**。
-手动配置仍然有效，下方第一节即配置块原文。
+不碰仓库、不写任何密钥。手动配置始终有效，且与便捷命令等价。
 
 ## 一、两个字段
 
@@ -42,7 +51,8 @@ AHKDeck.exe --mcp-install cursor        :: Cursor（~/.cursor/mcp.json）
 
 只把 `<AHKDeck 安装目录>` 换成解压出来的那个文件夹，其余原样。JSON 里路径用 `\\`（或 `/`）。
 
-放置位置（各客户端自己的规则，通常只需其中一处）：
+放置位置因客户端而异，下表是几个常见示例，**不是支持范围限制**——其它客户端按它自己的
+MCP 配置规则放置即可，内容都是上面那段 `mcpServers`：
 
 | 客户端 | 位置 |
 |---|---|
@@ -52,7 +62,7 @@ AHKDeck.exe --mcp-install cursor        :: Cursor（~/.cursor/mcp.json）
 | Claude Desktop | `claude_desktop_config.json` 的 `mcpServers` |
 
 如果客户端读的是单独的 json 文件，上面整段就是文件内容，一个字都不用改。
-配好后重启客户端，工具列表里应出现 18 个，按用途分五组：
+配好后重启客户端，工具列表里应出现 20 个，按用途分六组：
 
 | 用途 | 工具 |
 |---|---|
@@ -61,6 +71,7 @@ AHKDeck.exe --mcp-install cursor        :: Cursor（~/.cursor/mcp.json）
 | 会话与输出 | `get_session_output`、`list_sessions`、`stop_script`、`stop_all` |
 | 界面量测 | `inspect_ui`、`capture_ui`、`ui_pixel`、`ui_diff` —— 字段语义与判读口径见 [MCP界面量测](MCP界面量测.md) |
 | 交互验证 | `send_input` —— 把鼠标/滚轮/键盘消息注入会话窗口，验证回调用错（K32）、右键菜单挂错（K45/K46）、滚轮焦点（K29）这类「截图全是常态」的交互 bug |
+| 判定与等待 | `assert_ui`、`wait_ui` —— 让工具直接给出 `verdict=pass/fail`，不必自己读界面树判断；等窗口/列表异步就绪用 `wait_ui`。参数与判读口径见 [MCP界面量测](MCP界面量测.md) |
 | 语法查询 | `lookup_help` —— 离线查 AHK 函数签名与参数，见下文第五节 |
 
 这份文档只讲「怎么接、怎么跑、怎么排错」。界面量测是另一份，需要核对布局时再读，
@@ -148,9 +159,9 @@ AI 的典型动作是 `edit_editor` → `run_editor` → 读 `errors[]` → 改 
 ## 五、语法查询：不确定就查
 
 `lookup_help` 查的是随包的离线索引（`docs\help-index.json`，356 页，由官方
-`AutoHotkey_2.0.30/AutoHotkey.chm` 生成）。索引取自官方 2.0.30 手册，比本机内核
-`AutoHotkey64.exe`（2.0.31）略旧：绝大多数条目一致，但 2.0.31 新增的内容索引里可能查不到，
-拿不准就先 `run_editor` 试一次。网上那份 Markdown 镜像只到 2.0.18，比这两者都旧。
+`AutoHotkey-v2.0.31-help/AutoHotkey.chm` 生成）。索引与本机内核 `AutoHotkey64.exe`（2.0.31）
+同版本；查不到就说明不是这一版的内建 API，以官方文档为准，拿不准先 `run_editor` 试一次。
+网上那份 Markdown 镜像只到 2.0.18，比它旧。
 
 **为什么要有它**：写错的 API 大多不是语法错。参数顺序颠倒、选项名拼错、把格式串当初始值，
 这些代码能解析、能运行，只是做得不对。`validate_editor` 和 `run_editor` 都拦不住，

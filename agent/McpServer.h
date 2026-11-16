@@ -6,8 +6,9 @@
 // stdin/stdout. That is the stdio transport, and in this product it means the
 // process the client spawns IS the deck: one exe, one window, one kernel, so
 // edit_editor can still reach the editing area the user is looking at and
-// "宿主关闭 = 脚本全关" stays true (AGENTS 11a). A separate proxy process would
-// have owned a second script world the user never sees.
+// "宿主关闭 = 脚本全关" stays true (m192: child sessions die with the deck).
+// A separate proxy process would have owned a second script world the user
+// never sees.
 //
 // Protocol, per the 2025-06-18 specification: newline-delimited JSON-RPC 2.0;
 // messages MUST NOT contain embedded newlines (so every string goes through the

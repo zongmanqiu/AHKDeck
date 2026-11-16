@@ -52,7 +52,7 @@ struct HotkeyEntry
 	std::string hotkey; // AHK syntax, empty = unbound
 };
 
-// hotkeys.txt next to the exe (portable mode, same rule as Settings/Library).
+// hotkeys.txt next to the exe (portable mode, same rule as Settings).
 std::wstring DefaultHotkeyPath();
 
 // Missing file = first run: returns true with an empty list. Later duplicates of

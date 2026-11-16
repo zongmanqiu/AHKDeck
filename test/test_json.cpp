@@ -81,6 +81,41 @@ int main()
 		Check(!emoji.AsString().empty(), "surrogate pair decoded");
 	}
 
+	// m222/audit C4: a lone/malformed surrogate must become U+FFFD, never a
+	// raw surrogate encoded as invalid UTF-8 (WTF-8). A well-formed BMP escape
+	// following a lone high surrogate must still be parsed, not swallowed.
+	{
+		ahkdeck::Json v;
+		Check(ahkdeck::Json::Parse("\"\\ud800\"", v, error), "lone high surrogate parses");
+		Check(v.AsString() == "\xEF\xBF\xBD", "lone high surrogate -> U+FFFD only");
+	}
+	{
+		ahkdeck::Json v;
+		Check(ahkdeck::Json::Parse("\"\\udc00\"", v, error), "lone low surrogate parses");
+		Check(v.AsString() == "\xEF\xBF\xBD", "lone low surrogate -> U+FFFD only");
+	}
+	{
+		ahkdeck::Json v;
+		Check(ahkdeck::Json::Parse("\"\\ud800\\u0041\"", v, error), "malformed pair parses");
+		Check(v.AsString() == std::string("\xEF\xBF\xBD") + "A",
+			"malformed pair keeps following BMP char");
+	}
+
+	// m222/audit C4: strict JSON number grammar - strtod's extensions are not JSON.
+	{
+		ahkdeck::Json v;
+		Check(ahkdeck::Json::Parse("1.5e-2", v, error), "valid exponent parses");
+		Check(v.AsNumber() > 0.0 && v.AsNumber() < 0.02, "exponent value correct");
+	}
+	{
+		ahkdeck::Json bad;
+		Check(!ahkdeck::Json::Parse("0x1p2", bad, error), "hex float rejected");
+		Check(!ahkdeck::Json::Parse("-inf", bad, error), "signed inf rejected");
+		Check(!ahkdeck::Json::Parse("-nan", bad, error), "signed nan rejected");
+		Check(!ahkdeck::Json::Parse("01", bad, error), "leading zero rejected");
+		Check(!ahkdeck::Json::Parse("1.", bad, error), "trailing dot rejected");
+	}
+
 	// Failures are errors, not empty values or crashes.
 	{
 		ahkdeck::Json bad;

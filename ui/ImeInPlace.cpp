@@ -171,13 +171,10 @@ void detach(Host *host) {
 
 void release(Host *host) {
     if (!host) return;
-    for (size_t i = 0; i < g_hosts.size(); ++i) {
-        if (g_hosts[i].host == host) {
-            g_hosts.erase(g_hosts.begin() + static_cast<std::ptrdiff_t>(i));
-            break;
-        }
-    }
-    // Collect the windows this host was attached to before dropping entries.
+    // Collect the windows this host was attached to before dropping entries,
+    // then uninstall only hooks no remaining host still needs. A separate
+    // "erase first, collect later" pass would leave nothing to collect (each
+    // host has exactly one entry) and the subclass would never be removed.
     std::vector<HWND> hooked;
     for (size_t i = 0; i < g_hosts.size();) {
         if (g_hosts[i].host == host) {
