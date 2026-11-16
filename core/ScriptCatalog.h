@@ -18,8 +18,13 @@ namespace ahkdeck
 // publishes new scripts), while each script's own download URL inside the
 // catalog is pinned to a tag (m145) so the downloaded bytes stay stable.
 // Both are overridable in settings.json under the "scripts" node.
+//
+// Gitee goes through the raw CDN host on purpose: gitee.com/<owner>/<repo>/raw/...
+// answers with a 302 to raw.giteeusercontent.com/...?signature=..., a signed URL
+// that expires, so a cached or shared copy of it stops working. The direct CDN
+// form has no redirect and no signature.
 inline constexpr const char *kDefaultCatalogUrlGitee =
-	"https://gitee.com/qiuzongman/ahk-v2-scripts/raw/master/scripts.json";
+	"https://raw.giteeusercontent.com/qiuzongman/ahk-v2-scripts/raw/master/scripts.json";
 inline constexpr const char *kDefaultCatalogUrlGithub =
 	"https://raw.githubusercontent.com/zongmanqiu/ahk-v2-scripts/master/scripts.json";
 

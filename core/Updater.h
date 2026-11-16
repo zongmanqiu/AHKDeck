@@ -58,8 +58,11 @@ struct UpdateCheckResult
 // published separately, so until a release ships update.json a check reports
 // "cannot reach the update server" instead of pretending to be up to date.
 // Both can be overridden in settings.json (update.urlGitee / update.urlGithub).
+//
+// Gitee goes through the raw CDN host on purpose - see ScriptCatalog.h: the
+// gitee.com/.../raw/... form 302s to a signed URL that expires.
 inline constexpr const char *kDefaultUpdateUrlGitee =
-	"https://gitee.com/qiuzongman/AHKDeck/raw/main/update.json";
+	"https://raw.giteeusercontent.com/qiuzongman/AHKDeck/raw/main/update.json";
 inline constexpr const char *kDefaultUpdateUrlGithub =
 	"https://raw.githubusercontent.com/zongmanqiu/AHKDeck/main/update.json";
 
