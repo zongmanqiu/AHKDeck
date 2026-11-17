@@ -1,6 +1,7 @@
 #include "agent/Toolbox.h"
 
 #include "core/AppPaths.h"
+#include "core/ScriptCatalog.h"
 #include "core/TextFile.h"
 #include "core/Version.h"
 #include "engine/DeckEngine.h"
@@ -774,6 +775,11 @@ void Toolbox::RefreshScripts()
 
 	for (const auto &root : roots)
 	{
+		// m227: only Scripts\*.ahk is a script; Scripts\<名>\ is that script's own
+		// folder (attachments + output) and is never searched. Same rule as the
+		// window's scan, including the one-time lift of 0.4.x folder installs.
+		ahkdeck::MigrateLegacyScriptFolders(root);
+
 		WIN32_FIND_DATAW data;
 		const std::wstring pattern = root + L"\\*.ahk";
 		HANDLE find = FindFirstFileW(pattern.c_str(), &data);
@@ -786,31 +792,6 @@ void Toolbox::RefreshScripts()
 			found.push_back({std::string(), root + L"\\" + data.cFileName, Utf8Of(data.cFileName)});
 		} while (FindNextFileW(find, &data));
 		FindClose(find);
-
-		// m211: folder layout - <root>\<名>\<名>.ahk, what a zip package
-		// installs. A flat file with the same stem wins, so one name is never
-		// two rows here either.
-		const std::wstring dirPattern = root + L"\\*";
-		HANDLE dirFind = FindFirstFileW(dirPattern.c_str(), &data);
-		if (dirFind != INVALID_HANDLE_VALUE)
-		{
-			do
-			{
-				if (!(data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
-					continue;
-				const std::wstring name = data.cFileName;
-				if (name == L"." || name == L"..")
-					continue;
-				const std::wstring flat = root + L"\\" + name + L".ahk";
-				if (GetFileAttributesW(flat.c_str()) != INVALID_FILE_ATTRIBUTES)
-					continue;
-				const std::wstring entry = root + L"\\" + name + L"\\"
-					+ name + L".ahk";
-				if (GetFileAttributesW(entry.c_str()) != INVALID_FILE_ATTRIBUTES)
-					found.push_back({std::string(), entry, Utf8Of(name + L".ahk")});
-			} while (FindNextFileW(dirFind, &data));
-			FindClose(dirFind);
-		}
 	}
 
 	for (const auto &file : files)

@@ -12,7 +12,7 @@ if(CMAKE_GENERATOR MATCHES "Makefiles")
     set(CMAKE_DEPENDS_USE_COMPILER FALSE)
 endif()
 
-project(AHKDeck VERSION 0.4.3 LANGUAGES C CXX RC)
+project(AHKDeck VERSION 0.5.0 LANGUAGES C CXX RC)
 
 # Static CRT (/MT): the shipped exe must run with ZERO VC++ redistributable
 # dependencies ("单 exe 即装即用"). CMP0091 NEW lets CMAKE_MSVC_RUNTIME_LIBRARY
@@ -75,6 +75,7 @@ add_library(core STATIC
     core/AiPolicy.cpp
     core/Updater.cpp
     core/ScriptCatalog.cpp
+    core/ScriptGroups.cpp
     core/ScriptHeader.cpp
     core/ExeCompiler.cpp
     core/ResourceStats.cpp
@@ -446,6 +447,21 @@ set_target_properties(test_scriptcatalog PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_DEBUG "${AHKDECK_TEMP_BIN}"
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${AHKDECK_TEMP_BIN}")
 add_test(NAME scriptcatalog COMMAND test_scriptcatalog)
+
+# m227: groups are a view over the Scripts folder (settings.json is the only
+# store). Pure data + the row plan, so the rules are testable without a window.
+add_executable(test_scriptgroups
+    test/test_scriptgroups.cpp
+)
+target_link_libraries(test_scriptgroups PRIVATE core)
+if(MSVC)
+    target_compile_options(test_scriptgroups PRIVATE /W4 /WX)
+endif()
+set_target_properties(test_scriptgroups PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${AHKDECK_TEMP_BIN}"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${AHKDECK_TEMP_BIN}"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${AHKDECK_TEMP_BIN}")
+add_test(NAME scriptgroups COMMAND test_scriptgroups)
 
 # m172: the exe compiler wrapper. Pure arms always run; the end-to-end arms
 # drive the staged official compiler when it is present and SKIP otherwise.

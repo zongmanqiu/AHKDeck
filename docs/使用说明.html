@@ -69,6 +69,7 @@
   <a href="#intro">它是什么</a>
   <a href="#who">适合谁用</a>
   <a href="#features">能做什么</a>
+  <a href="#groups">分组与批量运行</a>
   <a href="#start">快速上手</a>
   <a href="#official">获取官方脚本</a>
   <a href="#develop">自己开发脚本</a>
@@ -111,8 +112,10 @@
   <h3>脚本管理</h3>
   <ul>
     <li>把 <span class="path">.ahk</span> 放进程序旁的 <span class="path">Scripts\</span>，列表里就会出现；可运行、停止、重启、编辑、删除。</li>
-    <li>删除是移到 <span class="path">temp\deleted\</span>，不是永久抹掉；运行中的脚本会先停止，占用快捷键一并释放。</li>
-    <li>列表按脚本名升序排列，运行中的脚本单独标注，状态栏显示总 CPU / GPU / 内存占用。</li>
+    <li>程序只把 <span class="path">Scripts\</span> <strong>根目录</strong>下的 <span class="path">.ahk</span> 当脚本，不会进子目录里找；脚本需要的附件与运行时产物放在同级同名文件夹 <span class="path">Scripts\脚本名\</span> 里。</li>
+    <li>删除是移到 <span class="path">temp\deleted\</span>，不是永久抹掉；运行中的脚本会先停止，占用快捷键一并释放，同名文件夹也一起移走。</li>
+    <li>默认按脚本名排序，点列标题可换成 CPU / GPU / 内存 / 快捷键等，再点一次反向；建了分组时排序只在组内生效，组与组之间按建组顺序。运行中的脚本单独标注，状态栏显示总 CPU / GPU / 内存占用。</li>
+    <li>一行从左到右是<strong>脚本 · CPU · GPU · 内存 · 运行 · 菜单 · 快捷键</strong>：名字贴在最左，一竖列扫下来最省眼；两个按钮跟在数字后面，快捷键框收在行尾。</li>
   </ul>
   <h3>运行与诊断</h3>
   <ul>
@@ -133,6 +136,35 @@
   <p>程序旁只有一个 <span class="path">temp\</span>：<span class="path">logs\</span>、
   <span class="path">backups\</span>、<span class="path">work\</span>、<span class="path">deleted\</span>。
   「设置 &gt; 选项…」里选保留时长（永不 / 7 / 30 / 180 天，默认 30），启动时和改设置时各清理一次。</p>
+</section>
+
+<section id="groups">
+  <h2>分组与批量运行</h2>
+  <p class="lead">分组是<strong>列表里的组织方式</strong>，不是磁盘目录：脚本文件一个都不移动，分组信息存在
+  程序旁的 <span class="path">settings.json</span> 里。整台机器换目录、换盘符都不影响分组。</p>
+  <h3>怎么建、怎么放</h3>
+  <ul>
+    <li>新建：列表空白处右键「新建分组…」，或者对某个脚本右键「移动到 &gt; 新建分组…」（建完直接把它移进去）。</li>
+    <li>归组：脚本行右键「移动到 &gt;」，子菜单列出「未分组」和各分组，当前所属那一项带着圆点。</li>
+    <li>一个脚本只属于一个组。<strong>未分组</strong>就是直接躺在 <span class="path">Scripts\</span> 根下的那些脚本，排在最下面。
+    刚下载、刚放进目录的脚本一律落在这里——分组只认名字，不会把新脚本认领到某个组去。</li>
+    <li>折叠：点组头最左边的三角，或双击组头。三角有自己的一列，脚本行那一列是空的——所以组头和成员的名字落在同一条竖线上。折叠状态会被记住，下次打开还是原样。</li>
+  </ul>
+  <h3>组头那三个数字</h3>
+  <p>组头名字后面是「运行中/成员数」，紧跟名字的三列是该组<strong>正在运行的脚本</strong>的 CPU / GPU / 内存合计。
+  <strong>它不含工作台自己</strong>——状态栏那一行才是「本体 + 所有子进程」。两处数字不同是正常的，不是算错。</p>
+  <h3>组上的操作</h3>
+  <ul>
+    <li>组头右键：全部运行 / 全部停止、展开或收起、重命名…、删除分组、新建分组…。</li>
+    <li>「全部运行」跳过已经在跑的成员；「全部停止」同时通知组内每个在跑的脚本退出。</li>
+    <li>「删除分组」只解散分组：里面的脚本回到「未分组」，<strong>文件一个都不删</strong>。要删脚本用脚本行的「删除…」。</li>
+  </ul>
+  <h3>搜索与排序</h3>
+  <ul>
+    <li>搜索框里一有字，分组就暂时隐去：结果是扁平的一列，按当前列排序，折叠的组里的脚本也会被搜出来。</li>
+    <li>点列标题只在组内排序；组与组之间的先后由建组顺序决定，不跟着列排序动。</li>
+  </ul>
+  <div class="note">分组只影响这个列表，不影响 <span class="path">Scripts\</span> 的结构，也不影响脚本自己的 <code>A_ScriptDir</code>。想让脚本带附件，仍然是把附件放在 <span class="path">Scripts\脚本名\</span>——这个同名文件夹和脚本是绑在一起的：脚本被重命名或删除时它会跟着改名、跟着进回收站；分组则<strong>不会把它们拆开</strong>，因为归组时磁盘上什么都不动。</div>
 </section>
 
 <section id="start">

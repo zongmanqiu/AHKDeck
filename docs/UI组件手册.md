@@ -401,7 +401,7 @@ SetTimer(ObjBindMethod(gScroll, "Sync"), 60)
 - 关闭窗口时**先 `Stop()` 再 `Destroy()`**，否则下一拍报「The control is destroyed」（K21）。
 
 完整实现（拖动、翻页、滚轮转发、定时同步、每次动作后补隐藏）见
-`文件时间修改` **2.4.6** 的 `class FlatScroll`，整段复制即可。
+`文件时间修改` 的 `class FlatScroll`，整段复制即可。
 
 > **2.4.6 起这份配方换了内核**（K29/K30）：不再依赖原生滚动条的范围 —— 摘掉
 > `WS_VSCROLL` 之后 ListView 既不响应滚轮也不响应翻页键。改为类内自己维护

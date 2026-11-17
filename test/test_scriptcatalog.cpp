@@ -489,8 +489,9 @@ int main()
 			}), "test zip builder writes the good package");
 
 		ahkdeck::ScriptInstallRequest req;
+		// m227: the entry target is flat, exactly like a single-file install.
 		req.targetPathUtf8 = WideToUtf8Local(sandbox) + "\\Scripts\\"
-			+ name + "\\" + name + ".ahk";
+			+ name + ".ahk";
 		req.expectedName = name;
 		req.expectedVersion = version;
 
@@ -500,13 +501,14 @@ int main()
 		Check(err.empty(), "package install has no error");
 
 		const std::wstring entryFile = sandbox + L"\\Scripts\\"
-			+ Utf8ToWideLocal(name) + L"\\" + Utf8ToWideLocal(name) + L".ahk";
-		const std::wstring companionFile = sandbox + L"\\Scripts\\"
-			+ Utf8ToWideLocal(name) + L"\\data\\companion.bin";
+			+ Utf8ToWideLocal(name) + L".ahk";
+		const std::wstring companionDir = sandbox + L"\\Scripts\\"
+			+ Utf8ToWideLocal(name);
+		const std::wstring companionFile = companionDir + L"\\data\\companion.bin";
 		Check(GetFileAttributesW(entryFile.c_str()) != INVALID_FILE_ATTRIBUTES,
-			"entry script lands at Scripts\\<名>\\<名>.ahk");
+			"entry script lands flat at Scripts\\<名>.ahk");
 		Check(GetFileAttributesW(companionFile.c_str()) != INVALID_FILE_ATTRIBUTES,
-			"companion lands inside the same folder");
+			"companion lands in the folder of the same stem");
 		Check(!ahkdeck::LocalScriptVersion(entryFile).empty()
 			&& ahkdeck::LocalScriptVersion(entryFile) == version,
 			"entry script version reads back");
@@ -515,8 +517,8 @@ int main()
 		Check(GetFileAttributesW(staging.c_str()) == INVALID_FILE_ATTRIBUTES,
 			"staging dir is cleaned up");
 
-		// A second install moves the old directory into temp\deleted instead
-		// of destroying it (the m177 rule, now for packages too).
+		// A second install moves the old script and its folder into
+		// temp\deleted instead of destroying them (the m177 rule).
 		const std::string entryText2 = "; ==UserScript==\n"
 			"; @name         " + name + "\n"
 			"; @version      9.9.9\n"
@@ -534,17 +536,68 @@ int main()
 			"package upgrade succeeds");
 		Check(ahkdeck::LocalScriptVersion(entryFile) == "9.9.9",
 			"upgraded entry version reads back");
+		// The upgrade carries no attachments: the old companion folder moved to
+		// the backup area, and no empty folder is invented in its place.
+		Check(GetFileAttributesW(companionDir.c_str()) == INVALID_FILE_ATTRIBUTES,
+			"a package without attachments leaves no empty companion folder");
 		const std::wstring deleted = ahkdeck::AppTempDir(ahkdeck::kTempDeleted);
-		bool foundBackup = false;
+		bool foundFileBackup = false;
+		bool foundDirBackup = false;
 		WIN32_FIND_DATAW bfd;
 		HANDLE bfind = FindFirstFileW((deleted + L"\\"
+			+ Utf8ToWideLocal(name) + L".ahk-*").c_str(), &bfd);
+		if (bfind != INVALID_HANDLE_VALUE)
+		{
+			foundFileBackup = (bfd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+			FindClose(bfind);
+		}
+		bfind = FindFirstFileW((deleted + L"\\"
 			+ Utf8ToWideLocal(name) + L"-*").c_str(), &bfd);
 		if (bfind != INVALID_HANDLE_VALUE)
 		{
-			foundBackup = (bfd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+			do
+			{
+				if (bfd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+					foundDirBackup = true;
+			} while (!foundDirBackup && FindNextFileW(bfind, &bfd));
 			FindClose(bfind);
 		}
-		Check(foundBackup, "old package dir moved to temp\\deleted");
+		Check(foundFileBackup, "old flat script moved to temp\\deleted");
+		Check(foundDirBackup, "old companion folder moved to temp\\deleted");
+
+		// m227: a 0.4.x install (Scripts\<名>\<名>.ahk) is lifted to the flat name
+		// on the next scan - otherwise upgrading the app makes every package
+		// script vanish from the list.
+		const std::wstring legacyDir = sandbox + L"\\Scripts\\" + Utf8ToWideLocal(name);
+		const std::wstring legacyEntry = legacyDir + L"\\"
+			+ Utf8ToWideLocal(name) + L".ahk";
+		CreateDirectoryW(legacyDir.c_str(), nullptr);
+		Check(CopyFileW(entryFile.c_str(), legacyEntry.c_str(), FALSE) != 0,
+			"legacy folder install is laid down");
+		DeleteFileW(entryFile.c_str()); // only the old layout is left behind
+		Check(ahkdeck::MigrateLegacyScriptFolders(sandbox + L"\\Scripts") == 1,
+			"legacy folder entry is migrated");
+		Check(GetFileAttributesW(entryFile.c_str()) != INVALID_FILE_ATTRIBUTES,
+			"migrated script is flat");
+		Check(GetFileAttributesW(legacyDir.c_str()) == INVALID_FILE_ATTRIBUTES,
+			"empty legacy folder is dropped");
+		Check(ahkdeck::MigrateLegacyScriptFolders(sandbox + L"\\Scripts") == 0,
+			"migration is idempotent");
+
+		// A legacy folder that still holds attachments keeps existing - it is
+		// now that script's attachment folder, not a second copy of the script.
+		CreateDirectoryW(legacyDir.c_str(), nullptr);
+		Check(CopyFileW(entryFile.c_str(), legacyEntry.c_str(), FALSE) != 0,
+			"legacy folder install is laid down again");
+		const std::wstring keepFile = legacyDir + L"\\keep.bin";
+		Check(CopyFileW(entryFile.c_str(), keepFile.c_str(), FALSE) != 0,
+			"legacy folder carries an attachment");
+		DeleteFileW(entryFile.c_str());
+		Check(ahkdeck::MigrateLegacyScriptFolders(sandbox + L"\\Scripts") == 1,
+			"legacy folder with attachments is migrated");
+		Check(GetFileAttributesW(legacyDir.c_str()) != INVALID_FILE_ATTRIBUTES
+			&& GetFileAttributesW(keepFile.c_str()) != INVALID_FILE_ATTRIBUTES,
+			"the attachment folder survives the migration");
 
 		// Rejection: a traversal entry must never reach the disk. The
 		// filesystem itself cannot hold a ".." component, so the builder

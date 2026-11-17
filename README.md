@@ -1,7 +1,7 @@
 # AHKDeck
 
-**[⬇️ 下载 0.4.3 (Gitee)](https://gitee.com/qiuzongman/AHKDeck/releases/download/0.4.3/AHKDeck_0.4.3.zip)**
-｜ **[⬇️ 下载 0.4.3 (GitHub)](https://github.com/zongmanqiu/AHKDeck/releases/download/0.4.3/AHKDeck_0.4.3.zip)**
+**[⬇️ 下载 0.5.0 (Gitee)](https://gitee.com/qiuzongman/AHKDeck/releases/download/0.5.0/AHKDeck_0.5.0.zip)**
+｜ **[⬇️ 下载 0.5.0 (GitHub)](https://github.com/zongmanqiu/AHKDeck/releases/download/0.5.0/AHKDeck_0.5.0.zip)**
 
 
 > AHKDeck: [Gitee](https://gitee.com/qiuzongman/AHKDeck)
@@ -16,6 +16,7 @@
 - 支持 MCP，可接入 AI 进行脚本撰写与修改。
 - MCP 界面量测：AI 能读出脚本窗口的控件树、列表条目与控件当前值，改完自行验证结果。
 - 合并托盘菜单：脚本自己的图标收起，各脚本菜单汇集到宿主「运行中」子菜单。
+- 脚本可分组：组头能收起/展开、显示「运行中/成员数」和该组正在运行的脚本的资源合计，组上右键可全部运行/全部停止。分组只存在 `settings.json`，不移动磁盘上的任何文件。
 - 一键把脚本编译成独立 exe（直接复制随包的同一个内核，机器上不用装 AutoHotkey）。
 
 ## 窗口
@@ -24,7 +25,11 @@
 
 ## 使用
 
-- 将脚本放入程序旁的 `Scripts/`，在列表中运行、停止、重启或编辑。
+- 将脚本放入程序旁的 `Scripts/`，在列表中运行、停止、重启或编辑。只认 `Scripts/` **根目录**下的
+  `.ahk`，不进子目录找脚本；脚本需要的附件与运行时产物放在同级同名文件夹 `Scripts/<名>/` 里，
+  重命名、删除脚本时它会跟着走。
+- 分组：脚本行右键「移动到 ▸」归组或建组，组头右键可全部运行/全部停止、重命名、删除分组。
+  删除分组只解散，成员回到「未分组」，不删任何文件。
 - 「脚本 > 获取脚本…」从官方脚本仓库下载或升级脚本，安装到程序旁的 `Scripts/`；
   打开时读随包清单，只有点「刷新」才联网。右边的「订阅」打开订阅管理：填一份同格式的
   `scripts.json` 地址并点「订阅」，它就进到订阅表里（可增可删），这些清单同时合并进同一个列表，
@@ -53,8 +58,8 @@
 ```bat
 AHKDeck.exe
 AHKDeck.exe --version
-AHKDeck.exe --run Scripts\鼠标左键双击最小间隔.ahk
-AHKDeck.exe --journal --run Scripts\鼠标左键双击最小间隔.ahk
+AHKDeck.exe --run Scripts\双击防抖.ahk
+AHKDeck.exe --journal --run Scripts\双击防抖.ahk
 AHKDeck.exe --mcp-stdio
 AHKDeck.exe --mcp-init
 AHKDeck.exe --mcp-install workbuddy

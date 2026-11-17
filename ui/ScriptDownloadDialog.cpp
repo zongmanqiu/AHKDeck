@@ -817,13 +817,12 @@ void ScriptDownloadDialog::OnRowAction(int aIndex)
 	}
 
 	const std::string name = view.entry.name;
-	// m211: package mode installs <Scripts>\<名>\<名>.ahk from a zip; the
-	// text URL is unused then (InstallScriptFile branches on packageUrl).
+	// m227: every script is <Scripts>\<名>.ahk, package or not. A package only
+	// changes where the download comes from and what else lands beside it
+	// (<Scripts>\<名>\ gets the attachments). The text URL is unused in package
+	// mode (InstallScriptFile branches on packageUrl).
 	const std::string &pkgUrl = PackageUrlFor(view.entry, KindFor(view.sourceIndex));
-	const bool packageMode = !pkgUrl.empty();
-	const std::string target = packageMode
-		? ScriptsDirUtf8() + name + "\\" + name + ".ahk"
-		: ScriptsDirUtf8() + name + ".ahk";
+	const std::string target = ScriptsDirUtf8() + name + ".ahk";
 	// m160: the manifest entry is the truth the download is verified against -
 	// name and version, nothing else (no size check: the user's rule for
 	// official scripts, and entry.sizeKb stays for the 信息 display only).

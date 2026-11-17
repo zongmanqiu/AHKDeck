@@ -26,6 +26,7 @@
 #include "core/Json.h"
 #include "core/ResourceStats.h"
 #include "core/ScriptCatalog.h"
+#include "core/ScriptGroups.h"
 #include "core/ScriptHeader.h"
 #include "core/Settings.h"
 #include "core/TextFile.h"
@@ -750,9 +751,33 @@ private:
 };
 
 // m037 made the captions plain labels and dropped click sorting; m199 brings
-// it back. The menu column is still the gear between 状态 and 脚本.
+// it back.
+// m230: physical column order changed. The gutter is a dedicated strip whose
+// only occupant is a group header's fold caret; the NAME column moved to the
+// left edge so a header and its members share one text edge; the two glyph
+// buttons (运行/菜单) moved after the numbers, so a row reads left to right as
+// "what is it | what does it cost | what can I do with it".
+enum DeckColumn
+{
+	kColGutter = 0,
+	kColName,
+	kColCpu,
+	kColGpu,
+	kColMem,
+	kColRun,
+	kColMenu,
+	kColHotkey,
+	kDeckColumnCount
+};
+
+// In column order (kColGutter has no caption - it is the tree's indent strip).
 static const char *kColumnCaptions[7] =
-	{"运行", "菜单", "脚本", "CPU", "GPU", "内存", "快捷键"};
+	{"脚本", "CPU", "GPU", "内存", "运行", "菜单", "快捷键"};
+
+// The sort key each caption sends when clicked: 0 运行/1 菜单 (running first),
+// 2 脚本, 3 CPU/4 GPU/5 内存, 6 快捷键. Kept apart from the column index so
+// moving a column never changes what a click sorts by.
+static const int kColumnSortKey[7] = { 2, 3, 4, 5, 0, 1, 6 };
 
 // m202: the caption PLUS its always-reserved ↑/↓ slot is a column's FLOOR,
 // measured conservatively at the design font. These are compile-time so the
@@ -763,8 +788,8 @@ static const char *kColumnCaptions[7] =
 // m203: CPU/GPU used to sit at 48 because their captions were drawn at s9.
 // With the header row now uniformly s10, 48 no longer holds "CPU" + the ↑/↓
 // slot, so every text column shares the same 56 floor and the hotkey keeps
-// the wider one it needs for "Ctrl+Alt+F".
-static constexpr int kHeaderFloor[7] = { 56, 56, 56, 56, 56, 56, 72 };
+// the wider one it needs for "Ctrl+Alt+F". Indexed by DeckColumn.
+static constexpr int kColumnFloor[kDeckColumnCount] = { 0, 56, 56, 56, 56, 56, 56, 72 };
 
 static void DrawGear(int aCx, int aCy, int aRadius, Fl_Color aColor)
 {
@@ -1040,6 +1065,35 @@ public:
 	int IndexOfLine(int aLine) const;  // browser line -> mScripts index, or -1
 	int LineOfIndex(int aIndex) const; // mScripts index -> browser line, or 0 when hidden
 
+	// --- m227: groups are rows too -----------------------------------------
+	// The browser line no longer maps straight to mScripts: mViewRows holds a
+	// header or a script per line. Everything that used to assume "line - 1 =
+	// visible index" goes through the two functions above, so the group layer
+	// lives here and nowhere else.
+	bool IsGroupLine(int aLine) const;   // a group header occupies this line
+	int GroupOfLine(int aLine) const;    // group index, or -1 for non-group lines
+	void ToggleGroup(int aGroup);        // fold/unfold, persisted
+	bool GroupFolded(int aGroup) const;  // kUngrouped answers for 未分组
+	std::string GroupName(int aGroup) const;
+	// "系统维护  (2/3)" - the name plus running/total, the one text a header row
+	// carries into the browser label.
+	std::string GroupHeaderLabel(int aGroup) const;
+	// mScripts indices belonging to a group, in name order (kUngrouped works too).
+	std::vector<int> MembersOfGroup(int aGroup) const;
+	int GroupRunningCount(int aGroup) const;
+	int GroupMemberCount(int aGroup) const;
+	// The header's three metric cells: the sum over that group's running
+	// scripts. Not the host (the status bar already counts it once).
+	std::string GroupMetricText(int aGroup, int aWhich) const;
+	void ShowGroupContextMenu(int aGroup);
+	// m227: right-click on the empty area below the rows - the only place a
+	// group can be created without going through a script first.
+	void ShowListEmptyMenu();
+	void NewGroup();
+	void MoveScriptToGroup(int aIndex, int aGroup);
+	void RunGroup(int aGroup);
+	void StopGroup(int aGroup);
+
 	// m026: what the browser needs in order to draw and hit-test its own cells.
 	// Idle is "never started in this deck"; Finished is "the last run ended with
 	// rc 0 and no fatal error" - a one-shot script is gone in ~50 ms, so without
@@ -1052,44 +1106,49 @@ public:
 	enum class RowLight { Idle, Running };
 	bool LastRunFailed(int aIndex) const;
 	RowLight LightOf(int aIndex) const;
-	// m198: column order is play | menu | name | CPU | GPU | memory | hotkey.
-	// The two glyph columns stay at the LEFT edge where they always were; the
-	// three metric columns follow the name; the hotkey button closes the row on
-	// the right. One offset helper keeps every rect below honest about where
-	// the metric group starts.
-	int MetricOffset(int aWhich) const
+	// m230: column order is gutter | name | CPU | GPU | memory | run | menu |
+	// hotkey. One offset helper keeps every rect below honest about where a
+	// column starts, so a future reorder touches this block and nothing else.
+	int ColumnOffset(int aColumn) const
 	{
-		int offset = mColumns[0] + mColumns[1] + mColumns[2]; // play + menu + name
-		for (int i = 0; i < aWhich; ++i)
-			offset += mColumns[3 + i];
+		int offset = 0;
+		for (int i = 0; i < aColumn && i < kDeckColumnCount; ++i)
+			offset += mColumns[i];
 		return offset;
+	}
+	// The fold caret strip. It carries nothing on a script row, which is what
+	// makes a group header sit at the same left edge as its members' names.
+	void GutterCellRect(int aX, int &aRX, int &aRW) const
+	{
+		aRX = aX;
+		aRW = mColumns[kColGutter];
 	}
 	void PlayCellRect(int aX, int aY, int aH, int &aRX, int &aRY, int &aRW, int &aRH) const
 	{
-		aRX = aX;
-		aRW = mColumns[0];
+		aRX = aX + ColumnOffset(kColRun);
+		aRW = mColumns[kColRun];
 		aRY = aY + (aH - 24) / 2;
 		aRH = 24;
 	}
 	void MenuCellRect(int aX, int aY, int aH, int &aRX, int &aRY, int &aRW, int &aRH) const
 	{
-		aRX = aX + mColumns[0];
-		aRW = mColumns[1];
+		aRX = aX + ColumnOffset(kColMenu);
+		aRW = mColumns[kColMenu];
 		aRY = aY + (aH - 24) / 2;
 		aRH = 24;
 	}
 	void NameCellRect(int aX, int &aRX, int &aRW) const
 	{
-		aRX = aX + mColumns[0] + mColumns[1];
-		aRW = mColumns[2];
+		aRX = aX + ColumnOffset(kColName);
+		aRW = mColumns[kColName];
 	}
 	// m031: the hotkey cell is a button too (click = edit the binding). m198:
-	// it moved to the far right and got wider - it is a bordered combo, the
-	// biggest cell in the row, and must hold a full "Ctrl+Alt+F".
+	// it stays the last column and the widest one - it is a bordered combo and
+	// must hold a full "Ctrl+Alt+F".
 	void HotkeyCellRect(int aX, int aY, int aH, int &aRX, int &aRY, int &aRW, int &aRH) const
 	{
-		aRX = aX + MetricOffset(3); // after the three metric columns
-		aRW = mColumns[6] - 6;
+		aRX = aX + ColumnOffset(kColHotkey);
+		aRW = mColumns[kColHotkey] - 6;
 		aRY = aY + (aH - 24) / 2;
 		aRH = 24;
 	}
@@ -1098,8 +1157,8 @@ public:
 	void MetricCellRect(int aWhich, int aX, int aY, int aH,
 		int &aRX, int &aRY, int &aRW, int &aRH) const
 	{
-		aRX = aX + MetricOffset(aWhich);
-		aRW = mColumns[3 + aWhich];
+		aRX = aX + ColumnOffset(kColCpu + aWhich);
+		aRW = mColumns[kColCpu + aWhich];
 		aRY = aY;
 		aRH = aH;
 	}
@@ -1263,6 +1322,7 @@ private:
 	{
 		std::wstring path;
 		std::string name;   // UTF-8 leaf, the only part the list shows
+		std::string key;    // m227: path relative to Scripts, the group key
 		DWORD session = 0;  // latest session started for this script
 	};
 
@@ -1477,28 +1537,38 @@ private:
 	Fl_Box *mCaptionMemory = nullptr;
 
 	std::vector<Fl_Widget *> mListWidgets;
-	// Visible browser line (1-based) -> index in mScripts.
+	// Visible browser line (1-based) -> index in mScripts. m227: this is the
+	// filtered+sorted script list, no longer the browser's line order - the
+	// browser draws mViewRows, which interleaves group headers.
 	std::vector<int> mVisible;
-	std::vector<int> mLastVisible; // to notice a change the label text cannot show
-	// m198/m200: the list is a table: play | menu | name | CPU | GPU | memory |
-	// hotkey. The two glyph columns stay at the LEFT edge; the three metric
-	// columns follow the name; the hotkey button closes the row at the right
-	// (a bordered combo that must hold "Ctrl+Alt+F"). This array drives both
-	// the cells (Fl_Browser::column_widths reads it live) and the captions
-	// above. m200: LayoutListPane() re-fits ALL SEVEN from their measured
-	// needs - captions included - so even the glyph columns grow if their
-	// header needs more room for the sort marker.
-	int mColumns[8] = { 48, 48, 300, 44, 44, 56, 136, 0 };
+	ScriptGroups mGroups;
+	std::vector<ViewScriptRow> mViewRows;      // what the browser actually shows
+	std::vector<ViewScriptRow> mLastViewRows;  // a fold changes rows, not labels
+	bool mFiltering = false;                   // the search box has text
+	// Per-group CPU/GPU/memory sums for the header row, refreshed by the same
+	// 2 s sample that feeds the script rows (m196's "one snapshot" rule).
+	std::map<int, ResourceSample> mGroupResources;
+	// m230: the list is a table: gutter | name | CPU | GPU | memory | run |
+	// menu | hotkey. See DeckColumn above. This array drives both the cells
+	// (Fl_Browser::column_widths reads it live) and the captions above.
+	// m200: LayoutListPane() re-fits every column from its measured needs -
+	// captions included - so even the glyph columns grow if their header needs
+	// more room for the sort marker. The trailing 0 is Fl_Browser's terminator
+	// (it walks the array with `while (*i)`), not a width.
+	int mColumns[kDeckColumnCount + 1] = { 24, 300, 56, 56, 56, 56, 56, 136, 0 };
 	// m202: the two-step width rule, measured per column and rounded to 8px:
 	//   mHeaderNeed = caption + ↑/↓ slot  -> the column's MINIMUM width
 	//   mColumnNeed = max(header, widest cell in that column) -> preferred width
-	// kHeaderFloor[] is the compile-time header floor used before shown() lets
+	// kColumnFloor[] is the compile-time header floor used before shown() lets
 	// fl_width() measure real glyphs. Both needs only grow between real
 	// resizes, so a digit appearing in a 2 s reading never nudges the table.
 	// LayoutListPane remembers its geometry here so MeasureColumnNeeds() can
-	// re-fit in place.
-	int mHeaderNeed[7] = { 0, 0, 0, 0, 0, 0, 0 };
-	int mColumnNeed[7] = { 0, 0, 0, 0, 0, 0, 0 };
+	// re-fit in place. Indexed by DeckColumn; the gutter keeps 0.
+	int mHeaderNeed[kDeckColumnCount] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+	int mColumnNeed[kDeckColumnCount] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+	// The sort key each caption was created with, so UpdateSortCaptions() can
+	// mark the right one without knowing where the column sits.
+	int mCaptionSortKey[7] = { 0, 0, 0, 0, 0, 0, 0 };
 	int mPaneX = 0, mPaneY = 0, mPaneW = 0, mPaneH = 0;
 	// m199: click sorting. -1 = the store's natural name order. Numeric columns
 	// sort by a snapshot taken at click time, otherwise every 2 s sample would
@@ -1717,6 +1787,10 @@ private:
 	std::shared_ptr<bool> mCompileAlive = std::make_shared<bool>(true);
 };
 
+// Defined further down; the group header row needs it to shorten a name that
+// does not fit its column.
+static std::string ClipEllipsis(const std::string &aText, int aMaxW);
+
 // A browser that runs the selected script on a double-click; a single click
 // only selects it, and the right-click menu edits/reveals explicitly (m022).
 class ScriptBrowser : public Fl_Browser
@@ -1866,8 +1940,15 @@ public:
 			if (line > 0)
 			{
 				SetFocusLine(line);
-				mOwner->ShowContextMenu(mOwner->IndexOfLine(line));
+				// m227: a header row has its own menu (run/stop the whole group,
+				// rename, delete) - never the per-script five.
+				if (mOwner->IsGroupLine(line))
+					mOwner->ShowGroupContextMenu(mOwner->GroupOfLine(line));
+				else
+					mOwner->ShowContextMenu(mOwner->IndexOfLine(line));
 			}
+			else
+				mOwner->ShowListEmptyMenu();
 			return 1;
 		}
 
@@ -1880,7 +1961,8 @@ public:
 			mMenuHit = 0;
 			mPlayHit = 0;
 			mHotkeyHit = 0;
-			if (line > 0)
+			// m227: a header row has no play / hotkey / gear cells at all.
+			if (line > 0 && !mOwner->IsGroupLine(line))
 			{
 				// bbox() is where item_draw gets its row origin from, so the hit
 				// test and the painted cell cannot drift apart. Only the x range
@@ -1962,7 +2044,38 @@ public:
 				const int y = Fl::event_y();
 				const int dx = x > mLastX ? x - mLastX : mLastX - x;
 				const int dy = y > mLastY ? y - mLastY : mLastY - y;
-				if (mHasLast && now - mLastTick <= (ULONGLONG)GetDoubleClickTime() && dx <= 4 && dy <= 4)
+				const bool doubleClick = mHasLast
+					&& now - mLastTick <= (ULONGLONG)GetDoubleClickTime()
+					&& dx <= 4 && dy <= 4;
+
+				// m227: on a header, double-click or the caret folds the group.
+				// A single click anywhere else only focuses it - a stray click
+				// must never start or stop anything.
+				if (mOwner->IsGroupLine(line))
+				{
+					int bx = 0, by = 0, bw = 0, bh = 0;
+					bbox(bx, by, bw, bh);
+					// m230: the caret has its own gutter column, so that whole
+					// strip folds - the same slot that is empty on a script row.
+					int gx = 0, gw = 0;
+					mOwner->GutterCellRect(bx, gx, gw);
+					const bool onCaret = x >= gx && x < gx + gw;
+					if (doubleClick || onCaret)
+					{
+						mHasLast = false;
+						mOwner->ToggleGroup(mOwner->GroupOfLine(line));
+					}
+					else
+					{
+						mHasLast = true;
+						mLastTick = now;
+						mLastX = x;
+						mLastY = y;
+					}
+					return 1;
+				}
+
+				if (doubleClick)
 				{
 					mHasLast = false;
 					mOwner->RunOrStopRow(mOwner->IndexOfLine(line));
@@ -1989,6 +2102,14 @@ protected:
 	void item_draw(void *item, int X, int Y, int W, int H) const override
 	{
 		const int line = lineno(item);
+		// m227: a group header is a heading, not an almost-empty script row. It
+		// paints itself and skips every script cell below (play, gear, name
+		// highlight, hotkey combo, failure strip none of them apply).
+		if (mOwner->IsGroupLine(line))
+		{
+			DrawGroupRow(line, X, Y, W, H);
+			return;
+		}
 		const bool editing = mOwner->IsEditingLine(line);
 		const bool editingDirty = mOwner->IsEditingLineDirty(line);
 		const DeckWindow::RowLight light = mOwner->LightOf(mOwner->IndexOfLine(line));
@@ -2155,6 +2276,100 @@ protected:
 	}
 
 private:
+
+	// m227: one group header row. Band background (the same colour the caption
+	// strip uses, so a heading never looks like a script), a fold caret in the
+	// name cell, the name + running/total, and the three sums painted into the
+	// very same metric cells a script row uses - so the columns line up and the
+	// header reads as "this group's total".
+	void DrawGroupRow(int aLine, int X, int Y, int W, int H) const
+	{
+		const int group = mOwner->GroupOfLine(aLine);
+		// The band must reach the row's right edge, hotkey column included: a
+		// header that stops where the combo starts reads as a broken row.
+		const int rowRight = scrollbar.visible() ? scrollbar.x() : x() + w();
+		const int fullW = rowRight - X > W ? rowRight - X : W;
+		fl_color(DeckColors().background3);
+		fl_rectf(X, Y, fullW, H);
+
+		// m230: the caret now owns a column of its own - the 24px gutter at the
+		// very left edge - and the name cell starts right after it. A script row
+		// leaves the gutter empty, so a header and its members line up on the
+		// same text edge and the caret reads as the tree's indent control.
+		int gx = 0, gw = 0;
+		mOwner->GutterCellRect(X, gx, gw);
+		int nx = 0, nw = 0;
+		mOwner->NameCellRect(X, nx, nw);
+		const int cx = gx + DeckHeaderBox::kInset;
+		const int cy = Y + H / 2;
+		fl_color(DeckColors().text1);
+		if (mOwner->GroupFolded(group))
+		{
+			fl_begin_polygon();
+			fl_vertex(cx + 1, cy - 4);
+			fl_vertex(cx + 1, cy + 4);
+			fl_vertex(cx + 8, cy);
+			fl_end_polygon();
+		}
+		else
+		{
+			fl_begin_polygon();
+			fl_vertex(cx, cy - 3);
+			fl_vertex(cx + 8, cy - 3);
+			fl_vertex(cx + 4, cy + 4);
+			fl_end_polygon();
+		}
+
+		// Name and count are drawn separately: when the pane is narrow, the
+		// count is dropped whole instead of being cut in half - a header that
+		// reads "系统维护 (0/" is worse than one without the count.
+		// m230: the name sits in the NAME cell, on the same x Fl_Browser puts
+		// script names on (cell left + 3), so header and members share an edge.
+		const std::string name = mOwner->GroupName(group);
+		const std::string count = "(" + std::to_string(mOwner->GroupRunningCount(group))
+			+ "/" + std::to_string(mOwner->GroupMemberCount(group)) + ")";
+		const int textX = nx + 3;
+		const int avail = nw - 6;
+		fl_font(textfont(), SubTextSize());
+		const int countW = (int)fl_width(count.c_str());
+		const int nameRoom = avail - countW - 10 >= 48 ? avail - countW - 10 : avail;
+		fl_font(textfont(), textsize());
+		const std::string shown = ClipEllipsis(name, nameRoom);
+		// The name's width must be measured while the NAME font is selected:
+		// measuring it after switching to the s9 count font underestimated it
+		// and printed "系统维护(0/2)" with no gap at all.
+		const int nameW = (int)fl_width(shown.c_str());
+		fl_color(DeckColors().text1);
+		if (mFocusLine == aLine)
+		{
+			const int bw = nameW + 6 < avail + 3 ? nameW + 6 : avail + 3;
+			fl_color(DeckColors().highlight1);
+			fl_rectf(textX - 2, Y + 1, bw, H - 2);
+			fl_color(fl_contrast(DeckColors().text1, DeckColors().highlight1));
+		}
+		else
+			fl_color(DeckColors().text1);
+		fl_draw(shown.c_str(), textX, Y, nameRoom, H, FL_ALIGN_LEFT | FL_ALIGN_CLIP);
+		if (nameRoom < avail) // there was room for the count as well
+		{
+			fl_color(DeckColors().text2);
+			fl_font(textfont(), SubTextSize());
+			fl_draw(count.c_str(), textX + nameW + 10, Y, countW + 2, H,
+				FL_ALIGN_LEFT | FL_ALIGN_CLIP);
+		}
+		for (int which = 0; which < 3; ++which)
+		{
+			int mx = 0, my = 0, mw = 0, mh = 0;
+			mOwner->MetricCellRect(which, X, Y, H, mx, my, mw, mh);
+			const std::string text = mOwner->GroupMetricText(group, which);
+			if (text.empty())
+				continue; // nothing of this group is running
+			fl_color(DeckColors().text2);
+			fl_font(textfont(), SubTextSize());
+			fl_draw(text.c_str(), mx + DeckHeaderBox::kInset, my,
+				mw - DeckHeaderBox::kInset - 2, mh, FL_ALIGN_LEFT | FL_ALIGN_CLIP);
+		}
+	}
 
 	void CancelHotkeyRecord()
 	{
@@ -3608,15 +3823,22 @@ DeckWindow::DeckWindow(Engine &aEngine)
 	{
 		static_cast<DeckWindow *>(aSelf)->SortByColumn(aColumn);
 	};
+	// m230: captions follow the physical columns 1..7 (the gutter has none), and
+	// each carries its SORT KEY rather than its index - so moving a column can
+	// never change what clicking it sorts by.
 	Fl_Box *caps[7];
 	for (int i = 0; i < 7; ++i)
-		caps[i] = new DeckHeaderBox(0, 0, 0, 0, kColumnCaptions[i], this, sortThunk, i);
-	mCaptionStatus = caps[0];
-	mCaptionMenu = caps[1];
-	mCaptionName = caps[2];
-	mCaptionCpu = caps[3];
-	mCaptionGpu = caps[4];
-	mCaptionMemory = caps[5];
+	{
+		caps[i] = new DeckHeaderBox(0, 0, 0, 0, kColumnCaptions[i], this, sortThunk,
+			kColumnSortKey[i]);
+		mCaptionSortKey[i] = kColumnSortKey[i];
+	}
+	mCaptionName = caps[0];
+	mCaptionCpu = caps[1];
+	mCaptionGpu = caps[2];
+	mCaptionMemory = caps[3];
+	mCaptionStatus = caps[4];
+	mCaptionMenu = caps[5];
 	mCaptionHotkey = caps[6];
 	for (int i = 0; i < 7; ++i)
 	{
@@ -3636,15 +3858,15 @@ DeckWindow::DeckWindow(Engine &aEngine)
 	// m204: the list opens in name ascending order. The store is already kept
 	// in that order, but leaving mSortColumn at -1 drew no sort marker at all,
 	// so the header gave no clue which order the rows were in - and one click
-	// on 脚本 flipped them to descending. Opening with column 2 ascending
-	// makes the marker match the order the user actually sees.
+	// on 脚本 flipped them to descending. Opening with the name sort key
+	// ascending makes the marker match the order the user actually sees.
 	UpdateSortCaptions();
 	mFilterRule = new Fl_Box(0, 0, 0, 0);
 	mFilterRule->box(FL_FLAT_BOX);
 	mFilterRule->color(DeckColors().background2);
 	mListWidgets = {mListFrame, mHeaderBar, mFilterRule, mList, mFilter,
-		mCaptionStatus, mCaptionName, mCaptionHotkey, mCaptionMenu,
-		mCaptionCpu, mCaptionGpu, mCaptionMemory, mListBorder};
+		mCaptionName, mCaptionCpu, mCaptionGpu, mCaptionMemory,
+		mCaptionStatus, mCaptionMenu, mCaptionHotkey, mListBorder};
 
 	// m031: the editor bar keeps only the encoding choice and the file name;
 	// save / save-as / save-and-run / reload now live in 文件.
@@ -3956,6 +4178,11 @@ DeckWindow::DeckWindow(Engine &aEngine)
 	// is ever opened, so a first run writes the default back - that is also how a
 	// hand-edited settings.json discovers the name.
 	mHousekeepingDays = RetentionDaysFromJson(mConfigRoot);
+
+	// m227: groups live in settings.json next to the window geometry, in their
+	// own node. A missing node simply means "every script is 未分组" - reading
+	// must never fail because of it.
+	mGroups.Load(JsonObjectMember(mConfigRoot, "scripts"));
 	{
 		const Json &existing = mConfigRoot["housekeeping"];
 		if (!existing.IsObject() || !existing.Has("max_age_days"))
@@ -4339,7 +4566,7 @@ void DeckWindow::LayoutListPane(int x, int y, int w, int h)
 	// re-measures from scratch; the re-fit calls below pass the same geometry,
 	// so they do not wipe the needs and cannot loop.
 	if (w != mPaneW || h != mPaneH)
-		for (int i = 0; i < 7; ++i)
+		for (int i = 0; i < kDeckColumnCount; ++i)
 		{
 			mHeaderNeed[i] = 0;
 			mColumnNeed[i] = 0;
@@ -4371,17 +4598,21 @@ void DeckWindow::LayoutListPane(int x, int y, int w, int h)
 	// "Ctrl+Alt+F" inside a bordered combo) is the last column we ever shrink.
 	// m203: CPU/GPU follow the header row to 56 - a 48px column cannot hold a
 	// 16px "CPU" caption plus its reserved ↑/↓ slot.
-	const int baseStatic[7] = { 56, 56, 300, 56, 56, 56, 136 };
-	const int minStatic[7]  = { 56, 56, 120, 56, 56, 56, 112 };
-	int base[7], minimum[7];
-	for (int i = 0; i < 7; ++i)
+	// m230: eight columns. The gutter is a fixed 24px indent strip and never
+	// shrinks; the NAME is the only elastic column; CPU/GPU/内存 give up their
+	// slack first, then 运行/菜单, and the hotkey button - a full "Ctrl+Alt+F"
+	// inside a bordered combo - is the last thing we ever take.
+	const int baseStatic[kDeckColumnCount] = { 24, 300, 56, 56, 56, 56, 56, 136 };
+	const int minStatic[kDeckColumnCount]  = { 24, 120, 56, 56, 56, 56, 56, 112 };
+	int base[kDeckColumnCount], minimum[kDeckColumnCount];
+	for (int i = 0; i < kDeckColumnCount; ++i)
 	{
 		// m202 step 1: the caption + ↑/↓ slot is the hard MINIMUM. It comes
-		// from kHeaderFloor[] before the window is shown, and from the exact
+		// from kColumnFloor[] before the window is shown, and from the exact
 		// measured mHeaderNeed once fl_width() is available.
 		minimum[i] = minStatic[i];
-		if (minimum[i] < kHeaderFloor[i])
-			minimum[i] = kHeaderFloor[i];
+		if (minimum[i] < kColumnFloor[i])
+			minimum[i] = kColumnFloor[i];
 		if (minimum[i] < mHeaderNeed[i])
 			minimum[i] = mHeaderNeed[i];
 		// m202 step 2: the preferred width compares that floor with the
@@ -4390,40 +4621,35 @@ void DeckWindow::LayoutListPane(int x, int y, int w, int h)
 		if (base[i] < mColumnNeed[i])
 			base[i] = mColumnNeed[i];
 	}
-	mColumns[0] = base[0];
-	mColumns[1] = base[1];
-	const int rest = columnW - mColumns[0] - mColumns[1];
-	const int baseSum = base[2] + base[3] + base[4] + base[5] + base[6];
-	int widths[5] = { base[2], base[3], base[4], base[5], base[6] };
+	int widths[kDeckColumnCount];
+	for (int i = 0; i < kDeckColumnCount; ++i)
+		widths[i] = base[i];
+	const int rest = columnW - base[kColGutter];
+	int baseSum = 0;
+	for (int i = kColName; i < kDeckColumnCount; ++i)
+		baseSum += base[i];
 	if (rest >= baseSum)
 	{
-		widths[0] = rest - (baseSum - base[2]); // name takes all the slack
+		widths[kColName] = rest - (baseSum - base[kColName]); // name takes the slack
 	}
 	else
 	{
 		int shrink = baseSum - rest;
 		// Plain comparisons, not std::min: windows.h defines min/max macros.
-		// Name first: it has no intrinsic width and can give up the most.
-		const int nameRoom = widths[0] - minimum[2];
-		const int nameTake = shrink < nameRoom ? shrink : nameRoom;
-		widths[0] -= nameTake;
-		shrink -= nameTake;
-		for (int i = 1; i < 4 && shrink > 0; ++i) // the three metrics
+		// The gutter has no room to give, so it is not in this list.
+		const int order[7] = { kColName, kColCpu, kColGpu, kColMem,
+			kColRun, kColMenu, kColHotkey };
+		for (int k = 0; k < 7 && shrink > 0; ++k)
 		{
-			const int room = widths[i] - minimum[2 + i];
+			const int i = order[k];
+			const int room = widths[i] - minimum[i];
 			const int take = shrink < room ? shrink : room;
 			widths[i] -= take;
 			shrink -= take;
 		}
-		if (shrink > 0) // only then touch the hotkey button
-		{
-			const int room = widths[4] - minimum[6];
-			const int take = shrink < room ? shrink : room;
-			widths[4] -= take;
-		}
 	}
-	for (int i = 0; i < 5; ++i)
-		mColumns[2 + i] = widths[i];
+	for (int i = 0; i < kDeckColumnCount; ++i)
+		mColumns[i] = widths[i];
 
 	// m199: captions must share the browser's item origin. mList sits at x + 1
 	// with FL_FLAT_BOX, so Fl_Browser_::bbox().x() == x + 1 - the very same X
@@ -4435,23 +4661,24 @@ void DeckWindow::LayoutListPane(int x, int y, int w, int h)
 	mListFrame->resize(x, headerY, w, frameH > 0 ? frameH : 0);
 	mListBorder->resize(x, headerY, w, frameH > 0 ? frameH : 0);
 	mHeaderBar->resize(x + 1, headerY + 1, contentW, headerH);
-	const int capPlayX = textX;
-	const int capMenuX = capPlayX + mColumns[0];
-	const int capNameX = capMenuX + mColumns[1];
-	const int capCpuX = capNameX + mColumns[2];
-	const int capGpuX = capCpuX + mColumns[3];
-	const int capMemoryX = capGpuX + mColumns[4];
-	const int capHotkeyX = capMemoryX + mColumns[5];
+	// m230: captions walk the same columns as the cells, so the two cannot drift.
+	int capX[kDeckColumnCount];
+	int capRun = textX;
+	for (int i = 0; i < kDeckColumnCount; ++i)
+	{
+		capX[i] = capRun;
+		capRun += mColumns[i];
+	}
 	// m202: every caption owns its full column rect and left-aligns inside it.
-	// kHeaderFloor[] plus the measured mHeaderNeed reserve kInset + label +
+	// kColumnFloor[] plus the measured mHeaderNeed reserve kInset + label +
 	// the ↑/↓ slot, so the marker always fits. One rule, no -4/-10 fudges.
-	mCaptionStatus->resize(capPlayX, headerY + 1, mColumns[0], headerH);
-	mCaptionMenu->resize(capMenuX, headerY + 1, mColumns[1], headerH);
-	mCaptionName->resize(capNameX, headerY + 1, mColumns[2], headerH);
-	mCaptionCpu->resize(capCpuX, headerY + 1, mColumns[3], headerH);
-	mCaptionGpu->resize(capGpuX, headerY + 1, mColumns[4], headerH);
-	mCaptionMemory->resize(capMemoryX, headerY + 1, mColumns[5], headerH);
-	mCaptionHotkey->resize(capHotkeyX, headerY + 1, mColumns[6], headerH);
+	mCaptionName->resize(capX[kColName], headerY + 1, mColumns[kColName], headerH);
+	mCaptionCpu->resize(capX[kColCpu], headerY + 1, mColumns[kColCpu], headerH);
+	mCaptionGpu->resize(capX[kColGpu], headerY + 1, mColumns[kColGpu], headerH);
+	mCaptionMemory->resize(capX[kColMem], headerY + 1, mColumns[kColMem], headerH);
+	mCaptionStatus->resize(capX[kColRun], headerY + 1, mColumns[kColRun], headerH);
+	mCaptionMenu->resize(capX[kColMenu], headerY + 1, mColumns[kColMenu], headerH);
+	mCaptionHotkey->resize(capX[kColHotkey], headerY + 1, mColumns[kColHotkey], headerH);
 
 	const int listY = headerY + 1 + headerH;
 	const int browserY = listY + topGap;
@@ -4929,6 +5156,12 @@ void DeckWindow::ScanScripts()
 	const std::wstring scriptsDir = ExeDirectory() + L"\\Scripts";
 	CreateDirectoryW(scriptsDir.c_str(), nullptr);
 
+	// m227: one layout. Only Scripts\*.ahk is a script; Scripts\<名>\ belongs to
+	// that script (attachments + its own output) and is never searched. The call
+	// below also lifts 0.4.x folder-layout installs out to the flat name, so an
+	// upgrade never makes a script disappear from the list.
+	ahkdeck::MigrateLegacyScriptFolders(scriptsDir);
+
 	WIN32_FIND_DATAW fd;
 	const std::wstring pattern = scriptsDir + L"\\*.ahk";
 	HANDLE find = FindFirstFileW(pattern.c_str(), &fd);
@@ -4942,31 +5175,17 @@ void DeckWindow::ScanScripts()
 	} while (FindNextFileW(find, &fd));
 	FindClose(find);
 
-	// m211: folder layout - Scripts\<名>\<名>.ahk, what a zip package installs.
-	// A flat file with the same stem wins (legacy layout), so one name can
-	// never appear as two rows even while a user hand-copies both forms in.
-	WIN32_FIND_DATAW dd;
-	const std::wstring dirPattern = scriptsDir + L"\\*";
-	HANDLE dirFind = FindFirstFileW(dirPattern.c_str(), &dd);
-	if (dirFind != INVALID_HANDLE_VALUE)
+	// m227: a member that is gone from disk must not leave a phantom behind.
+	// Dropping it here keeps the list honest; the settings file is rewritten on
+	// the next normal save (a scan may run before the config is writable).
 	{
-		do
-		{
-			if (!(dd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
-				continue;
-			const std::wstring name = dd.cFileName;
-			if (name == L"." || name == L".." || name == L"temp")
-				continue;
-			const std::wstring flat = scriptsDir + L"\\" + name + L".ahk";
-			if (GetFileAttributesW(flat.c_str()) != INVALID_FILE_ATTRIBUTES)
-				continue;
-			const std::wstring entry = scriptsDir + L"\\" + name + L"\\"
-				+ name + L".ahk";
-			if (GetFileAttributesW(entry.c_str()) != INVALID_FILE_ATTRIBUTES)
-				AddScript(entry);
-		} while (FindNextFileW(dirFind, &dd));
-		FindClose(dirFind);
+		std::vector<std::string> keys;
+		keys.reserve(mScripts.size());
+		for (const ScriptRow &row : mScripts)
+			keys.push_back(row.key);
+		mGroups.PruneMissing(keys);
 	}
+
 
 	for (auto &row : mScripts)
 	{
@@ -4984,6 +5203,16 @@ bool DeckWindow::AddScript(const std::wstring &aPath)
 	ScriptRow row;
 	row.path = aPath;
 	row.name = Utf8(LeafOf(aPath));
+	// m227: groups name a script by its path relative to Scripts\, so moving the
+	// whole installation (or the drive letter) never drops a membership.
+	{
+		const std::wstring prefix = ExeDirectory() + L"\\Scripts\\";
+		std::wstring relative = aPath;
+		if (relative.size() > prefix.size()
+			&& _wcsnicmp(relative.c_str(), prefix.c_str(), prefix.size()) == 0)
+			relative = relative.substr(prefix.size());
+		row.key = Utf8(relative);
+	}
 	mScripts.push_back(std::move(row));
 
 	std::sort(mScripts.begin(), mScripts.end(),
@@ -5022,19 +5251,198 @@ int DeckWindow::SelectedIndex() const
 
 int DeckWindow::IndexOfLine(int aLine) const
 {
-	if (aLine < 1 || (size_t)aLine > mVisible.size())
+	if (aLine < 1 || (size_t)aLine > mViewRows.size())
 		return -1;
-	return mVisible[(size_t)aLine - 1];
+	const ViewScriptRow &row = mViewRows[(size_t)aLine - 1];
+	return row.kind == ViewRowKind::Script ? row.script : -1;
 }
 
 int DeckWindow::LineOfIndex(int aIndex) const
 {
-	for (size_t i = 0; i < mVisible.size(); ++i)
+	for (size_t i = 0; i < mViewRows.size(); ++i)
 	{
-		if (mVisible[i] == aIndex)
+		if (mViewRows[i].kind == ViewRowKind::Script && mViewRows[i].script == aIndex)
 			return (int)i + 1;
 	}
-	return 0; // filtered out: there is no line to point at
+	return 0; // filtered out or folded: there is no line to point at
+}
+
+bool DeckWindow::IsGroupLine(int aLine) const
+{
+	return aLine >= 1 && (size_t)aLine <= mViewRows.size()
+		&& mViewRows[(size_t)aLine - 1].kind == ViewRowKind::Group;
+}
+
+int DeckWindow::GroupOfLine(int aLine) const
+{
+	if (aLine < 1 || (size_t)aLine > mViewRows.size())
+		return -1;
+	const ViewScriptRow &row = mViewRows[(size_t)aLine - 1];
+	return row.kind == ViewRowKind::Group ? row.group : -1;
+}
+
+std::string DeckWindow::GroupName(int aGroup) const
+{
+	if (aGroup == ScriptGroups::kUngrouped)
+		return "未分组";
+	if (aGroup < 0 || aGroup >= mGroups.Count())
+		return std::string();
+	return mGroups.At(aGroup).name;
+}
+
+bool DeckWindow::GroupFolded(int aGroup) const
+{
+	if (aGroup == ScriptGroups::kUngrouped)
+		return mGroups.UngroupedCollapsed();
+	if (aGroup < 0 || aGroup >= mGroups.Count())
+		return false;
+	return mGroups.At(aGroup).collapsed;
+}
+
+std::vector<int> DeckWindow::MembersOfGroup(int aGroup) const
+{
+	std::vector<int> out;
+	for (size_t i = 0; i < mScripts.size(); ++i)
+		if (mGroups.GroupOf(mScripts[i].key) == aGroup)
+			out.push_back((int)i);
+	return out; // mScripts is already sorted by name
+}
+
+int DeckWindow::GroupMemberCount(int aGroup) const
+{
+	return (int)MembersOfGroup(aGroup).size();
+}
+
+int DeckWindow::GroupRunningCount(int aGroup) const
+{
+	int running = 0;
+	for (const int index : MembersOfGroup(aGroup))
+		if (IsRunning(mScripts[(size_t)index]))
+			++running;
+	return running;
+}
+
+std::string DeckWindow::GroupHeaderLabel(int aGroup) const
+{
+	return GroupName(aGroup) + "  (" + std::to_string(GroupRunningCount(aGroup))
+		+ "/" + std::to_string(GroupMemberCount(aGroup)) + ")";
+}
+
+std::string DeckWindow::GroupMetricText(int aGroup, int aWhich) const
+{
+	if (aWhich < 0 || aWhich > 2)
+		return std::string();
+	const auto it = mGroupResources.find(aGroup);
+	if (it == mGroupResources.end())
+		return std::string(); // nothing of this group is running: blank, never 0
+	const ResourceSample &sample = it->second;
+	switch (aWhich)
+	{
+	case 0:
+		return std::to_string((int)std::lround(sample.cpuPercent)) + "%";
+	case 1:
+		return sample.gpuPercent >= 0.0
+			? std::to_string((int)std::lround(sample.gpuPercent)) + "%"
+			: std::string("-");
+	default:
+		return FormatBytes(sample.privateWorkingSetBytes
+			? sample.privateWorkingSetBytes : sample.workingSetBytes);
+	}
+}
+
+void DeckWindow::ToggleGroup(int aGroup)
+{
+	if (aGroup == ScriptGroups::kUngrouped)
+		mGroups.SetUngroupedCollapsed(!mGroups.UngroupedCollapsed());
+	else
+	{
+		if (aGroup < 0 || aGroup >= mGroups.Count())
+			return;
+		mGroups.SetCollapsed(aGroup, !mGroups.At(aGroup).collapsed);
+	}
+	RefreshList();
+	SaveSettings(nullptr); // folding is a preference, not a session detail
+}
+
+void DeckWindow::NewGroup()
+{
+	ShowNameDialog("新建分组", "",
+		[this](const std::string &aName) {
+			std::string error;
+			ScriptGroups probe = mGroups;
+			if (!probe.Create(aName, &error))
+				return error;
+			return std::string();
+		},
+		[this](const std::string &aName) {
+			std::string error;
+			if (!mGroups.Create(aName, &error))
+			{
+				Append("[ui] " + error);
+				return;
+			}
+			RefreshList();
+			SaveSettings(nullptr);
+			Append("[ui] 已新建分组 " + aName);
+		});
+}
+
+void DeckWindow::MoveScriptToGroup(int aIndex, int aGroup)
+{
+	if (aIndex < 0 || (size_t)aIndex >= mScripts.size())
+		return;
+	const ScriptRow &row = mScripts[(size_t)aIndex];
+	mGroups.Move(row.key, aGroup);
+	RefreshList();
+	SaveSettings(nullptr);
+	Append("[ui] " + row.name + " → " + GroupName(aGroup));
+}
+
+void DeckWindow::RunGroup(int aGroup)
+{
+	if (!mReady)
+	{
+		Append("[ui] 引擎未就绪，无法运行");
+		return;
+	}
+	const std::vector<int> members = MembersOfGroup(aGroup);
+	size_t started = 0;
+	size_t skipped = 0;
+	for (const int index : members)
+	{
+		const ScriptRow &row = mScripts[(size_t)index];
+		if (IsRunning(row))
+		{
+			++skipped;
+			continue;
+		}
+		if (StartPath(row.path))
+			++started;
+	}
+	Append("[" + UiClock() + "] " + GroupName(aGroup) + " 全部运行（"
+		+ std::to_string(started) + " 个，已在跑的 " + std::to_string(skipped)
+		+ " 个跳过）");
+	RefreshList();
+}
+
+void DeckWindow::StopGroup(int aGroup)
+{
+	// Signal every member at once. Waiting for each to die before signalling the
+	// next would block the UI thread for as long as the slowest script takes to
+	// honour the stop - and the 2 s session tick already reaps them.
+	size_t signalled = 0;
+	for (const int index : MembersOfGroup(aGroup))
+	{
+		ScriptRow &row = mScripts[(size_t)index];
+		if (!IsRunning(row) || !row.session)
+			continue;
+		if (mEngine.StopSession(row.session))
+			++signalled;
+	}
+	InvalidateSessions();
+	Append("[" + UiClock() + "] " + GroupName(aGroup) + " 全部停止（"
+		+ std::to_string(signalled) + " 个）");
+	RefreshList();
 }
 
 bool DeckWindow::MatchesFilter(size_t aIndex) const
@@ -5181,13 +5589,15 @@ void DeckWindow::UpdateSortCaptions()
 	// m200: labels are never touched. Only the marker state changes, and the
 	// marker is drawn in a slot the column width already accounts for - so
 	// toggling sort cannot move text, clip the arrow or resize the column.
-	Fl_Box *caps[7] = {mCaptionStatus, mCaptionMenu, mCaptionName,
-		mCaptionCpu, mCaptionGpu, mCaptionMemory, mCaptionHotkey};
+	// m230: compare SORT KEYS, not positions - the captions sit in a different
+	// order now than the keys they carry.
+	Fl_Box *caps[7] = {mCaptionName, mCaptionCpu, mCaptionGpu, mCaptionMemory,
+		mCaptionStatus, mCaptionMenu, mCaptionHotkey};
 	for (int i = 0; i < 7; ++i)
 	{
 		auto *cap = static_cast<DeckHeaderBox *>(caps[i]);
 		if (cap)
-			cap->SetSort(i == mSortColumn ? (mSortDesc ? -1 : 1) : 0);
+			cap->SetSort(mCaptionSortKey[i] == mSortColumn ? (mSortDesc ? -1 : 1) : 0);
 	}
 }
 
@@ -5213,6 +5623,21 @@ void DeckWindow::RebuildView()
 	}
 
 	mVisible = std::move(indices);
+
+	// m227: the browser shows group headers and members, so its line order is
+	// no longer mVisible. The plan is computed here, once, from the same
+	// filtered+sorted list - which is what keeps a header and its members from
+	// ever disagreeing about what is currently visible.
+	mFiltering = mFilter && mFilter->value() && *mFilter->value();
+	std::vector<bool> matched(mScripts.size(), false);
+	std::vector<std::string> keys;
+	keys.reserve(mScripts.size());
+	for (const ScriptRow &row : mScripts)
+		keys.push_back(row.key);
+	for (const int index : mVisible)
+		if (index >= 0 && (size_t)index < matched.size())
+			matched[(size_t)index] = true;
+	mViewRows = mGroups.BuildRows(keys, matched, mVisible, mFiltering);
 }
 
 std::string DeckWindow::NameOfSession(DWORD aSessionId) const
@@ -5252,6 +5677,14 @@ bool DeckWindow::SaveSettings(std::string *aError)
 	ui.Set("list_pct", Json((double)mListPct));
 	ui.Set("console_pct", Json((double)mConsolePct));
 	mConfigRoot.Set("ui", ui);
+
+	// m227: the group list, rewritten whole. It is small (a name, a flag and a
+	// member list per group), so there is no merge to get wrong.
+	{
+		Json scripts = JsonObjectMember(mConfigRoot, "scripts");
+		mGroups.Save(scripts);
+		mConfigRoot.Set("scripts", scripts);
+	}
 
 	std::string error;
 	if (!WriteJsonConfig(mSettingsPath, mConfigRoot, error))
@@ -5318,9 +5751,39 @@ void DeckWindow::SampleResources()
 	}
 	const ResourceSnapshot snapshot = mResourceSampler.SampleWithChildren(pids);
 	mSessionResources.clear();
+	mGroupResources.clear();
 	for (size_t i = 0; i < snapshot.children.size() && i < ids.size(); ++i)
 		if (snapshot.children[i].valid)
 			mSessionResources[ids[i]] = snapshot.children[i].sample;
+
+	// m227: the group header's three numbers, from the SAME snapshot the rows
+	// use. Sum over the running members only - the host is not part of any
+	// group (the status bar already counts it once, m196).
+	for (const auto &entry : mSessionResources)
+	{
+		int group = ScriptGroups::kUngrouped;
+		for (const ScriptRow &row : mScripts)
+			if (row.session == entry.first)
+			{
+				group = mGroups.GroupOf(row.key);
+				break;
+			}
+		ResourceSample &sum = mGroupResources[group];
+		const ResourceSample &sample = entry.second;
+		sum.cpuPercent += sample.cpuPercent;
+		if (sample.gpuPercent >= 0.0)
+			sum.gpuPercent = (sum.gpuPercent < 0.0 ? 0.0 : sum.gpuPercent) + sample.gpuPercent;
+		sum.workingSetBytes += sample.workingSetBytes;
+		sum.privateWorkingSetBytes += sample.privateWorkingSetBytes
+			? sample.privateWorkingSetBytes : sample.workingSetBytes;
+	}
+	for (auto &entry : mGroupResources)
+	{
+		if (entry.second.cpuPercent > 100.0)
+			entry.second.cpuPercent = 100.0;
+		if (entry.second.gpuPercent > 100.0)
+			entry.second.gpuPercent = 100.0;
+	}
 	mResourceText = FormatResources(snapshot.total);
 }
 
@@ -5330,29 +5793,44 @@ void DeckWindow::RefreshList()
 	MeasureColumnNeeds();
 
 	std::vector<std::string> labels;
-	labels.reserve(mVisible.size());
+	labels.reserve(mViewRows.size());
 
-	for (const int index : mVisible)
+	for (const ViewScriptRow &row : mViewRows)
 	{
-		const ScriptRow &row = mScripts[(size_t)index];
-		// m198: seven columns - play | menu | name | CPU | GPU | memory | hotkey.
-		// Only the name and the hotkey carry browser text. The first two fields
-		// are drawn glyphs, the three numbers are painted right-aligned by
-		// DeckBrowser::item_draw (ResourceCellText is their one source), so five
-		// fields are empty. A changed reading no longer changes any label -
-		// SampleResources() just redraws the browser.
-		std::string label = "\t\t"; // play, menu
-		// m202: the same ellipsised name the highlighted/edited redraw uses.
-		label += DisplayNameAt(index);
-		label += "\t\t\t\t"; // CPU, GPU, memory, then into hotkey
-		label += HotkeyDisplayText(BindingOf(row));
+		// m230: eight columns - gutter | name | CPU | GPU | memory | run | menu
+		// | hotkey. Only the name and the hotkey carry browser text. The gutter
+		// is a glyph strip, the three numbers are painted by item_draw
+		// (ResourceCellText / GroupMetricText are their one source), and the two
+		// buttons redraw themselves, so six fields stay empty. A changed reading
+		// no longer changes any label - SampleResources() just redraws.
+		std::string label = "\t"; // gutter
+		if (row.kind == ViewRowKind::Group)
+			label += GroupHeaderLabel(row.group);
+		else
+		{
+			// m202: the same ellipsised name the highlighted/edited redraw uses.
+			label += DisplayNameAt(row.script);
+			// Six separators: the one that ends the name, then the five empty
+			// fields CPU / GPU / memory / run / menu. Eight fields total - one
+			// short and the binding lands in 菜单 instead of 快捷键.
+			label += "\t\t\t\t\t\t";
+			label += HotkeyDisplayText(BindingOf(mScripts[(size_t)row.script]));
+		}
 		labels.push_back(std::move(label));
 	}
+
+	// A fold changes the rows without changing any script, so the row plan is
+	// part of both "nothing changed" tests below.
+	const bool sameRows = mViewRows.size() == mLastViewRows.size() &&
+		std::equal(mViewRows.begin(), mViewRows.end(), mLastViewRows.begin(),
+			[](const ViewScriptRow &a, const ViewScriptRow &b) {
+				return a.kind == b.kind && a.group == b.group && a.script == b.script;
+			});
 
 	// A change of state can leave the text identical (two idle rows), so the view
 	// itself is part of the "nothing changed" test. The glyphs/status still need
 	// a repaint: starting or stopping a script changes no label text.
-	if (labels == mLastLabels && mVisible == mLastVisible)
+	if (labels == mLastLabels && sameRows)
 	{
 		if (mList) mList->redraw();
 		UpdateStatus();
@@ -5363,7 +5841,7 @@ void DeckWindow::RefreshList()
 	// m196: the resource cells move every 2 s. Rebuilding the whole browser on
 	// that beat would drop the gear hover, the focus line and the scroll
 	// position, so when only the label text changed, replace it in place.
-	if (mVisible == mLastVisible && mLastLabels.size() == labels.size() &&
+	if (sameRows && mLastLabels.size() == labels.size() &&
 		mList->size() == (int)labels.size())
 	{
 		mUpdatingList = true;
@@ -5391,7 +5869,7 @@ void DeckWindow::RefreshList()
 		mList->topline(top);
 	mUpdatingList = false;
 	mLastLabels = std::move(labels);
-	mLastVisible = mVisible;
+	mLastViewRows = mViewRows;
 	UpdateStatus();
 	SyncEditorRunButton();
 }
@@ -6214,6 +6692,25 @@ void DeckWindow::RenameSelected()
 				Append("[ui] 重命名失败（" + std::to_string((unsigned long)GetLastError()) + "）");
 				return;
 			}
+			// m227: the folder of the old stem is this script's own folder
+			// (attachments + output). Rename it too, or the next launch writes
+			// into a folder that no longer matches the script's name.
+			const auto stemOf = [](const std::string &aLeaf) {
+				const size_t d = aLeaf.find_last_of('.');
+				return d == std::string::npos ? aLeaf : aLeaf.substr(0, d);
+			};
+			const std::string oldStem = stemOf(row.name);
+			const std::string newStem = stemOf(aName);
+			if (oldStem != newStem)
+			{
+				const std::wstring from = ExeDirectory() + L"\\Scripts\\" + Wide(oldStem);
+				const std::wstring to = ExeDirectory() + L"\\Scripts\\" + Wide(newStem);
+				if (GetFileAttributesW(from.c_str()) != INVALID_FILE_ATTRIBUTES
+					&& GetFileAttributesW(to.c_str()) == INVALID_FILE_ATTRIBUTES
+					&& !MoveFileW(from.c_str(), to.c_str()))
+					Append("[ui] 已重命名脚本，但它的同名文件夹没能跟着改名（"
+						+ std::to_string((unsigned long)GetLastError()) + "）");
+			}
 			const std::string leaf = Utf8(LeafOf(target));
 			const std::string binding = HotkeyOf(mHotkeys, row.name);
 			if (!binding.empty())
@@ -6279,11 +6776,6 @@ void DeckWindow::DeleteSelected()
 	// folder - the companions belong to it. The flat layout keeps moving just
 	// the one file, exactly as before.
 	const std::wstring scriptsDir = ExeDirectory() + L"\\Scripts";
-	const size_t lastSlash = row.path.find_last_of(L"\\/");
-	const std::wstring parentDir = lastSlash == std::wstring::npos
-		? std::wstring() : row.path.substr(0, lastSlash);
-	const bool folderMode = !parentDir.empty()
-		&& _wcsicmp(parentDir.c_str(), scriptsDir.c_str()) != 0;
 
 	SYSTEMTIME st;
 	GetLocalTime(&st);
@@ -6292,9 +6784,9 @@ void DeckWindow::DeleteSelected()
 		st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
 
 	// row.name carries the ".ahk" leaf (m132); the stamp goes before the dot so
-	// the copy still opens by double-click. In folder mode the same candidate
-	// names a backup FOLDER `<stem>-<stamp>\` instead of a file - the shape is
-	// still "recoverable by hand from temp\deleted".
+	// the copy still opens by double-click. m227: a script also owns the folder
+	// of the same stem (attachments + its own output), so that folder is moved
+	// too - under the same stamp, without the extension.
 	const size_t dot = row.name.find_last_of('.');
 	const std::string stem = dot == std::string::npos ? row.name : row.name.substr(0, dot);
 	const std::string ext = dot == std::string::npos ? std::string(".ahk") : row.name.substr(dot);
@@ -6320,12 +6812,32 @@ void DeckWindow::DeleteSelected()
 		return;
 	}
 
-	if (!MoveFileW(folderMode ? parentDir.c_str() : row.path.c_str(),
-			target.c_str()))
+	if (!MoveFileW(row.path.c_str(), target.c_str()))
 	{
 		Append("[ui] 删除失败（" + std::to_string((unsigned long)GetLastError()) +
 			"）：脚本可能正在退出，稍后再试");
 		return;
+	}
+
+	// The companion folder goes next. Losing it is not worth aborting a delete
+	// the user already confirmed - say so instead, and the file is still in
+	// temp\deleted either way.
+	const std::wstring companion = scriptsDir + L"\\" + Wide(stem);
+	if (GetFileAttributesW(companion.c_str()) != INVALID_FILE_ATTRIBUTES)
+	{
+		std::wstring dirTarget;
+		for (int attempt = 1; attempt <= 99 && dirTarget.empty(); ++attempt)
+		{
+			std::string candidate = stem + "-" + stamp;
+			if (attempt > 1)
+				candidate += "-" + std::to_string(attempt);
+			const std::wstring path = dir + L"\\" + Wide(candidate);
+			if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES)
+				dirTarget = path;
+		}
+		if (dirTarget.empty() || !MoveFileW(companion.c_str(), dirTarget.c_str()))
+			Append("[ui] 脚本已删除，但它的同名文件夹没能一起移动，请手动清理 " +
+				std::string("Scripts\\") + stem + "\\");
 	}
 
 	// The binding belonged to the file: dropping it here is what keeps 快捷键
@@ -6874,6 +7386,15 @@ void DeckWindow::ShowEditorContextMenu()
 	HandleMenu((int)(intptr_t)picked->user_data());
 }
 
+// m227: the 移动到 submenu's ids. Per-script actions keep 1..8, so a group
+// action can never be mistaken for one of them.
+namespace
+{
+constexpr int kMoveUngrouped = 100;
+constexpr int kMoveGroupBase = 101; // + group index
+constexpr int kMoveNewGroup = 900;
+} // namespace
+
 void DeckWindow::ShowContextMenu(int aIndex)
 {
 	if (aIndex < 0 || (size_t)aIndex >= mScripts.size())
@@ -6887,8 +7408,12 @@ void DeckWindow::ShowContextMenu(int aIndex)
 	// own tray menu stays on the row's 菜单 (gear) cell.
 	mContextLabels.clear();
 	mContextItems.clear();
-	mContextLabels.reserve(10);
-	mContextItems.reserve(10);
+	// m227: room for the 移动到 submenu (one entry per group, plus 未分组 and
+	// 新建分组…) so the labels vector never reallocates under the menu - the
+	// items point at those strings' c_str().
+	const size_t room = 12 + (size_t)mGroups.Count() * 2;
+	mContextLabels.reserve(room);
+	mContextItems.reserve(room);
 	auto add = [this](const char *aLabel, int aId) {
 		mContextLabels.push_back(aLabel);
 		Fl_Menu_Item item = { mContextLabels.back().c_str(), 0, nullptr, (void *)(intptr_t)aId, 0 };
@@ -6905,6 +7430,26 @@ void DeckWindow::ShowContextMenu(int aIndex)
 	// m177: 删除 sits with the other per-script actions. No divider above 信息
 	// (m153's rule still holds: a rule there split the menu in two halves).
 	add("删除…", 8);
+	// m227: 移动到 ▸ is the only way into a group (no drag, by design). The
+	// current group is marked, so the menu also answers "where is this one?".
+	{
+		mContextLabels.push_back("移动到");
+		Fl_Menu_Item item = { mContextLabels.back().c_str(), 0, nullptr, nullptr, FL_SUBMENU };
+		mContextItems.push_back(item);
+		const int current = mGroups.GroupOf(row.key);
+		auto addTo = [this](const std::string &aLabel, int aId, bool aChecked) {
+			mContextLabels.push_back(aLabel);
+			Fl_Menu_Item sub = { mContextLabels.back().c_str(), 0, nullptr,
+				(void *)(intptr_t)aId, aChecked ? (FL_MENU_RADIO | FL_MENU_VALUE) : 0 };
+			mContextItems.push_back(sub);
+		};
+		addTo("未分组", kMoveUngrouped, current == ScriptGroups::kUngrouped);
+		for (int g = 0; g < mGroups.Count(); ++g)
+			addTo(mGroups.At(g).name, kMoveGroupBase + g, current == g);
+		addTo("新建分组…", kMoveNewGroup, false);
+		const Fl_Menu_Item subEnd = { nullptr };
+		mContextItems.push_back(subEnd);
+	}
 	// m153: no divider above 信息 after all. FL_MENU_DIVIDER on 重命名 drew a
 	// rule that made a five-item menu read as two unrelated halves; Explorer's
 	// 属性 sits in the same list without one.
@@ -6953,6 +7498,155 @@ void DeckWindow::ShowContextMenu(int aIndex)
 		break;
 	case 8: // 删除…
 		DeleteSelected();
+		break;
+	default:
+		if (id == kMoveUngrouped)
+			MoveScriptToGroup(aIndex, ScriptGroups::kUngrouped);
+		else if (id >= kMoveGroupBase && id < kMoveGroupBase + mGroups.Count())
+			MoveScriptToGroup(aIndex, id - kMoveGroupBase);
+		else if (id == kMoveNewGroup)
+		{
+			const ScriptRow target = mScripts[(size_t)aIndex];
+			ShowNameDialog("新建分组", "",
+				[this](const std::string &aName) {
+					std::string error;
+					ScriptGroups probe = mGroups;
+					return probe.Create(aName, &error) ? std::string() : error;
+				},
+				[this, target](const std::string &aName) {
+					std::string error;
+					if (!mGroups.Create(aName, &error))
+					{
+						Append("[ui] " + error);
+						return;
+					}
+					mGroups.Move(target.key, mGroups.Count() - 1);
+					RefreshList();
+					SaveSettings(nullptr);
+					Append("[ui] 已新建分组 " + aName + "，" + target.name + " 已移入");
+				});
+		}
+		break;
+	}
+}
+
+void DeckWindow::ShowGroupContextMenu(int aGroup)
+{
+	const bool ungrouped = aGroup == ScriptGroups::kUngrouped;
+	if (!ungrouped && (aGroup < 0 || aGroup >= mGroups.Count()))
+		return;
+	const bool folded = GroupFolded(aGroup);
+	const bool running = GroupRunningCount(aGroup) > 0;
+
+	mContextLabels.clear();
+	mContextItems.clear();
+	mContextLabels.reserve(8);
+	mContextItems.reserve(8);
+	auto add = [this](const std::string &aLabel, int aId) {
+		mContextLabels.push_back(aLabel);
+		Fl_Menu_Item item = { mContextLabels.back().c_str(), 0, nullptr, (void *)(intptr_t)aId, 0 };
+		mContextItems.push_back(item);
+	};
+	add(running ? "全部停止" : "全部运行", 1);
+	add(folded ? "展开" : "收起", 2);
+	if (!ungrouped)
+	{
+		add("重命名…", 3);
+		// 删除分组 only disbands: the scripts stay on disk and land in 未分组.
+		// Deleting files keeps its one entry - the script row's 删除….
+		add("删除分组", 4);
+	}
+	add("新建分组…", 5);
+	const Fl_Menu_Item end = { nullptr };
+	mContextItems.push_back(end);
+
+	const Fl_Menu_Item *picked = mContextItems.data()[0].popup(
+		Fl::event_x(), Fl::event_y(), nullptr, nullptr, mMenu);
+	if (!picked)
+		return;
+	const int id = (int)(intptr_t)picked->user_data();
+
+	switch (id)
+	{
+	case 1:
+		if (running)
+			StopGroup(aGroup);
+		else
+			RunGroup(aGroup);
+		break;
+	case 2:
+		ToggleGroup(aGroup);
+		break;
+	case 3:
+	{
+		const std::string current = GroupName(aGroup);
+		ShowNameDialog("重命名分组", current,
+			[this, aGroup](const std::string &aName) {
+				std::string error;
+				ScriptGroups probe = mGroups;
+				return probe.Rename(aGroup, aName, &error) ? std::string() : error;
+			},
+			[this, aGroup](const std::string &aName) {
+				std::string error;
+				if (!mGroups.Rename(aGroup, aName, &error))
+				{
+					Append("[ui] " + error);
+					return;
+				}
+				RefreshList();
+				SaveSettings(nullptr);
+				Append("[ui] 分组已重命名为 " + aName);
+			});
+		break;
+	}
+	case 4:
+	{
+		const std::string name = GroupName(aGroup);
+		mGroups.Remove(aGroup);
+		RefreshList();
+		SaveSettings(nullptr);
+		Append("[ui] 已删除分组 " + name + "（其中的脚本回到未分组，文件未动）");
+		break;
+	}
+	case 5:
+		NewGroup();
+		break;
+	default:
+		break;
+	}
+}
+
+void DeckWindow::ShowListEmptyMenu()
+{
+	mContextLabels.clear();
+	mContextItems.clear();
+	mContextLabels.reserve(4);
+	mContextItems.reserve(4);
+	auto add = [this](const std::string &aLabel, int aId) {
+		mContextLabels.push_back(aLabel);
+		Fl_Menu_Item item = { mContextLabels.back().c_str(), 0, nullptr, (void *)(intptr_t)aId, 0 };
+		mContextItems.push_back(item);
+	};
+	add("新建分组…", 1);
+	add("刷新列表", 2);
+	add("打开脚本文件夹", 3);
+	const Fl_Menu_Item end = { nullptr };
+	mContextItems.push_back(end);
+
+	const Fl_Menu_Item *picked = mContextItems.data()[0].popup(
+		Fl::event_x(), Fl::event_y(), nullptr, nullptr, mMenu);
+	if (!picked)
+		return;
+	switch ((int)(intptr_t)picked->user_data())
+	{
+	case 1:
+		NewGroup();
+		break;
+	case 2:
+		RefreshFromDisk();
+		break;
+	case 3:
+		OpenScriptsFolder();
 		break;
 	default:
 		break;
@@ -7377,9 +8071,9 @@ std::string DeckWindow::DisplayNameAt(int aIndex, int aReservePx)
 	// width is all we have. The 2 s beat re-measures as soon as it exists.
 	if (!shown())
 		return name;
-	// Column 2 is the name. 8px = the browser's own 3px inset + a right gap;
-	// aReservePx is the " *" that the editing row paints after the name.
-	const int avail = mColumns[2] - 8 - aReservePx;
+	// kColName is the name column (m230). 8px = the browser's own 3px inset +
+	// a right gap; aReservePx is the " *" that the editing row paints after it.
+	const int avail = mColumns[kColName] - 8 - aReservePx;
 	return EllipsizeName(name, avail);
 }
 
@@ -7430,21 +8124,24 @@ void DeckWindow::MeasureColumnNeeds()
 	// number is stable no matter which way the list is sorted). The slot is
 	// measured with the caption's own font, so a wider glyph or a larger
 	// header font widens the column automatically.
-	int header[7] = { 0, 0, 0, 0, 0, 0, 0 };
-	int need[7] = { 0, 0, 0, 0, 0, 0, 0 };
-	Fl_Box *caps[7] = {mCaptionStatus, mCaptionMenu, mCaptionName,
-		mCaptionCpu, mCaptionGpu, mCaptionMemory, mCaptionHotkey};
+	// m230: indexed by DeckColumn; the caption list below is in column order
+	// (the gutter has no caption and keeps a 0 need).
+	int header[kDeckColumnCount] = {};
+	int need[kDeckColumnCount] = {};
+	Fl_Box *caps[7] = {mCaptionName, mCaptionCpu, mCaptionGpu, mCaptionMemory,
+		mCaptionStatus, mCaptionMenu, mCaptionHotkey};
 	for (int i = 0; i < 7; ++i)
 	{
+		const int column = kColName + i;
 		if (!caps[i])
 			continue;
 		const int font = caps[i]->labelfont();
 		const int size = caps[i]->labelsize();
 		fl_font(font, size);
 		const char *text = caps[i]->label() ? caps[i]->label() : "";
-		header[i] = DeckHeaderBox::kInset + (int)std::ceil(fl_width(text))
+		header[column] = DeckHeaderBox::kInset + (int)std::ceil(fl_width(text))
 			+ DeckHeaderBox::SortSlot(font, size);
-		need[i] = header[i]; // start the preferred width at the floor
+		need[column] = header[column]; // start the preferred width at the floor
 	}
 	// m202 step 2: compare with the widest cell in each column - three metric
 	// readings (s9) and the hotkey binding (s10). Glyph columns carry icons,
@@ -7461,21 +8158,34 @@ void DeckWindow::MeasureColumnNeeds()
 			fl_font(FL_HELVETICA, SubTextSize());
 			const int px = DeckHeaderBox::kInset
 				+ (int)std::ceil(fl_width(text.c_str())) + 4;
-			if (px > need[3 + which])
-				need[3 + which] = px;
+			if (px > need[kColCpu + which])
+				need[kColCpu + which] = px;
 		}
 		fl_font(FL_HELVETICA, TextSize());
 		const std::string hk = HotkeyDisplayText(BindingOf(mScripts[(size_t)index]));
 		const int px = DeckHeaderBox::kInset
 			+ (int)std::ceil(fl_width(hk.c_str())) + 4;
-		if (px > need[6])
-			need[6] = px;
+		if (px > need[kColHotkey])
+			need[kColHotkey] = px;
 	}
+	// m227: a group header writes "名字  (运行中/总数)" into the NAME cell. The
+	// column must fit the widest header too, or the count is what gets clipped -
+	// the one number the header exists for.
+	for (int g = ScriptGroups::kUngrouped; g < mGroups.Count(); ++g)
+	{
+		fl_font(FL_HELVETICA, TextSize());
+		const std::string label = GroupHeaderLabel(g);
+		const int px = DeckHeaderBox::kInset
+			+ (int)std::ceil(fl_width(label.c_str())) + 4;
+		if (px > need[kColName])
+			need[kColName] = px;
+	}
+
 	// Glyph columns need no extra pad; the hotkey cell is a bordered combo
-	// with a 6px inset on each side, hence the larger one.
-	const int padding[7] = { 4, 4, 4, 4, 4, 4, 20 };
+	// with a 6px inset on each side, hence the larger one. Indexed by column.
+	const int padding[kDeckColumnCount] = { 0, 4, 4, 4, 4, 4, 4, 20 };
 	bool grew = false;
-	for (int i = 0; i < 7; ++i)
+	for (int i = 0; i < kDeckColumnCount; ++i)
 	{
 		const int headerWant = ((header[i] + padding[i] + 7) / 8) * 8;
 		const int want = ((need[i] + padding[i] + 7) / 8) * 8;

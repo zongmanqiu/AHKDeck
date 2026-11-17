@@ -420,6 +420,67 @@ static std::string ParentOfUtf8(const std::string &aPath)
 	return p == std::string::npos ? std::string() : aPath.substr(0, p);
 }
 
+// Any entry other than "." / ".." - used to decide whether a package actually
+// carries attachments before we rename its folder into Scripts.
+static bool DirHasEntries(const std::wstring &aDir)
+{
+	WIN32_FIND_DATAW fd;
+	HANDLE find = FindFirstFileW((aDir + L"\\*").c_str(), &fd);
+	if (find == INVALID_HANDLE_VALUE)
+		return false;
+	bool any = false;
+	do
+	{
+		if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0)
+			continue;
+		any = true;
+		break;
+	} while (FindNextFileW(find, &fd));
+	FindClose(find);
+	return any;
+}
+
+// m227: the one-time move off the 0.4.x package layout. Every script is
+// Scripts\<名>.ahk; Scripts\<名>\ is that script's own folder (attachments and
+// runtime output), never a script location. Runs on every scan because it is a
+// single directory enumeration and does nothing once migrated - and because
+// "did the user hand-copy an old install in?" has no other cheap answer.
+int MigrateLegacyScriptFolders(const std::wstring &aScriptsDir)
+{
+	if (aScriptsDir.empty())
+		return 0;
+	int moved = 0;
+	WIN32_FIND_DATAW dd;
+	HANDLE find = FindFirstFileW((aScriptsDir + L"\\*").c_str(), &dd);
+	if (find == INVALID_HANDLE_VALUE)
+		return 0;
+	do
+	{
+		if (!(dd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+			continue;
+		const std::wstring name = dd.cFileName;
+		if (name == L"." || name == L".." || name == L"temp")
+			continue;
+		const std::wstring dir = aScriptsDir + L"\\" + name;
+		const std::wstring legacy = dir + L"\\" + name + L".ahk";
+		if (GetFileAttributesW(legacy.c_str()) == INVALID_FILE_ATTRIBUTES)
+			continue;
+		const std::wstring flat = aScriptsDir + L"\\" + name + L".ahk";
+		// A flat script already owns the name: leave both alone. Guessing which
+		// copy is newer is exactly the kind of silent data loss to avoid.
+		if (GetFileAttributesW(flat.c_str()) != INVALID_FILE_ATTRIBUTES)
+			continue;
+		if (!MoveFileW(legacy.c_str(), flat.c_str()))
+			continue;
+		++moved;
+		// Empty folder -> gone; a folder still holding attachments or output
+		// stays, because that is now its documented job.
+		RemoveDirectoryW(dir.c_str());
+	} while (FindNextFileW(find, &dd));
+	FindClose(find);
+	return moved;
+}
+
 bool InstallPackageFromZip(const std::wstring &aZipPath,
 	const ScriptInstallRequest &aRequest, std::string &aError)
 {
@@ -429,41 +490,45 @@ bool InstallPackageFromZip(const std::wstring &aZipPath,
 		return false;
 	}
 
-	// Layout contract: targetPathUtf8 = <Scripts>\<名>\<名>.ahk
+	// Layout contract (m227): targetPathUtf8 = <Scripts>\<名>.ahk, the same flat
+	// name every other script uses. The package's remaining files belong in
+	// <Scripts>\<名>\ - which is also where the script writes its own output, so
+	// "attachments" and "runtime folder" are one folder, not two.
 	const std::string entryPath = aRequest.targetPathUtf8;
-	const std::string entryDir = ParentOfUtf8(entryPath);
-	const std::string scriptsDir = ParentOfUtf8(entryDir);
-	if (entryDir.empty() || scriptsDir.empty() || scriptsDir == entryDir)
+	const std::string scriptsDir = ParentOfUtf8(entryPath);
+	if (scriptsDir.empty())
 	{
-		aError = "包安装目标路径不是 <Scripts>\\<名>\\<名>.ahk 形态";
+		aError = "包安装目标路径不是 <Scripts>\\<名>.ahk 形态";
 		return false;
 	}
-	const std::string staging = scriptsDir + "\\" + aRequest.expectedName + ".part";
-	const std::string stagedEntry = staging + "\\" + aRequest.expectedName
+	const std::string stageRoot = scriptsDir + "\\" + aRequest.expectedName + ".part";
+	const std::string stagedEntry = stageRoot + "\\" + aRequest.expectedName
 		+ "\\" + aRequest.expectedName + ".ahk";
-	const std::wstring wStaging = Utf8ToWideLocal(staging);
-	const std::wstring wEntryDir = Utf8ToWideLocal(entryDir);
+	const std::wstring wStage = Utf8ToWideLocal(stageRoot);
 	const std::wstring wScriptsDir = Utf8ToWideLocal(scriptsDir);
 	const std::wstring wStagedEntry = Utf8ToWideLocal(stagedEntry);
-	if (wStaging.empty() || wEntryDir.empty() || wScriptsDir.empty())
+	const std::wstring wFlatEntry = Utf8ToWideLocal(entryPath);
+	const std::wstring wCompanion = Utf8ToWideLocal(
+		scriptsDir + "\\" + aRequest.expectedName);
+	if (wStage.empty() || wScriptsDir.empty() || wFlatEntry.empty() || wCompanion.empty())
 	{
 		aError = "包安装路径编码错误";
 		return false;
 	}
 
 	auto fail = [&](const std::string &msg) {
-		RemoveTreeWide(wStaging);
+		RemoveTreeWide(wStage);
 		aError = msg;
 		return false;
 	};
 
-	RemoveTreeWide(wStaging);
+	RemoveTreeWide(wStage);
 	CreateDirectoryW(wScriptsDir.c_str(), nullptr); // test sandboxes have no Scripts yet
-	if (!CreateDirectoryW(wStaging.c_str(), nullptr)
+	if (!CreateDirectoryW(wStage.c_str(), nullptr)
 		&& GetLastError() != ERROR_ALREADY_EXISTS)
 		return fail("无法创建包暂存目录");
 
-	if (!ExtractZipSafe(aZipPath, wStaging, aError))
+	if (!ExtractZipSafe(aZipPath, wStage, aError))
 		return fail(aError);
 
 	// The manifest is still the truth: the entry script inside the package
@@ -472,42 +537,58 @@ bool InstallPackageFromZip(const std::wstring &aZipPath,
 	if (!VerifyDownloadedScript(wStagedEntry, aRequest, verifyError))
 		return fail(verifyError);
 
-	// Backups never destroy: an existing `<名>/` moves into temp\deleted, and
-	// so does a legacy flat `<名>.ahk` - the two layouts must not coexist.
+	// Backups never destroy: whatever the name owns right now - the flat script
+	// and/or its companion folder - moves into temp\deleted first, and is put
+	// back if the swap fails below.
 	const std::wstring wDeleted = AppTempDir(kTempDeleted);
 	if (wDeleted.empty())
 		return fail("无法确定备份目录");
 	CreateDirectoryW(wDeleted.c_str(), nullptr);
-	std::string movedDir;
-	const bool hadDir = GetFileAttributesW(wEntryDir.c_str()) != INVALID_FILE_ATTRIBUTES;
-	if (hadDir && !MoveDirToBackup(wEntryDir, wDeleted, movedDir))
-		return fail("无法备份原脚本目录（它可能正在运行，或跨盘移动失败）");
-	const std::string flatLegacy = scriptsDir + "\\" + aRequest.expectedName + ".ahk";
-	const std::wstring wFlat = Utf8ToWideLocal(flatLegacy);
 	std::string movedFlat;
-	const bool hadFlat = GetFileAttributesW(wFlat.c_str()) != INVALID_FILE_ATTRIBUTES;
-	if (hadFlat && !MoveDirToBackup(wFlat, wDeleted, movedFlat))
+	const bool hadFlat = GetFileAttributesW(wFlatEntry.c_str()) != INVALID_FILE_ATTRIBUTES;
+	if (hadFlat && !MoveDirToBackup(wFlatEntry, wDeleted, movedFlat))
+		return fail("无法备份旧脚本文件（它可能正在运行，或跨盘移动失败）");
+	std::string movedDir;
+	const bool hadDir = GetFileAttributesW(wCompanion.c_str()) != INVALID_FILE_ATTRIBUTES;
+	if (hadDir && !MoveDirToBackup(wCompanion, wDeleted, movedDir))
 	{
-		if (hadDir)
-		{
-			// Put the old directory back before giving up.
-			MoveFileW((wDeleted + L"\\" + Utf8ToWideLocal(movedDir)).c_str(),
-				wEntryDir.c_str());
-		}
-		return fail("无法备份旧的单文件脚本");
+		if (hadFlat)
+			MoveFileW((wDeleted + L"\\" + Utf8ToWideLocal(movedFlat)).c_str(),
+				wFlatEntry.c_str());
+		return fail("无法备份脚本的附件目录");
 	}
+	auto restore = [&]() {
+		if (hadDir)
+			MoveFileW((wDeleted + L"\\" + Utf8ToWideLocal(movedDir)).c_str(),
+				wCompanion.c_str());
+		if (hadFlat)
+			MoveFileW((wDeleted + L"\\" + Utf8ToWideLocal(movedFlat)).c_str(),
+				wFlatEntry.c_str());
+	};
 
-	if (!MoveFileW((wStaging + L"\\" + Utf8ToWideLocal(aRequest.expectedName)).c_str(),
-			wEntryDir.c_str()))
+	// The entry goes out to the flat name; the rest of the package folder (if
+	// any) becomes Scripts\<名>\. A package with no attachments leaves no empty
+	// folder behind - the script creates it when it has something to write.
+	const std::wstring wStagedPkgDir = wStage + L"\\"
+		+ Utf8ToWideLocal(aRequest.expectedName);
+	if (!MoveFileW(wStagedEntry.c_str(), wFlatEntry.c_str()))
 	{
 		const DWORD rc = GetLastError();
-		if (hadDir)
-			MoveFileW((wDeleted + L"\\" + Utf8ToWideLocal(movedDir)).c_str(),
-				wEntryDir.c_str());
-		return fail("无法安装包目录（错误码 " + std::to_string(rc) + "）");
+		restore();
+		return fail("无法安装脚本文件（错误码 " + std::to_string(rc) + "）");
+	}
+	if (DirHasEntries(wStagedPkgDir))
+	{
+		if (!MoveFileW(wStagedPkgDir.c_str(), wCompanion.c_str()))
+		{
+			const DWORD rc = GetLastError();
+			DeleteFileW(wFlatEntry.c_str());
+			restore();
+			return fail("无法安装附件目录（错误码 " + std::to_string(rc) + "）");
+		}
 	}
 
-	RemoveTreeWide(wStaging);
+	RemoveTreeWide(wStage);
 	return true;
 }
 

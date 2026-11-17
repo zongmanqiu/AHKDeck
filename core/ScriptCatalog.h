@@ -195,13 +195,22 @@ bool RefreshCatalogCache(ManifestSource aSource, const std::string &aUrl,
 bool InstallScriptFile(const ScriptInstallRequest &aRequest, std::string &aError,
 	ScriptInstallProgress aProgress = nullptr);
 
+// m227: ONE layout. A script is `Scripts\<名>.ahk` and nothing else; the folder
+// `Scripts\<名>\` next to it belongs to that script (attachments and runtime
+// output), which is why the list must never look inside folders for scripts.
+// 0.4.x installed packages as `Scripts\<名>\<名>.ahk`; this moves that entry file
+// out to the flat name on the first scan and leaves the folder alone (dropped
+// only when empty). Idempotent, one directory enumeration, never overwrites a
+// flat script that already owns the name. Returns how many were moved.
+int MigrateLegacyScriptFolders(const std::wstring &aScriptsDir);
+
 // m211: the package install once the zip is already on disk (staged by
 // InstallScriptFile, or handed over directly by a test). aRequest.targetPathUtf8
-// must point at `<Scripts>\<名>\<名>.ahk`; the zip is validated, extracted to a
-// staging dir next to Scripts, the entry script header is verified against the
-// request, then the whole `<名>/` directory is swapped in. A pre-existing
-// directory moves to temp\deleted (never destroyed); a legacy flat
-// `Scripts\<名>.ahk` moves aside the same way so the two layouts cannot coexist.
+// names the entry as `Scripts\<名>.ahk` (m227: flat, like every script); the zip
+// must carry `<名>/<名>.ahk` plus any companions, the entry header is verified
+// against the request, then the entry lands flat and the remaining files land in
+// `Scripts\<名>\`. A pre-existing flat script and a pre-existing folder both move
+// to temp\deleted (never destroyed) and are restored if the swap fails.
 bool InstallPackageFromZip(const std::wstring &aZipPath,
 	const ScriptInstallRequest &aRequest, std::string &aError);
 
