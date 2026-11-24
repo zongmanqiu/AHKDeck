@@ -74,19 +74,21 @@ int ChoiceForDays(int aDays)
 class OptionsDialog : public DeckDialog
 {
 public:
-	OptionsDialog(int aCurrentDays, int aCurrentSource, bool aRounded, bool aShadow)
+	OptionsDialog(int aCurrentDays, int aCurrentSource, bool aRounded, bool aShadow,
+		bool aCurrentAdmin)
 		: DeckDialog(kWidth, Height(), "选项")
 	{
 		SetFrameOptions(aRounded, aShadow);
 		mInitial = ChoiceForDays(aCurrentDays);
 		mInitialSource = (aCurrentSource == 1) ? 1 : 0;
+		mInitialAdmin = aCurrentAdmin;
 	}
 
 	static int Height()
 	{
-		// caption + margin + two (heading + field row) groups + gap + buttons
+		// caption + margin + three (heading + field row) groups + gap + buttons
 		return DeckTitleBar::kHeight + kMargin
-			+ (kHeadingH + kRowH) * 2 + kGroupGap
+			+ (kHeadingH + kRowH) * 3 + kGroupGap * 2
 			+ kBtnH + kMargin;
 	}
 
@@ -153,6 +155,26 @@ public:
 		mDays->value(mInitial);
 
 		y += kRowH + kGroupGap;
+
+		// ③ 运行权限（m239）：勾选 = 下次启动以管理员运行。这是「意图」开关，不是当前
+		// 状态——Windows 进程无法运行时自提权，只能重启一次。标题栏的「(管理员权限)」反映
+		// 实际提权状态，与此勾选分开。
+		Fl_Box *adminHeading = new Fl_Box(FL_NO_BOX, kMargin, y,
+			kWidth - 2 * kMargin, kHeadingH, nullptr);
+		adminHeading->copy_label("运行权限");
+		adminHeading->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+		adminHeading->labelsize(TextSize());
+		adminHeading->labelcolor(colors.text1);
+		y += kHeadingH;
+
+		mAdmin = new DeckCheckButton(kMargin + kLabelW + kGap, y,
+			kChoiceW, kRowH, "管理员权限（下次启动生效）");
+		mAdmin->value(mInitialAdmin ? 1 : 0);
+		mAdmin->labelsize(TextSize());
+		mAdmin->color(colors.background1);
+		mAdmin->labelcolor(colors.text1);
+
+		y += kRowH + kGroupGap;
 		mOk = new HoverButton(0, 0, 0, kBtnH, "确定");
 		mOk->color(colors.background2);
 		mOk->labelcolor(colors.text1);
@@ -186,6 +208,7 @@ public:
 		const int index = mDays ? mDays->value() : mInitial;
 		out.days = kRetention[(index >= 0 && index < kRetentionCount) ? index : 2].days;
 		out.source = (mSource && mSource->value() == 1) ? 1 : 0;
+		out.adminLaunch = mAdmin && mAdmin->value() != 0;
 		return out;
 	}
 
@@ -217,8 +240,10 @@ private:
 
 	int mInitial = 2;
 	int mInitialSource = 0;
+	bool mInitialAdmin = false;
 	bool mAccepted = false;
 	SettingsChoice *mDays = nullptr;
+	DeckCheckButton *mAdmin = nullptr;
 	Fl_Choice *mSource = nullptr;
 	HoverButton *mOk = nullptr;
 	HoverButton *mCancel = nullptr;
@@ -227,9 +252,9 @@ private:
 } // namespace
 
 bool ShowOptionsDialog(int aCurrentDays, int aCurrentSource, bool aRounded,
-	bool aShadow, OptionsResult &aOut)
+	bool aShadow, bool aCurrentAdmin, OptionsResult &aOut)
 {
-	OptionsDialog dialog(aCurrentDays, aCurrentSource, aRounded, aShadow);
+	OptionsDialog dialog(aCurrentDays, aCurrentSource, aRounded, aShadow, aCurrentAdmin);
 	dialog.Build();
 	dialog.Run();
 	if (!dialog.Accepted())

@@ -12,7 +12,7 @@ if(CMAKE_GENERATOR MATCHES "Makefiles")
     set(CMAKE_DEPENDS_USE_COMPILER FALSE)
 endif()
 
-project(AHKDeck VERSION 0.5.0 LANGUAGES C CXX RC)
+project(AHKDeck VERSION 0.6.0 LANGUAGES C CXX RC)
 
 # Static CRT (/MT): the shipped exe must run with ZERO VC++ redistributable
 # dependencies ("单 exe 即装即用"). CMP0091 NEW lets CMAKE_MSVC_RUNTIME_LIBRARY
@@ -81,6 +81,7 @@ add_library(core STATIC
     core/ResourceStats.cpp
     core/Housekeeping.cpp
     core/ZipPackage.cpp
+    core/Elevation.cpp
 )
 # m212: ZipPackage validates the archive from its central directory with plain
 # C++ and extracts through the system Shell zip namespace (the Explorer code,

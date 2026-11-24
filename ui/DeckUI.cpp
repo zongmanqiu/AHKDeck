@@ -21,6 +21,7 @@
 #include "agent/Toolbox.h"
 #include "core/AppPaths.h"
 #include "core/ExeCompiler.h"
+#include "core/Elevation.h"
 #include "core/Housekeeping.h"
 #include "core/Hotkeys.h"
 #include "core/Json.h"
@@ -957,6 +958,8 @@ class DeckWindow : public Fl_Double_Window
 {
 public:
 	explicit DeckWindow(Engine &aEngine);
+	// m239: Run() 是自由函数，需要这个 public 入口读「管理员权限」意图（成员本身 private）。
+	bool AdminLaunchRequested() const { return mAdminLaunch; }
 	~DeckWindow() override;
 
 	void resize(int x, int y, int w, int h) override;
@@ -1688,6 +1691,7 @@ private:
 	bool mFrameInstalled = false;
 	bool mRoundedCorners = true;
 	bool mWindowShadow = true;
+	bool mAdminLaunch = false;
 	// m112: the script list is the deck's spine and is always shown; only the
 	// editor/console column can be folded away.
 	// m176: a fresh install starts folded. Double-click on a row runs/stops the
@@ -3749,7 +3753,8 @@ DeckWindow::DeckWindow(Engine &aEngine)
 	}
 
 	char title[64];
-	std::snprintf(title, sizeof(title), "AHKDeck");
+	// m239: 标题反映实际提权状态（不是勾选意图）——勾了但没重启的窗口不该谎报管理员。
+	std::snprintf(title, sizeof(title), IsElevated() ? "AHKDeck (管理员权限)" : "AHKDeck");
 	copy_label(title);
 
 	begin();
@@ -4132,6 +4137,7 @@ DeckWindow::DeckWindow(Engine &aEngine)
 			geometry.h = ui["h"].AsInt(0);
 			geometry.rounded = ui["rounded"].AsBool(true);
 			geometry.shadow = ui["shadow"].AsBool(true);
+			mAdminLaunch = ui["adminLaunch"].AsBool(false);
 			geometry.valid = geometry.w > 0 && geometry.h > 0;
 			// m053: the view toggle is part of the config too. The automation
 			// env var wins over the saved view. m112: the script list is always
@@ -5673,6 +5679,7 @@ bool DeckWindow::SaveSettings(std::string *aError)
 	ui.Set("h", Json((double)ClientHeight()));
 	ui.Set("rounded", Json(mRoundedCorners));
 	ui.Set("shadow", Json(mWindowShadow));
+	ui.Set("adminLaunch", Json(mAdminLaunch));
 	ui.Set("editor", Json(mShowEditor));
 	ui.Set("list_pct", Json((double)mListPct));
 	ui.Set("console_pct", Json((double)mConsolePct));
@@ -8503,13 +8510,15 @@ void DeckWindow::ShowOptions()
 	const int oldSource = OfficialDownloadSource();
 	OptionsResult chosen;
 	if (!ShowOptionsDialog(mHousekeepingDays, oldSource, mRoundedCorners,
-		mWindowShadow, chosen))
+		mWindowShadow, mAdminLaunch, chosen))
 		return;
 
 	const bool daysChanged = chosen.days != mHousekeepingDays;
 	const bool sourceChanged = chosen.source != oldSource;
+	const bool adminChanged = chosen.adminLaunch != mAdminLaunch;
 	mHousekeepingDays = chosen.days;
-	if (daysChanged || sourceChanged)
+	mAdminLaunch = chosen.adminLaunch;
+	if (daysChanged || sourceChanged || adminChanged)
 	{
 		std::string error;
 		if (daysChanged)
@@ -8532,6 +8541,9 @@ void DeckWindow::ShowOptions()
 	if (sourceChanged)
 		Append("[download] 官方下载源：" +
 			std::string(chosen.source == 1 ? "GitHub" : "Gitee"));
+	if (adminChanged)
+		Append(std::string("[settings] 管理员权限：") +
+			(mAdminLaunch ? "已设为下次启动生效（重启后标题会标注）" : "已设为普通权限（重启后生效）"));
 	// Run it now: a user who just picked 7 天 should not have to restart to see
 	// the folder shrink. The same pass reports how many files went.
 	RunHousekeeping();
@@ -9625,6 +9637,22 @@ int Run(HINSTANCE, bool aServeMcpStdio)
 
 	Engine &engine = Engine::Instance();
 	DeckWindow *window = new DeckWindow(engine);
+
+	// m239: 管理员权限是「下次启动生效」的意图。仅裸 GUI 启动（非 MCP/CLI）且已勾选
+	// 但尚未提权时，runas 自重启一次；新进程已提权就不再重启（防循环）。MCP 模式绝不
+	// 触发——提权会让非提权的 Qoder 连接器连不上 stdio，毁掉脚本开发闭环。
+	if (!aServeMcpStdio && window->AdminLaunchRequested() && !IsElevated())
+	{
+		wchar_t exePath[MAX_PATH] = {0};
+		if (GetModuleFileNameW(nullptr, exePath, MAX_PATH) > 0
+			&& reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"runas", exePath,
+				nullptr, nullptr, SW_SHOWNORMAL)) > 32)
+		{
+			delete window;
+			return 0;
+		}
+	}
+
 	window->show();
 	window->InstallFrame();
 

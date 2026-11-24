@@ -1,4 +1,4 @@
-# AHKDeck 官方脚本 UI 踩坑表（K1–K50）与取证方法学
+# AHKDeck 官方脚本 UI 踩坑表（K1–K51）与取证方法学
 
 > **定位**：从 `UI规范.md` 独立出来的「教训库」。每一条都是实机踩过、有证据、修掉了的，
 > **禁止重犯**。设计标准（令牌/版式/框线）看 [`UI规范.md`](UI规范.md)，组件用法看
@@ -13,7 +13,7 @@
 > 这两个称呼不再指向两种运行形态；各条的教训（z 序压不住、四条路全堵、重绘时机不受控）
 > 在当前形态下仍成立，组件手册已按宿主无关口径重写。
 
-## K1–K50 硬规矩与踩坑
+## K1–K51 硬规矩与踩坑
 
 | # | 现象 | 正解 |
 |---|---|---|
@@ -67,6 +67,7 @@
 | K48 | 用 `Gui.Move()` 设了 672×520，窗口却矮了一截、状态条被压扁 | `Gui.Move(x, y, w, h)` 的 `w/h` 是**外框**尺寸，`Gui.Show("w672 h520")` 才是**客户区**尺寸，两者差一圈标题栏与边框（实测客户区被压成 656×178）。正解：需要精确客户区就用 `Show` 设尺寸，或按 `AdjustWindowRectEx` 换算；窗口尺寸相关的断言一律量客户区 |
 | K49 | 列表滚动后**零星几行的文字只剩上半截**（勾选框一起缺） | 自定义绘制在 `CDDS_SUBITEM \| CDDS_ITEMPREPAINT` 阶段返回了 `CDRF_NEWFONT(2)`，可那里只 `NumPut` 改了 `clrText`、**从未在 hdc 里 SelectObject 换过字体**。返回 2 等于告诉控件「字体已换」，控件随后按它自己认定的字体重排该行，行内文字被行边界裁掉一截。**只改颜色就返回 `CDRF_DODEFAULT(0)`**；真要换字体，必须先在 hdc 里选好字体再返回 2 |
 | K50 | 同上症状，或滚动后行与行交界处留残影 / 半截字 | 竖向滚动走 `LVM_ENSUREVISIBLE` 时，控件靠位块拷贝搬旧像素、新露出的行由它自己补画，两者交界处就会留下半截。两道一起上：① `LVM_SETEXTENDEDLISTVIEWSTYLE(0x1036, 0x10000, 0x10000)` 开 `LVS_EX_DOUBLEBUFFER`；② 每次滚动动作末尾对列表 `InvalidateRect(hwnd, NULL, FALSE)` + `UpdateWindow()` 整块重画（`FALSE` = 不擦背景，才不会闪）。**第二参必须传 NULL**：传一个全 0 的 RECT 是「空区域」，什么也不作废，重画悄悄失效 |
+| K51 | 列表滚动时右缘/底部冒出原生灰条残影（`#808080`/`F0F0F0`），「藏 + 擦」补多少版都差一拍 | **原生滚动条的像素画在 ListView 非客户区（NC）**：`ShowScrollBar(FALSE)` 只摘样式位、不擦已画进 NC 的灰像素；`InvalidateRect(lv, NULL, FALSE)`/`UpdateWindow` 只作废**客户区**，永远碰不到 NC 那 17px；comctl32 每次重算滚动范围（`Move`/`Add`/`Delete`/`ModifyCol`/`LVM_ENSUREVISIBLE`/滚轮）都把 `WS_VSCROLL\|WS_HSCROLL` 置回并重画 NC 灰条——「出现后再藏再擦」是死结，永远慢一拍（软件卸载 1.0.11→1.0.21 十版补刀全失败，含 `SWP_FRAMECHANGED`、`CoverNative`、`trackBg` 底衬，方向都错）。**正解：给 ListView 挂 `WM_NCCALCSIZE` 子类，在 NC 空间计算到达时临时摘掉 `0x00300000` 样式位再走默认计算、算完恢复——原生条分不到 NC 空间、一个像素都画不出来**；滚动走 `SetScrollInfo`，与滚动条视觉是两套机制，`LVM_ENSUREVISIBLE`/滚轮/键盘照常。`SetWindowSubclass` 必须在第一次 Layout/填表之前挂，`OnGuiClose` 里 `RemoveWindowSubclass` 摘除（K21）；旧的 `HideNative/Repair` 可留作保险丝。**关键判据：自绘条画在 ListView 右侧外、原生条在内侧，两块不重叠，所以任何客户区里的底衬/色块/补擦都盖不到原生条——别在客户区找解，要到 NC 计算这一层动手**（这是 Win32「hide scrollbar but keep scrolling」的标准答案） |
 
 ---
 

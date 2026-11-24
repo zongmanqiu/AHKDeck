@@ -27,13 +27,15 @@ struct OptionsResult
 {
 	int days = 30;   // 临时文件保留时长, 0 meaning 永不
 	int source = 0;  // 官方下载源: 0 = Gitee, 1 = GitHub
+	bool adminLaunch = false; // m239: 下次启动以管理员运行（意图，非当前状态）
 };
 
 // Modal; returns when the window closes.
 //   aCurrentDays / aCurrentSource - the stored values.
+//   aCurrentAdmin - the stored 管理员权限 intent (shown as the checkbox state).
 //   aOut - the chosen values, written only when the call returns true.
 bool ShowOptionsDialog(int aCurrentDays, int aCurrentSource, bool aRounded,
-	bool aShadow, OptionsResult &aOut);
+	bool aShadow, bool aCurrentAdmin, OptionsResult &aOut);
 
 } // namespace ui
 } // namespace ahkdeck
