@@ -592,6 +592,11 @@ void ScriptDownloadDialog::SetStatus(const std::string &aText, bool aDanger)
 
 void ScriptDownloadDialog::LoadAll()
 {
+	// m240 second look: the pending "确认" row is a visible-list INDEX. Any
+	// rebuild of mView (refresh, sources changed) reshuffles it, and the old
+	// code let a stale index mark a DIFFERENT row as "确认" - the second click
+	// would then install that other script without another look.
+	mPendingConfirm = -1;
 	mView.clear();
 	int duplicates = 0;
 	int failed = 0;
@@ -686,11 +691,14 @@ void ScriptDownloadDialog::RebuildView()
 		if (!query.empty() && !MatchesFilter(row.entry, query))
 			continue;
 
-		// m211: package entries live at <Scripts>\<名>\<名>.ahk; the flat file
-		// is the single-file layout only.
-		const std::wstring localPath = Utf8ToWideLocal(row.entry.package.empty()
-			? ScriptsDirUtf8() + row.entry.name + ".ahk"
-			: ScriptsDirUtf8() + row.entry.name + "\\" + row.entry.name + ".ahk");
+		// m240 second look: m227 flattened the layout - a package's entry lands
+		// at Scripts\<名>.ahk exactly like a single-file script (only the
+		// attachments stay in Scripts\<名>\). This check still looked at the
+		// pre-m227 folder entry, so an installed package kept advertising
+		// "下载" instead of "已下载", inviting a pointless reinstall that
+		// moves the live copy to temp\deleted.
+		const std::wstring localPath = Utf8ToWideLocal(
+			ScriptsDirUtf8() + row.entry.name + ".ahk");
 		const bool exists = !localPath.empty()
 			&& GetFileAttributesW(localPath.c_str()) != INVALID_FILE_ATTRIBUTES;
 		const std::string localVersion = exists
@@ -774,7 +782,11 @@ void ScriptDownloadDialog::OnRowAction(int aIndex)
 	if (!view.clickable)
 		return;
 	const std::string url = DownloadUrlFor(view.entry, KindFor(view.sourceIndex));
-	if (url.empty())
+	const std::string pkgUrl = PackageUrlFor(view.entry, KindFor(view.sourceIndex));
+	// m240 second look: a subscribed manifest may publish ONLY a package URL
+	// (no raw text mirror). The old guard keyed on the text URL alone and
+	// turned such a row into a dead "下载" button.
+	if (url.empty() && pkgUrl.empty())
 		return;
 
 	const bool overwrite = view.state == ScriptInstallState::Upgradable;
@@ -821,7 +833,6 @@ void ScriptDownloadDialog::OnRowAction(int aIndex)
 	// changes where the download comes from and what else lands beside it
 	// (<Scripts>\<名>\ gets the attachments). The text URL is unused in package
 	// mode (InstallScriptFile branches on packageUrl).
-	const std::string &pkgUrl = PackageUrlFor(view.entry, KindFor(view.sourceIndex));
 	const std::string target = ScriptsDirUtf8() + name + ".ahk";
 	// m160: the manifest entry is the truth the download is verified against -
 	// name and version, nothing else (no size check: the user's rule for
@@ -983,6 +994,7 @@ void ScriptDownloadDialog::ApplyRefresh(const std::vector<std::string> &aTexts,
 	const std::vector<std::string> &aErrors)
 {
 	mBusy = false;
+	mPendingConfirm = -1; // m240 second look: the visible index just reshuffled
 	int ok = 0;
 	int failed = 0;
 	std::string firstError;

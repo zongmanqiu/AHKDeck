@@ -2293,7 +2293,12 @@ private:
 		// header that stops where the combo starts reads as a broken row.
 		const int rowRight = scrollbar.visible() ? scrollbar.x() : x() + w();
 		const int fullW = rowRight - X > W ? rowRight - X : W;
-		fl_color(DeckColors().background3);
+		// m241 second round (user call): tone tweaks alone cannot separate the
+		// bands - 240 vs 246 measured on the real shot was invisible. The
+		// header band is now the ONLY grey band; a group row is white with
+		// STRUCTURAL signals: a bold group name, a 1px hairline under the row
+		// and the fold caret. That is how light-theme file managers do it.
+		fl_color(DeckColors().background1);
 		fl_rectf(X, Y, fullW, H);
 
 		// m230: the caret now owns a column of its own - the 24px gutter at the
@@ -2337,7 +2342,10 @@ private:
 		fl_font(textfont(), SubTextSize());
 		const int countW = (int)fl_width(count.c_str());
 		const int nameRoom = avail - countW - 10 >= 48 ? avail - countW - 10 : avail;
-		fl_font(textfont(), textsize());
+		// m241 second round: the group name is BOLD - with a white band the
+		// weight is the strongest "this is a heading" signal the light theme
+		// has (same approach as Explorer's group headers).
+		fl_font(FL_HELVETICA_BOLD, textsize());
 		const std::string shown = ClipEllipsis(name, nameRoom);
 		// The name's width must be measured while the NAME font is selected:
 		// measuring it after switching to the s9 count font underestimated it
@@ -2372,6 +2380,18 @@ private:
 			fl_font(textfont(), SubTextSize());
 			fl_draw(text.c_str(), mx + DeckHeaderBox::kInset, my,
 				mw - DeckHeaderBox::kInset - 2, mh, FL_ALIGN_LEFT | FL_ALIGN_CLIP);
+		}
+
+		// m241 third round (user call): the separator belongs ABOVE the group
+		// row, not below - a heading belongs to the content under it, so the
+		// boundary line separates the PREVIOUS group's tail from this heading
+		// (same convention as VS Code's list sections). The first group row
+		// sits right under the grey header band and skips the line: the band
+		// itself is the separator.
+		if (aLine > 1)
+		{
+			fl_color(DeckColors().background2);
+			fl_rectf(X, Y, fullW, 1);
 		}
 	}
 
@@ -4583,9 +4603,10 @@ void DeckWindow::LayoutListPane(int x, int y, int w, int h)
 	// m033: header first, browser, search at the bottom of the pane. The search
 	// used to share the header row and covered the 名字 caption.
 
-	// Edge-to-edge: the header band, rows and search fill the frame interior;
-	// only the first row keeps a white 8px breathing room below the header.
-	const int topGap = 8;
+	// Edge-to-edge: the header band, rows and search fill the frame interior.
+	// m241 third round (user call): no gap below the header any more - the
+	// header is the only grey band and the first group row is white, so the
+	// colour step IS the separator and the old breathing room just cut it.
 	const int contentW = w - 2;
 	// The browser paints its vertical scrollbar over the last 10px of the
 	// content. Keep the table columns out of that strip even when the bar is
@@ -4686,8 +4707,10 @@ void DeckWindow::LayoutListPane(int x, int y, int w, int h)
 	mCaptionMenu->resize(capX[kColMenu], headerY + 1, mColumns[kColMenu], headerH);
 	mCaptionHotkey->resize(capX[kColHotkey], headerY + 1, mColumns[kColHotkey], headerH);
 
+	// m241 third round: the browser starts right under the header band - no
+	// gap any more, the grey-to-white colour step is the separator.
 	const int listY = headerY + 1 + headerH;
-	const int browserY = listY + topGap;
+	const int browserY = listY;
 	const int searchY = y + h - rowH;
 	const int listH = (searchY - 1) - browserY;
 	mList->resize(x + 1, browserY, contentW, listH > 0 ? listH : 0);
@@ -5176,6 +5199,12 @@ void DeckWindow::ScanScripts()
 	do
 	{
 		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+			continue;
+		// m240/B2: AHKDeck-preview-<pid>.ahk is run_editor's own scratch copy,
+		// kept in Scripts\ only so A_ScriptDir/#Include resolve against the
+		// real script's directory. It is not a script and must never be
+		// listed, grouped, run or deleted from the deck.
+		if (_wcsnicmp(fd.cFileName, L"AHKDeck-preview", 15) == 0)
 			continue;
 		AddScript(scriptsDir + L"\\" + fd.cFileName);
 	} while (FindNextFileW(find, &fd));
@@ -6769,6 +6798,16 @@ void DeckWindow::DeleteSelected()
 	{
 		if (!mEngine.StopSession(row.session))
 			Append("[ui] " + row.name + " 已经结束或无法停止");
+		else
+		{
+			// m240/C6: a bounded beat for the child to actually exit - the
+			// next steps move the script file and its companion folder out
+			// from under it, and an OnExit hook writing into that folder
+			// mid-move would scatter files between the live and the deleted
+			// locations. Same bounded-wait shape Toolbox's StopCopiesOf uses.
+			DWORD ignored = 0;
+			mEngine.WaitSession(row.session, 1000, &ignored);
+		}
 		InvalidateSessions();
 	}
 
@@ -8755,13 +8794,17 @@ void DeckWindow::ApplyWidgetTheme()
 
 	// m086: the switches are drawn by DeckCheckButton, exactly like the menu
 	// bar's check mark. All they need from the theme is the text colour and
-	// the font size.
+	// the font size. m241: they are window children whose parent's colour is
+	// background1, but they sit over the background3 find band - the backdrop
+	// must name the BAND's colour or the ghost fix wipes a wrong-coloured
+	// rectangle under every switch.
 	for (DeckCheckButton *check : {mMatchCase, mWrap, mWholeWord})
 	{
 		if (!check)
 			continue;
 		check->labelcolor(colors.text1);
 		check->labelsize(TextSize());
+		check->setBackdrop(colors.background3);
 	}
 
 	// m086: the band the find bar sits on uses the script list's header
@@ -9644,9 +9687,14 @@ int Run(HINSTANCE, bool aServeMcpStdio)
 	if (!aServeMcpStdio && window->AdminLaunchRequested() && !IsElevated())
 	{
 		wchar_t exePath[MAX_PATH] = {0};
+		// m240/B4: the relaunch carries --elevated-relaunch so the child waits
+		// for this process to release the single-instance mutex instead of
+		// racing it into the "wake the existing deck" branch, where no window
+		// exists yet (the wake would fail and both processes would end up
+		// windowless).
 		if (GetModuleFileNameW(nullptr, exePath, MAX_PATH) > 0
 			&& reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"runas", exePath,
-				nullptr, nullptr, SW_SHOWNORMAL)) > 32)
+				L"--elevated-relaunch", nullptr, SW_SHOWNORMAL)) > 32)
 		{
 			delete window;
 			return 0;

@@ -406,6 +406,18 @@ bool RemoveTreeWide(const std::wstring &aDir)
 			const std::wstring full = aDir + L"\\" + name;
 			if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 			{
+				if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+				{
+					// m240/A2: a junction/symlink directory is only ever the
+					// link itself here - RemoveDirectoryW deletes the link and
+					// never touches the target. Recursing into it would wipe
+					// whatever the link points at, which is exactly what
+					// core/Housekeeping refuses to do ("never follow
+					// junctions"). Same rule, destructive side.
+					if (!RemoveDirectoryW(full.c_str()))
+						ok = false;
+					continue;
+				}
 				if (!RemoveTreeWide(full))
 					ok = false;
 			}
@@ -436,6 +448,8 @@ static bool CopyTreeWide(const std::wstring &aFrom, const std::wstring &aTo)
 			continue;
 		const std::wstring src = aFrom + L"\\" + name;
 		const std::wstring dst = aTo + L"\\" + name;
+		if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+			continue; // m240/A2: never follow a junction in either direction - the backup holds real files only
 		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 		{
 			if (!CopyTreeWide(src, dst))
@@ -491,18 +505,42 @@ bool MoveDirToBackup(const std::wstring &aDir, const std::wstring &aTargetDir,
 
 		// %TEMP% may sit on another volume than the install directory (test
 		// sandboxes do; some user setups too), and MoveFile reports that -
-		// or plain access denied - without moving anything. Fall back to
-		// copy + delete unconditionally: the guarantee is "content survives".
+		// or plain access denied - without moving anything. The fallback is
+		// copy + delete, but delete is the destructive half: m240/A1 - a
+		// directory held open (script CWD, a viewer) makes RemoveTreeWide
+		// PARTIAL: it wipes what it can, fails on the lock, and the caller
+		// then treats the move as failed while the source is half gone.
+		// Guard it in two steps:
+		//   1. rename probe - a locked directory cannot be renamed either,
+		//      so probe failure means the delete below would shred the
+		//      source; fail safely instead (source untouched, no copy made).
+		//   2. once the copy is in the backup dir, a partial delete never
+		//      destroys the copy: report success with the leaf so the caller
+		//      records where the content lives, leaving the leftover shell
+		//      behind for hand recovery.
 		{
-			const bool copied = CopyTreeWide(aDir, target);
-			const bool removed = copied ? RemoveTreeWide(aDir) : false;
-			if (copied && removed)
+			const std::wstring probe = aDir + L".~bakprobe";
+			if (!MoveFileW(aDir.c_str(), probe.c_str()))
+				return false; // locked: deleting now would shred the source
+			if (!MoveFileW(probe.c_str(), aDir.c_str()))
 			{
-				aOutLeafUtf8 = candidate;
-				return true;
+				// m240 second look: the probe rename worked but the restore
+				// did not (a handle arrived in the window). The content now
+				// lives in the probe directory - finish the move by renaming
+				// IT into the backup slot instead of failing with data
+				// stranded at an unrecorded name.
+				if (MoveFileW(probe.c_str(), target.c_str()))
+				{
+					aOutLeafUtf8 = candidate;
+					return true;
+				}
+				return false; // content survives in <dir>.~bakprobe, recoverable
 			}
-			RemoveTreeWide(target); // half a copy is worse than no copy
-			return false;
+			if (!CopyTreeWide(aDir, target))
+				return false; // copy failed: source intact, safe failure
+			aOutLeafUtf8 = candidate;
+			(void)RemoveTreeWide(aDir); // best effort; failure keeps the copy
+			return true;
 		}
 	}
 	return false;

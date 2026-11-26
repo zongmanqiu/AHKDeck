@@ -25,7 +25,9 @@
 # everything from scratch.
 
 # Official AutoHotkey v2.0.31 - the ONE shipped kernel (m192 P4).
-# Source tarball patched by patches\AutoHotkey-v2.0.31 (five env-gated hooks, incl. m194 AHKDECK_HOST_EXE)
+# Source tarball patched by patches\AutoHotkey-v2.0.31 (five hooks, four of
+# them env-gated, incl. m194 AHKDECK_HOST_EXE; ahkversion.h is a compile-time
+# fallback, not env-gated)
 # and built by build_kernel.bat: Release|x64 ->
 # .temp\kernel_official\AutoHotkey64.exe. The engine spawns it per session and
 # ExeCompiler bundles scripts into a copy of it.

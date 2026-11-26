@@ -1,8 +1,8 @@
 {
-  "version": "0.6.0",
-  "published": "2026-11-25",
-  "notes": "0.6.0：新增「管理员权限」。设置/选项… 里勾选「管理员权限（下次启动生效）」，下次启动会自动请求 UAC 提权（Windows 进程无法在运行时自我提权，所以是下次启动生效）。标题栏按**实际**提权状态显示「(管理员权限)」——读的是进程 token，不是勾选标志，所以不会谎报；无论提权来自这个设置、右键「以管理员身份运行」还是快捷方式属性，都如实反映当前是不是管理员。提权只作用于双击 GUI 启动，命令行 / MCP 路径一律不提权，不影响 AI 脚本开发链路。另一批修复：所有带列表的脚本（软件卸载、打开方式清理、右键菜单整理、文件时间修改、文件解锁、硬件信息）根治了滚动条原生残影——改用 WM_NCCALCSIZE 子类让非客户区归零，原生滚动条物理上画不出来；打开方式清理默认按扩展名排序并加上列头排序箭头。",
-  "notes_en": "0.6.0: New 'Administrator' option. In Settings/Options, check 'Administrator (applies on next launch)' and the next start requests UAC elevation (a Windows process cannot elevate itself at runtime, so it takes effect on the next launch). The title bar shows '(Administrator)' based on the ACTUAL process token, not the checkbox, so it never misreports - whether elevation came from this setting, right-click 'Run as administrator', or shortcut properties, it reflects the real state. Elevation applies only to double-click GUI launches; command-line / MCP paths never elevate, so AI script development is unaffected. Also a batch fix: every list-based script (Software Uninstall, Open-With Cleaner, Context-Menu Organizer, File Time Changer, File Unlocker, Hardware Info) now eliminates native scrollbar ghosting by subclassing WM_NCCALCSIZE to zero the non-client area, so the native bar physically cannot be drawn; Open-With Cleaner defaults to sorting by extension with a column-header sort arrow.",
-  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.6.0/AHKDeck_0.6.0.zip",
-  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.6.0/AHKDeck_0.6.0.zip"
+  "version": "0.6.1",
+  "published": "2026-11-27",
+  "notes": "0.6.1：一批稳定性修复。包安装的备份逻辑不再可能在目录被占用时丢文件；托盘菜单快照损坏不再冻结界面；「编译为 EXE」失败时旧产物不再消失；脚本下载窗的包模式脚本装完后正确显示「已下载」；多实例的 MCP 校验/预览不再互相串台；提权重启更稳。脚本列表换新视觉：列头浅灰是唯一的灰色横带，分组头白底、组名加粗，组界线挂在每个分组头上方，列头与首个分组之间的间隙取消；顺带根治了选项里「管理员权限」勾选框悬停时文字重影。",
+  "notes_en": "0.6.1: A batch of stability fixes. Package-install backup no longer risks losing files when a directory is locked; a damaged tray-menu snapshot no longer freezes the UI; a failed 'compile to EXE' no longer leaves the destination empty; the script downloader now shows 'installed' for package-mode scripts right after install; concurrent MCP instances no longer cross-validate or cross-run each other's editor content; the elevated relaunch is race-free. The script list gets a new look: the column header is the only grey band, group headers are white with bold names, a group boundary line sits above each group header, and the old gap under the header is gone. Also fixes the ghosting text on the 'Administrator' checkbox hover in Options.",
+  "url_gitee": "https://gitee.com/qiuzongman/AHKDeck/releases/download/0.6.1/AHKDeck_0.6.1.zip",
+  "url_github": "https://github.com/zongmanqiu/AHKDeck/releases/download/0.6.1/AHKDeck_0.6.1.zip"
 }

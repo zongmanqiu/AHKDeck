@@ -61,8 +61,35 @@ public:
 	// The gap between the box and the label (the menu uses 3 + 3).
 	static constexpr int kLabelGap = 6;
 
+	// m241: an FL_NO_BOX widget paints the background itself, but the PARENT's
+	// box+colour is only right when the parent really owns the pixels behind
+	// this control. The find-bar switches sit over a background3 band while
+	// their actual parent is the window (background1) - a backdrop set here
+	// wins over draw_background().
+	void setBackdrop(Fl_Color aColour) { mBackdrop = aColour; }
+
 	void draw() override
 	{
+		// m241: FL_NO_BOX leaves the background to the parent, but Fl_Group
+		// paints its own box only when the damage is NOT child-only
+		// (Fl_Group::draw(): `if (damage() & ~FL_DAMAGE_CHILD)`). A plain
+		// redraw() on hover or tick used to repaint the label over the old
+		// pixels - the text ghosted. Wipe the backdrop first, exactly the
+		// duty Fl_Button assumes away for FL_NO_BOX widgets elsewhere (its
+		// FL_FOCUS branch damages the PARENT window).
+		if (mBackdrop)
+		{
+			fl_color(mBackdrop);
+			fl_rectf(x(), y(), w(), h());
+		}
+		else if (parent())
+		{
+			// FLTK 1.4 has no Fl_Widget::draw_background(); what a parent
+			// would paint here IS its own colour (every container we sit in
+			// is a flat solid box).
+			fl_color(parent()->color());
+			fl_rectf(x(), y(), w(), h());
+		}
 		const int d = (h() - FL_NORMAL_SIZE + 1) / 2;
 		const int size = h() - 2 * d;
 		const int bx = x() + 2;
@@ -80,12 +107,13 @@ public:
 		draw_label(x() + size + kLabelGap, y(), w() - size - kLabelGap, h());
 	}
 
-	int handle(int event) override
-	{
-		if (event == FL_ENTER || event == FL_LEAVE)
-			redraw();
-		return Fl_Button::handle(event);
-	}
+	// m241: no hover repaint. The draw() above paints no hover state, so
+	// redrawing on FL_ENTER/FL_LEAVE had no visual purpose - and with
+	// FL_NO_BOX it was the ghost-text trigger. Fl_Button's own handler also
+	// leaves ENTER/LEAVE alone; selection repaints come from the normal
+	// FL_PUSH path.
+
+	Fl_Color mBackdrop = 0;
 };
 
 // Flat button with the deck hover/pressed fill (no 3D bevel).

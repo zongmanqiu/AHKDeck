@@ -545,12 +545,26 @@ struct MenuParser
 				++p;
 				return;
 			}
+			// m240/A3: the snapshot file is trusted but not indestructible - a
+			// child killed mid-write or a full disk can leave garbage inside
+			// the array. Every element step must move the cursor; on a byte
+			// that is neither '{' nor a consumable value ReadItem stalls
+			// without advancing, and the old loop would spin on it forever -
+			// on the UI thread, inside TrayMenu. No progress = stop parsing.
+			const char *before = p;
 			MenuItemData item;
 			if (ReadItem(item))
 				aOut.push_back(std::move(item));
 			SkipWs();
 			if (p < end && *p == ',')
+			{
 				++p;
+				continue;
+			}
+			if (p <= before)
+				return; // stalled on a damaged byte: keep what parsed so far
+			if (p >= end)
+				return;
 		}
 	}
 
@@ -670,7 +684,12 @@ bool Engine::Load(std::string &aError)
 		return true;
 
 	wchar_t buf[MAX_PATH] = {0};
-	if (GetEnvironmentVariableW(L"AHKDECK_KERNEL", buf, MAX_PATH) > 0)
+	// m240/C4: n == MAX_PATH means the buffer was too small and buf is NOT
+	// null-terminated - constructing a wstring from it would read past the
+	// array. Same guard Settings.cpp / Hotkeys.cpp use for their overrides;
+	// a too-long override falls back to the exe-relative default below.
+	const DWORD nKernel = GetEnvironmentVariableW(L"AHKDECK_KERNEL", buf, MAX_PATH);
+	if (nKernel > 0 && nKernel < MAX_PATH)
 	{
 		mKernelPath = buf;
 	}
@@ -1012,10 +1031,15 @@ void Engine::WriteLog(const ErrorRecord &aRecord)
 	{
 		if (mUnattributedLog.empty())
 		{
-			mUnattributedDisplay = "logs\\_unattributed-" + TimestampFileName() + ".jsonl";
+			// m240/C3: ONE timestamp for both names - the console label and
+			// the on-disk file used to call TimestampFileName() separately,
+			// and a clock crossing a second between the two calls shipped a
+			// display name that pointed at a file that was never written.
+			const std::string stamp = TimestampFileName();
+			mUnattributedDisplay = "logs\\_unattributed-" + stamp + ".jsonl";
 			mUnattributedLog = mLogRoot.empty()
 				? WideOf(mUnattributedDisplay)
-				: mLogRoot + L"\\" + WideOf("_unattributed-" + TimestampFileName() + ".jsonl");
+				: mLogRoot + L"\\" + WideOf("_unattributed-" + stamp + ".jsonl");
 		}
 		path = mUnattributedLog;
 	}
@@ -1326,7 +1350,20 @@ int Engine::ValidateFile(const std::wstring &aScriptPath, std::string &aError,
 	}
 	CloseHandle(stdoutRead);
 
-	WaitForSingleObject(pi.hProcess, 15000);
+	// m240/B3: a wedged validator must neither leak the child nor hand
+	// STILL_ACTIVE (259) back as if it were a verdict - the same contract
+	// ExeCompiler's ValidateInChild already honours (terminate, wait, report).
+	const DWORD waited = WaitForSingleObject(pi.hProcess, 15000);
+	if (waited != WAIT_OBJECT_0)
+	{
+		TerminateProcess(pi.hProcess, 1);
+		WaitForSingleObject(pi.hProcess, 5000);
+		CloseHandle(pi.hProcess);
+		CloseHandle(pi.hThread);
+		DeleteFileW(rawPath.c_str());
+		aError = "the interpreter did not finish within 15 s";
+		return 1;
+	}
 	DWORD rc = 2;
 	GetExitCodeProcess(pi.hProcess, &rc);
 	CloseHandle(pi.hProcess);

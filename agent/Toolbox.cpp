@@ -15,6 +15,7 @@
 #include <cstring>
 #include <cwctype>
 #include <utility>
+#include <wchar.h> // m240/B2: _wcsnicmp for the preview-prefix filter
 
 namespace ahkdeck
 {
@@ -252,9 +253,18 @@ EditorRunPath ResolveEditorRunPath(const std::wstring &aRealPath,
 			return {aRealPath, "real"};
 		const size_t slash = aRealPath.find_last_of(L"\\/");
 		if (slash != std::wstring::npos)
-			return {aRealPath.substr(0, slash) + L"\\AHKDeck-preview.ahk", "sibling"};
+		{
+			// m240/B1+B2: pid in the leaf. Two --mcp-stdio instances coexist
+			// by design and share one Scripts\ directory; without the pid both
+			// would write (and run) the same preview file. The fixed leaf was
+			// also reachable by a user script of the same name.
+			return {aRealPath.substr(0, slash) + L"\\AHKDeck-preview-"
+				+ std::to_wstring(GetCurrentProcessId()) + L".ahk", "sibling"};
+		}
 	}
-	return {aTempDir + L"\\ai-editor.ahk", "temp"};
+	// m240/B1: same uniqueness for the no-editor temp copy.
+	return {aTempDir + L"\\ai-editor-"
+		+ std::to_wstring(GetCurrentProcessId()) + L".ahk", "temp"};
 }
 
 std::string Tail(const std::string &aText, size_t aLimit)
@@ -788,6 +798,10 @@ void Toolbox::RefreshScripts()
 		do
 		{
 			if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+				continue;
+			// m240/B2: run_editor's preview scratch lives next to the real
+			// script by design; the MCP id table must not list it either.
+			if (_wcsnicmp(data.cFileName, L"AHKDeck-preview", 15) == 0)
 				continue;
 			found.push_back({std::string(), root + L"\\" + data.cFileName, Utf8Of(data.cFileName)});
 		} while (FindNextFileW(find, &data));
@@ -1526,7 +1540,21 @@ std::string Toolbox::ToolValidateEditor()
 		return ErrorResult("编辑区超过 1 MB，拒绝校验").Dump();
 
 	const std::wstring dir = AppTempDir(kTempWork);
-	const std::wstring path = dir + L"\\validate-editor.ahk";
+	// m240/B1: the input script must be unique per deck process - two
+	// --mcp-stdio instances coexist by design (agent/README), and both writing
+	// the same validate-editor.ahk made A validate B's editor content. The
+	// report file already carried the pid; the input did not.
+	const std::wstring path = dir + L"\\validate-editor-"
+		+ std::to_wstring(GetCurrentProcessId()) + L".ahk";
+	struct TempScriptGuard
+	{
+		std::wstring path;
+		~TempScriptGuard()
+		{
+			if (!path.empty())
+				DeleteFileW(path.c_str());
+		}
+	} guard{ path };
 	std::size_t written = 0;
 	std::string error;
 	if (!WriteTextDocument(path, text, TextEncoding::Utf8NoBom, true, &written, error))
@@ -1826,6 +1854,15 @@ std::string Toolbox::ToolRunEditor(const Json &aArgs)
 			}
 		}
 	}
+
+	// m240/B2: a preview copy is scratch, not a script - it lives in Scripts\
+	// only so A_ScriptDir/#Include resolve like the user's real file, and
+	// leaving it behind made every scan list a ghost "AHKDeck-preview"
+	// script. Once the run finished nothing needs the file; a resident
+	// session keeps it (the script is still executing from that path, and
+	// the next run of the same buffer overwrites it anyway).
+	if (finished && target.mode != std::string("real"))
+		DeleteFileW(path.c_str());
 
 	Json result = OkResult();
 	result.Set("session", Json((double)sessionId));

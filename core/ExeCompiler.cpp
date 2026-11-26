@@ -650,7 +650,14 @@ std::vector<BYTE> BuildVersionBlob(const VersionFields &aFields)
 	const size_t varInfo = OpenBlock(out, 0, 1, L"VarFileInfo");
 	{
 		const size_t var = OpenBlock(out, sizeof(DWORD), 0, L"Translation");
-		const DWORD translation = (static_cast<DWORD>(kVersionLang) << 16) | 0x04B0;
+		// m240/A5: VS_VERSIONINFO's Translation value is an array of DWORDs
+		// laid out in memory as wLang FIRST, wCodePage SECOND. The old
+		// (lang << 16) | codepage put wLang in the HIGH half, so VerQueryValue
+		// reported lang=0x04B0/codepage=0x0409 and no reader could assemble
+		// the StringFileInfo key "040904B0" above. Correct DWORD:
+		// (codepage << 16) | lang = 0x04B00409 - bytes 09 04 B0 04.
+		const DWORD translation = (static_cast<DWORD>(0x04B0) << 16)
+			| static_cast<DWORD>(kVersionLang);
 		const size_t at = out.size();
 		out.resize(at + sizeof(translation));
 		memcpy(out.data() + at, &translation, sizeof(translation));
@@ -896,6 +903,20 @@ ExeCompileOutcome CompileScriptToExe(const std::wstring &aExeDir,
 		outcome.backedUp = true;
 	}
 
+	// m240/A4: from here on the old artifact exists only as ".old" - every
+	// failure below (resource write, save, move) must put it back, or the
+	// destination is left empty and the contract documented in ExeCompiler.h
+	// ("a recompile can never silently destroy an artifact the user kept")
+	// breaks exactly the way the pre-validation rename used to.
+	auto restoreOld = [&outcome, &aOutPath]()
+	{
+		if (!outcome.backedUp)
+			return;
+		const std::wstring backup = aOutPath + L".old";
+		if (MoveFileW(backup.c_str(), aOutPath.c_str()))
+			outcome.backedUp = false; // restored: no .old exists any more
+	};
+
 	// Defaults come from the script, never from a question the user did not ask.
 	const std::wstring scriptName = LeafOf(WithoutExtension(aScriptPath));
 	VersionFields version;
@@ -908,7 +929,10 @@ ExeCompileOutcome CompileScriptToExe(const std::wstring &aExeDir,
 	version.originalFilename = LeafOf(aOutPath);
 
 	if (!BundleScript(base, aOutPath, document.utf8, aOptions.iconPath, version, outcome.error))
+	{
+		restoreOld();
 		return outcome;
+	}
 
 	outcome.rc = 0;
 	outcome.output = "已写入脚本资源：" + std::to_string(document.utf8.size()) + " 字节"
@@ -917,7 +941,10 @@ ExeCompileOutcome CompileScriptToExe(const std::wstring &aExeDir,
 		outcome.output += "，图标 " + Narrow(LeafOf(aOptions.iconPath));
 	outcome.produced = FileExists(aOutPath);
 	if (!outcome.produced)
+	{
+		restoreOld();
 		outcome.error = "打包完成，但目标文件不存在";
+	}
 	return outcome;
 }
 

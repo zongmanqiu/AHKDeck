@@ -31,4 +31,11 @@ bool ResolveAiScriptPath(const AiScriptPolicy &aPolicy, const std::wstring &aReq
 // True when aPath (canonical) is one of the policy's exact files or inside a root.
 bool IsInsideAiPolicy(const AiScriptPolicy &aPolicy, const std::wstring &aCanonical);
 
+// m240/B5: the reserved Win32 device names (CON, PRN, AUX, NUL, COM1-9,
+// LPT1-9). ONE table for every leaf-name validator in the deck, so the script
+// tools and the catalog installer cannot disagree about what may land on disk.
+// aStem is UTF-8/ASCII; the names are pure ASCII, and a stem carrying
+// non-ASCII bytes never matches.
+bool IsReservedDeviceName(const std::string &aStem);
+
 } // namespace ahkdeck

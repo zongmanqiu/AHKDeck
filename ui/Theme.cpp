@@ -129,6 +129,10 @@ void ApplyDeckTheme()
 	g_popupCheckColor = kLight.highlight2;
 
 	Fl::set_font(FL_HELVETICA, "Microsoft YaHei UI");
+	// m241: the BOLD slot must map to the same CJK face, or a bold group
+	// header falls back to Arial and renders CJK through a different engine.
+	// Windows maps this to the YaHei UI face at FW_BOLD.
+	Fl::set_font(FL_HELVETICA_BOLD, "Microsoft YaHei UI");
 	Fl::set_font(FL_COURIER, "Consolas");
 	Fl::scrollbar_size(10);
 

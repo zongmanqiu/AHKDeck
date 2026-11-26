@@ -571,9 +571,15 @@ void UpdateDialog::StartDownload()
 				}, job);
 			};
 
-			if (!DownloadFile(url, zipPath, progress))
+			// m240 second look: DownloadFile has carried the real reason since
+			// 0.4.3 (HTTP status, truncation, write failure); the script
+			// installer adopted it, the update dialog never did.
+			std::string downloadError;
+			if (!DownloadFile(url, zipPath, progress, &downloadError))
 			{
-				fail("下载失败（网络中断或安装目录不可写）");
+				fail(downloadError.empty()
+					? "下载失败（网络中断或安装目录不可写）"
+					: ("下载失败：" + downloadError));
 				return;
 			}
 			if (!WriteUpdateBat(exeDir, zipPath, batPath))

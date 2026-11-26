@@ -5,7 +5,7 @@ sha256 `7ed1c04d26b60ea2b4c645768ec9d60d6831d34d53db3d926e451165bd3f467f`）源�
 上游是官方 AutoHotkey（不再是 AHK_H 分叉）；升级 = 换 tag + 重放本目录补丁，
 `guard_patch.ps1` 会校验目标文件为原始版本或当前补丁版本。
 
-所有补丁由**环境变量门控**：未设置对应变量时行为与上游逐字节一致（宿主不部署时内核就是原版解释器）。
+五处补丁中**四处由环境变量门控**（`AHKDECK_ERROR_FILE` / `AHKDECK_NO_TRAY` / `AHKDECK_MENU_FILE` / `AHKDECK_HOST_EXE`）：未设置对应变量时行为与上游逐字节一致（宿主不部署时内核就是原版解释器）。唯一的例外是 `ahkversion.h` 的版本回落值——它是编译期 `#ifndef RAW_AHK_VERSION` 兜底，不依赖环境变量（与 THIRD-PARTY-NOTICES.md 的口径一致，m240/C2 对齐）。
 这也是「编译为 EXE」产物等价性的基础——同一个二进制，双击就是原版 AHK。
 
 | 归档实现 | 内容 |

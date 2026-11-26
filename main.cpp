@@ -46,6 +46,7 @@
 
 #include "core/AppPaths.h"
 #include "core/ResourceStats.h"
+#include "core/TextFile.h"
 #include "core/Version.h"
 #include "core/Json.h"
 #include "engine/DeckEngine.h"
@@ -616,12 +617,12 @@ bool ReadTextFileWide(const std::wstring &aPath, std::string &aOut)
 
 bool WriteTextFileWide(const std::wstring &aPath, const std::string &aText)
 {
-	FILE *file = nullptr;
-	if (_wfopen_s(&file, aPath.c_str(), L"wb") != 0 || !file)
-		return false;
-	const bool ok = std::fwrite(aText.data(), 1, aText.size(), file) == aText.size();
-	std::fclose(file);
-	return ok;
+	// m240/C5: the .tmp+flush+rename atomic chain from core/TextFile. The old
+	// direct fwrite left the agent's config truncated on a crash halfway
+	// through - and that config carries unrelated servers too (claude.json).
+	std::string error;
+	return ahkdeck::WriteTextDocument(aPath, aText,
+		ahkdeck::TextEncoding::Utf8NoBom, false, nullptr, error);
 }
 
 bool EnsureParentDir(const std::wstring &aPath)
@@ -718,6 +719,15 @@ int InstallMcpConfig(const AgentConfig &aAgent, const std::string &aExeUtf8,
 		}
 	}
 	const bool had = root.Has("mcpServers") && root["mcpServers"].Has("ahkdeck");
+	// m240/C5: fail closed on a malformed node. An array (or anything that is
+	// not an object) would silently come back from Items() empty and be
+	// rewritten as an object, destroying whatever the user stored there.
+	if (root.Has("mcpServers") && !root["mcpServers"].IsObject())
+	{
+		std::printf("AHKDeck: mcpServers is not an object; refusing to rewrite %ls\n",
+			path.c_str());
+		return 1;
+	}
 	// Rebuild from Items() so every unknown key survives the merge.
 	const auto items = root.Items();
 	ahkdeck::Json merged = ahkdeck::Json::MakeObject();
@@ -788,6 +798,7 @@ int main()
 
 	bool journal = false;
 	bool mcpStdio = false;
+	bool elevatedRelaunch = false;
 	int runIndex = -1;
 	int validateIndex = -1;
 	for (int i = 1; i < argc; ++i)
@@ -796,6 +807,8 @@ int main()
 			journal = true;
 		else if (std::wcscmp(argv[i], L"--mcp-stdio") == 0)
 			mcpStdio = true;
+		else if (std::wcscmp(argv[i], L"--elevated-relaunch") == 0)
+			elevatedRelaunch = true;
 		else if (std::wcscmp(argv[i], L"--run") == 0 && runIndex < 0)
 			runIndex = i;
 		else if (std::wcscmp(argv[i], L"--validate") == 0 && validateIndex < 0)
@@ -805,8 +818,9 @@ int main()
 	// Any switch means "someone typed this in a console": get that console back.
 	// A bare launch (argc == 1) deliberately stays headless - no terminal window.
 	// --mcp-stdio is the exception: its stdout is the MCP protocol channel, and
-	// grabbing a console would put human text on the wire.
-	if (argc > 1 && !mcpStdio)
+	// grabbing a console would put human text on the wire. --elevated-relaunch
+	// is a GUI relaunch of the same deck, not a CLI mode (m240/B4).
+	if (argc > 1 && !mcpStdio && !elevatedRelaunch)
 		AttachConsoleForCli();
 
 	int result;
@@ -856,6 +870,32 @@ int main()
 	{
 		// m107: the machine reader for the status bar's resource numbers.
 		result = RunStats();
+	}
+	else if (elevatedRelaunch)
+	{
+		// m240/B4: dedicated switch for the UAC relaunch path (ui/DeckUI Run).
+		// The old instance is exiting and still holds the single-instance
+		// mutex for a few more instructions. Racing it used to be possible:
+		// the child could observe ERROR_ALREADY_EXISTS while no window existed
+		// yet, fail the 1.2 s wake loop, and both processes would end up
+		// windowless. Wait for the release instead, then run exactly like a
+		// bare launch (the elevated child no longer satisfies the relaunch
+		// precondition, so no further UAC loop can happen).
+		HANDLE single = nullptr;
+		for (int attempt = 0; attempt < 50 && !single; ++attempt)
+		{
+			single = CreateMutexW(nullptr, FALSE, L"Local\\AHKDeck.SingleInstance");
+			if (single && GetLastError() == ERROR_ALREADY_EXISTS)
+			{
+				CloseHandle(single);
+				single = nullptr;
+				Sleep(100);
+			}
+		}
+		if (!single)
+			return 1; // the old instance never let go: never start a second deck
+		result = ahkdeck::ui::Run(GetModuleHandleW(nullptr));
+		CloseHandle(single);
 	}
 	else if (mcpStdio)
 	{

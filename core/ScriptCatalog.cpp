@@ -2,6 +2,7 @@
 #include "core/ScriptCatalog.h"
 
 #include "core/AppPaths.h"
+#include "core/AiPolicy.h"
 #include "core/ZipPackage.h"
 
 #include "core/Json.h"
@@ -109,6 +110,11 @@ bool IsSafeScriptName(const std::string &aName)
 				return false;
 		}
 	}
+	// m240/B5: reserved device names are not writable leaves on Windows, and
+	// a third-party subscribed manifest may try to smuggle one past every
+	// other check. Same table the AI tools' leaf validator uses.
+	if (IsReservedDeviceName(aName))
+		return false;
 	return true;
 }
 

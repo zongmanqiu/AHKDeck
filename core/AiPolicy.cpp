@@ -53,24 +53,17 @@ bool Canonicalize(const std::wstring &aPath, std::wstring &aOut, std::string &aE
 
 bool IsReservedName(const std::wstring &aStem)
 {
-	static const wchar_t *reserved[] = {
-		L"CON", L"PRN", L"AUX", L"NUL",
-		L"COM1", L"COM2", L"COM3", L"COM4", L"COM5", L"COM6", L"COM7", L"COM8", L"COM9",
-		L"LPT1", L"LPT2", L"LPT3", L"LPT4", L"LPT5", L"LPT6", L"LPT7", L"LPT8", L"LPT9"
-	};
-	const std::wstring upper = [&]()
+	// m240/B5: one table (see the exported IsReservedDeviceName). The names
+	// are pure ASCII, so a stem with non-ASCII bytes can never collide.
+	std::string narrow;
+	narrow.reserve(aStem.size());
+	for (wchar_t c : aStem)
 	{
-		std::wstring text = aStem;
-		for (auto &c : text)
-			c = (wchar_t)towupper(c);
-		return text;
-	}();
-	for (const wchar_t *name : reserved)
-	{
-		if (upper == name)
-			return true;
+		if (c >= 0x80)
+			return false;
+		narrow.push_back((char)c);
 	}
-	return false;
+	return IsReservedDeviceName(narrow);
 }
 
 bool ValidateLeaf(const std::wstring &aCanonical, std::string &aError)
@@ -158,6 +151,28 @@ bool CrossesReparsePoint(const std::wstring &aCanonical, std::string &aError)
 }
 
 } // namespace
+
+// m240/B5: exported so ScriptCatalog's manifest validator and the AI tools
+// share one reserved-name table (previously only ValidateLeaf had the check,
+// and a subscribed manifest could carry "CON" straight past it).
+bool IsReservedDeviceName(const std::string &aStem)
+{
+	static const char *const kReserved[] = {
+		"CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+	};
+	std::string upper;
+	upper.reserve(aStem.size());
+	for (char c : aStem)
+		upper.push_back((char)((c >= 'a' && c <= 'z') ? c - 'a' + 'A' : c));
+	for (const char *name : kReserved)
+	{
+		if (upper == name)
+			return true;
+	}
+	return false;
+}
 
 bool IsInsideAiPolicy(const AiScriptPolicy &aPolicy, const std::wstring &aCanonical)
 {

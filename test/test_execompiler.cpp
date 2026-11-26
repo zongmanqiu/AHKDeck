@@ -355,6 +355,14 @@ int main()
 			Check(ContainsWide(version, L"合同测试"),
 				"版本臂：中文 ProductName 按 UTF-16 写入");
 
+			// m240/A5: Translation must read (wLang, wCodePage) in memory
+			// order, i.e. little-endian DWORD 0x04B00409 = bytes 09 04 B0 04.
+			// The pre-fix blob carried 0x040904B0 (bytes B0 04 09 04); pin
+			// BOTH directions so the byte order can never quietly flip back.
+			Check(version.find(std::string("\x09\x04\xB0\x04", 4)) != std::string::npos
+				&& version.find(std::string("\xB0\x04\x09\x04", 4)) == std::string::npos,
+				"版本臂：Translation 以 wLang 在前（0x04B00409，非 0x040904B0）");
+
 			DeleteFileW(ico.c_str());
 			DeleteFileW(artOut.c_str());
 		}

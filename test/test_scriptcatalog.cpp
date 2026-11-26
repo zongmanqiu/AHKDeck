@@ -651,6 +651,90 @@ int main()
 		ahkdeck::RemoveTreeWide(sandbox);
 	}
 
+	// m240/A1+A2: the destructive helpers behind package installs must never
+	// shred user data on their failure paths. These arms were red before the
+	// fix (a locked directory lost its files; a junction got followed).
+	{
+		const std::wstring sandbox = ahkdeck::AppTempDir(ahkdeck::kTempWork)
+			+ L"\\m240-backupprobe";
+		ahkdeck::RemoveTreeWide(sandbox);
+		CreateDirectoryW(sandbox.c_str(), nullptr);
+		const std::wstring dir = sandbox + L"\\companion";
+		CreateDirectoryW(dir.c_str(), nullptr);
+		const std::wstring victim = sandbox + L"\\outside";
+		CreateDirectoryW(victim.c_str(), nullptr);
+		{
+			const std::wstring inside = dir + L"\\keep.txt";
+			const std::wstring outside = victim + L"\\do-not-touch.txt";
+			HANDLE f = CreateFileW(inside.c_str(), GENERIC_WRITE, 0, nullptr,
+				CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+			if (f != INVALID_HANDLE_VALUE)
+				CloseHandle(f);
+			f = CreateFileW(outside.c_str(), GENERIC_WRITE, 0, nullptr,
+				CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+			if (f != INVALID_HANDLE_VALUE)
+				CloseHandle(f);
+		}
+
+		// A2: a junction inside the tree must not be followed in either
+		// direction. mklink /J needs no privileges; /D symlinks would.
+		const std::wstring junction = dir + L"\\junction";
+		{
+			const std::wstring cmdline = L"cmd.exe /c mklink /J \"" + junction
+				+ L"\" \"" + victim + L"\"";
+			std::vector<wchar_t> line(cmdline.begin(), cmdline.end());
+			line.push_back(0);
+			STARTUPINFOW si = {};
+			si.cb = sizeof(si);
+			PROCESS_INFORMATION pi = {};
+			if (CreateProcessW(nullptr, line.data(), nullptr, nullptr, FALSE,
+					CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+			{
+				WaitForSingleObject(pi.hProcess, 10000);
+				CloseHandle(pi.hProcess);
+				CloseHandle(pi.hThread);
+			}
+		}
+		Check(GetFileAttributesW(junction.c_str()) != INVALID_FILE_ATTRIBUTES,
+			"A2 setup: junction created inside the tree");
+		ahkdeck::RemoveTreeWide(dir);
+		Check(GetFileAttributesW(victim.c_str()) != INVALID_FILE_ATTRIBUTES
+			&& GetFileAttributesW((victim + L"\\do-not-touch.txt").c_str())
+				!= INVALID_FILE_ATTRIBUTES,
+			"A2: RemoveTreeWide deletes the link but never the junction target");
+
+		// A1: a directory held open the way a script's CWD holds it (a handle
+		// WITHOUT FILE_SHARE_DELETE blocks rename/delete) must fail the
+		// backup safely - source intact, nothing half-deleted, no fake
+		// success. The pre-fix code deleted every deletable file and then
+		// reported failure; this arm was red before m240.
+		const std::wstring locked = sandbox + L"\\locked";
+		CreateDirectoryW(locked.c_str(), nullptr);
+		{
+			const std::wstring lockedFile = locked + L"\\data.txt";
+			HANDLE f = CreateFileW(lockedFile.c_str(), GENERIC_WRITE, 0,
+				nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+			if (f != INVALID_HANDLE_VALUE)
+				CloseHandle(f);
+		}
+		const HANDLE dirLock = CreateFileW(locked.c_str(), GENERIC_READ,
+			FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+			FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+		Check(dirLock != INVALID_HANDLE_VALUE, "A1 setup: directory lock acquired");
+		const std::wstring backupDir = sandbox + L"\\backups";
+		CreateDirectoryW(backupDir.c_str(), nullptr);
+		std::string leaf;
+		Check(!ahkdeck::MoveDirToBackup(locked, backupDir, leaf),
+			"A1: a locked directory fails the backup instead of shredding it");
+		if (dirLock != INVALID_HANDLE_VALUE)
+			CloseHandle(dirLock);
+		Check(GetFileAttributesW((locked + L"\\data.txt").c_str())
+				!= INVALID_FILE_ATTRIBUTES,
+			"A1: the locked directory keeps every file after the failed move");
+
+		ahkdeck::RemoveTreeWide(sandbox);
+	}
+
 	if (gFailures)
 	{
 		std::printf("scriptcatalog: %d failure(s)\n", gFailures);

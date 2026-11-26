@@ -191,6 +191,9 @@ ResourceSample SampleOne(HANDLE aProcess, ResourceSampler::CpuHistory &aHistory,
 	ResourceSample sample;
 	PROCESS_MEMORY_COUNTERS_EX counters;
 	std::memset(&counters, 0, sizeof(counters));
+	// m240/C6: cb is an input per the API contract; the implementations we
+	// target tolerate a zero, but say what we mean instead of leaning on it.
+	counters.cb = sizeof(counters);
 	if (GetProcessMemoryInfo(aProcess,
 		reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&counters), sizeof(counters)))
 	{
